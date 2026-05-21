@@ -1,0 +1,46 @@
+{
+  "name": "@unifiedai/sdk",
+  "version": "0.0.0",
+  "description": "Official SDK for Unifiedai marketplace apps.",
+  "type": "module",
+  "sideEffects": false,
+  "files": ["dist", "README.md", "LICENSE"],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "clean": "rm -rf dist docs",
+    "build": "bun run clean && bun build ./src/index.ts --outdir dist --target browser --format esm --sourcemap && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "docs": "typedoc",
+    "changeset": "changeset",
+    "release": "bun run build && changeset publish"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "@changesets/cli": "^2.27.0",
+    "@types/bun": "latest",
+    "typedoc": "^0.26.0",
+    "typescript": "^5.5.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["unifiedai", "sdk", "llm", "marketplace"],
+  "license": "MIT"
+}
