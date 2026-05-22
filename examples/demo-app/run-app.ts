@@ -15,4 +15,4 @@ console.log(
   `[harness] authorize=${process.env.UNIFIEDAI_AUTHORIZE_URL}  token=${process.env.UNIFIEDAI_TOKEN_URL}  api=${API_BASE}`,
 );
 
-await import("./basic-app");
+await import("./app");
