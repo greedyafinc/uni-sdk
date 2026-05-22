@@ -1,7 +1,12 @@
 import { UnifiedAI } from "./client";
 
 export { UnifiedAI, type UnifiedAIOptions } from "./client";
-export { UnifiedAIAuthError, UnifiedError, type UnifiedErrorCode } from "./errors";
+export {
+  UnifiedAIAuthError,
+  type UnifiedAIAuthErrorCode,
+  UnifiedError,
+  type UnifiedErrorCode,
+} from "./errors";
 export type { RequestOptions } from "./core";
 export type { Identity } from "./identity";
 export type {

@@ -68,21 +68,13 @@ export class UnifiedAI extends Core {
   }
 
   async signOut(): Promise<void> {
-    tokenStore.delete(this);
-    this.bootstrapPromise = undefined;
-    this.refreshPromise = undefined;
-    let clientId: string;
+    let clientId: string | undefined;
     try {
       clientId = this.resolveClientId();
     } catch {
-      return;
+      // appId unresolvable: no keychain entry to clear, just drop in-memory state
     }
-    try {
-      await this.keychain.clear(clientId);
-    } catch (err) {
-      if (err instanceof UnifiedError && err.code === "keychain_unavailable") return;
-      throw err;
-    }
+    await this.clearLocalSession(clientId, { throwOnKeychain: true });
   }
 
   override async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -91,37 +83,42 @@ export class UnifiedAI extends Core {
       throw new UnifiedError("not_bootstrapped", "call bootstrap() before making requests");
     }
     const url = this.buildUrl(path, options.query);
+    const bodyText = options.body !== undefined ? JSON.stringify(options.body) : undefined;
     const send = (accessToken: string) => {
       const init: RequestInit = {
         method: options.method ?? "GET",
-        headers: this.buildHeaders(accessToken, options.body !== undefined),
+        headers: this.buildHeaders(accessToken, bodyText !== undefined),
       };
-      if (options.body !== undefined) init.body = JSON.stringify(options.body);
+      if (bodyText !== undefined) init.body = bodyText;
       if (options.signal) init.signal = options.signal;
       return this.options.fetch(url, init);
     };
 
     let res = await send(tokens.access_token);
     if (res.status === 401) {
+      await drain(res);
       let fresh: TokenSet;
       try {
-        fresh = await this.ensureFreshToken(tokens);
+        fresh = await this.ensureFreshToken();
       } catch (err) {
-        await this.clearAfterAuthFailure();
+        await this.clearLocalSession(tokens.client_id);
         throw err;
       }
       res = await send(fresh.access_token);
       if (res.status === 401) {
-        await this.clearAfterAuthFailure();
-        throw new UnifiedAIAuthError("request still 401 after refresh", 401);
+        await drain(res);
+        await this.clearLocalSession(fresh.client_id);
+        throw new UnifiedAIAuthError(
+          "auth_retry_still_unauthorized",
+          "request still 401 after refresh",
+          401,
+        );
       }
     }
     if (!res.ok) {
-      throw new UnifiedError(
-        "request_failed",
-        `request to ${path} returned ${res.status}`,
-        res.status,
-      );
+      const status = res.status;
+      await drain(res);
+      throw new UnifiedError("request_failed", `request to ${path} returned ${status}`, status);
     }
     if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
@@ -131,8 +128,14 @@ export class UnifiedAI extends Core {
    * Single-flight: concurrent callers share one refresh promise per cycle.
    * Resolves to the new TokenSet on success; rejects with UnifiedAIAuthError on failure.
    */
-  ensureFreshToken(current: TokenSet): Promise<TokenSet> {
+  private ensureFreshToken(): Promise<TokenSet> {
     if (this.refreshPromise) return this.refreshPromise;
+    const current = tokenStore.get(this);
+    if (!current) {
+      return Promise.reject(
+        new UnifiedAIAuthError("auth_refresh_failed", "no tokens available to refresh"),
+      );
+    }
     const p = refreshTokens({
       tokenUrl: this.tokenUrl,
       clientId: current.client_id,
@@ -169,15 +172,23 @@ export class UnifiedAI extends Core {
     return h;
   }
 
-  private async clearAfterAuthFailure(): Promise<void> {
-    const t = tokenStore.get(this);
+  // Force next bootstrap() to actually re-run, then clear the keychain entry.
+  // throwOnKeychain=true surfaces unexpected keychain errors to signOut callers;
+  // the auth-failure path swallows them since it's already throwing.
+  private async clearLocalSession(
+    clientId: string | undefined,
+    opts: { throwOnKeychain?: boolean } = {},
+  ): Promise<void> {
     tokenStore.delete(this);
     this.bootstrapPromise = undefined;
-    if (!t) return;
+    this.refreshPromise = undefined;
+    if (!clientId) return;
     try {
-      await this.keychain.clear(t.client_id);
-    } catch {
-      // ignore — caller is already throwing UnifiedAIAuthError
+      await this.keychain.clear(clientId);
+    } catch (err) {
+      if (!opts.throwOnKeychain) return;
+      if (err instanceof UnifiedError && err.code === "keychain_unavailable") return;
+      throw err;
     }
   }
 
@@ -251,5 +262,13 @@ export class UnifiedAI extends Core {
       }
       throw err;
     }
+  }
+}
+
+async function drain(res: Response): Promise<void> {
+  try {
+    await res.text();
+  } catch {
+    // ignore
   }
 }
