@@ -9,7 +9,19 @@ export {
   UnifiedError,
   type UnifiedErrorCode,
 } from "./errors";
-export type { ListModelsResponse, Model, ModelType } from "./resources/models";
+export type {
+  ListModelsOptions,
+  ListModelsResponse,
+  Model,
+  ModelAuthor,
+  ModelType,
+} from "./resources/models";
+export {
+  getProviderLogo,
+  listProviderLogos,
+  type LogoTheme,
+  type ProviderLogoInput,
+} from "./resources/logos";
 export type { RequestOptions } from "./core";
 export type { Identity } from "./identity";
 export type {

@@ -2,12 +2,19 @@ import type { Core, RequestOptions } from "../core";
 
 export type ModelType = "text" | "image" | "video" | "audio" | "embedding";
 
+export interface ModelAuthor {
+  name: string;
+  logo?: string | null;
+  color?: string | null;
+}
+
 export interface Model {
   id: string;
   type: ModelType;
   object: "model";
   created?: number;
   owned_by: string;
+  model_author?: ModelAuthor;
 }
 
 export interface ListModelsResponse {
@@ -15,12 +22,21 @@ export interface ListModelsResponse {
   data: Model[];
 }
 
+export interface ListModelsOptions {
+  signal?: AbortSignal;
+  /** Optional expansions to include in each model entry. */
+  include?: Array<"author">;
+}
+
 export class Models {
   constructor(private readonly client: Core) {}
 
-  list(options: { signal?: AbortSignal } = {}): Promise<ListModelsResponse> {
+  list(options: ListModelsOptions = {}): Promise<ListModelsResponse> {
     const req: RequestOptions = { method: "GET" };
     if (options.signal) req.signal = options.signal;
-    return this.client.request<ListModelsResponse>("/api/v1/models", req);
+    const path = options.include?.length
+      ? `/api/v1/models?include=${encodeURIComponent(options.include.join(","))}`
+      : "/api/v1/models";
+    return this.client.request<ListModelsResponse>(path, req);
   }
 }

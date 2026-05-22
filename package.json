@@ -19,7 +19,8 @@
   },
   "scripts": {
     "clean": "rm -rf dist docs",
-    "build": "bun run clean && bun build ./src/index.ts --outdir dist --target node --format esm --sourcemap --external @napi-rs/keyring && tsc -p tsconfig.build.json",
+    "logos": "bun run scripts/generate-logos.ts",
+    "build": "bun run clean && bun run logos && bun build ./src/index.ts --outdir dist --target node --format esm --sourcemap --external @napi-rs/keyring && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "lint": "biome check .",
