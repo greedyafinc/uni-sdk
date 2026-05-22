@@ -1,18 +1,8 @@
-import {
-  type LoopbackServer,
-  type OpenUrl,
-  runBrowserPkce,
-} from "./_internal/browser-auth";
-import {
-  createDefaultDiscoveryReader,
-  type DiscoveryReader,
-} from "./_internal/discovery";
-import { defaultEnvReader, type EnvReader } from "./_internal/env";
+import { type LoopbackServer, type OpenUrl, runBrowserPkce } from "./_internal/browser-auth";
+import { type DiscoveryReader, createDefaultDiscoveryReader } from "./_internal/discovery";
+import { type EnvReader, defaultEnvReader } from "./_internal/env";
 import { requestHandoff } from "./_internal/handoff";
-import {
-  createDefaultKeychain,
-  type KeychainAdapter,
-} from "./_internal/keychain";
+import { type KeychainAdapter, createDefaultKeychain } from "./_internal/keychain";
 import { createNodeLoopback } from "./_internal/loopback";
 import { defaultOpenUrl } from "./_internal/open-url";
 import type { TokenSet } from "./_internal/tokens";
@@ -49,8 +39,7 @@ export class UnifiedAI extends Core {
     super(options);
     this.authorizeUrl =
       options.authorizeUrl ?? process.env.UNIFIEDAI_AUTHORIZE_URL ?? DEFAULT_AUTHORIZE_URL;
-    this.tokenUrl =
-      options.tokenUrl ?? process.env.UNIFIEDAI_TOKEN_URL ?? DEFAULT_TOKEN_URL;
+    this.tokenUrl = options.tokenUrl ?? process.env.UNIFIEDAI_TOKEN_URL ?? DEFAULT_TOKEN_URL;
     this.env = options.env ?? defaultEnvReader;
     this.discovery = options.discovery ?? createDefaultDiscoveryReader();
     this.keychain = options.keychain ?? createDefaultKeychain();

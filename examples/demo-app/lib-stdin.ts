@@ -2,7 +2,7 @@
 // can call `ask()` and get sequential lines without each closing the
 // readline interface (which on a piped stdin causes EOF for everyone).
 
-import { createInterface, type Interface as ReadlineInterface } from "node:readline";
+import { type Interface as ReadlineInterface, createInterface } from "node:readline";
 
 let rl: ReadlineInterface | undefined;
 const queue: string[] = [];

@@ -20,7 +20,9 @@ export function defaultDiscoveryPath(): string {
   return join(homedir(), ".unifiedai", "desktop.json");
 }
 
-export function createDefaultDiscoveryReader(path: string = defaultDiscoveryPath()): DiscoveryReader {
+export function createDefaultDiscoveryReader(
+  path: string = defaultDiscoveryPath(),
+): DiscoveryReader {
   return {
     async read(): Promise<DiscoveryRecord | null> {
       try {

@@ -7,9 +7,9 @@
 // Installed apps live in .data/desktop/installed.json. An app whose
 // client_id is not in that list gets 404 — same shape as the real desktop.
 
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { randomBytes } from "node:crypto";
 import { ask } from "./lib-stdin";
 
 const DESKTOP_DIR = join(import.meta.dir, ".data", "desktop");
@@ -104,7 +104,7 @@ export function startDesktopServer(opts: { quiet?: boolean } = {}): Promise<Desk
 
       const session = readSession();
       if (!session) {
-        log(`no desktop session → 401`);
+        log("no desktop session → 401");
         return new Response("not signed in", { status: 401 });
       }
 

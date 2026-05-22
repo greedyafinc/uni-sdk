@@ -1,5 +1,5 @@
 import { UnifiedError } from "../errors";
-import { isTokenSet, type TokenSet } from "./tokens";
+import { type TokenSet, isTokenSet } from "./tokens";
 
 export interface HandoffArgs {
   readonly port: number;

@@ -20,10 +20,7 @@ const sdk = new UnifiedAI({ appId: APP_ID });
 try {
   await sdk.bootstrap();
 } catch (e) {
-  const msg =
-    e instanceof UnifiedError
-      ? `${e.code} — ${e.message}`
-      : (e as Error).message;
+  const msg = e instanceof UnifiedError ? `${e.code} — ${e.message}` : (e as Error).message;
   console.error(`sign-in failed: ${msg}`);
   process.exit(1);
 }
@@ -127,10 +124,7 @@ function initial(s: string): string {
 function escapeHtml(s: string): string {
   return s.replace(
     /[&<>"']/g,
-    (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[
-        c
-      ] as string),
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string,
   );
 }
 

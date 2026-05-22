@@ -1,6 +1,6 @@
 import { UnifiedError } from "../errors";
 import { challengeFor, generateState, generateVerifier } from "./pkce";
-import { isTokenSet, type TokenSet } from "./tokens";
+import { type TokenSet, isTokenSet } from "./tokens";
 
 export interface LoopbackHandle {
   readonly redirectUri: string;
