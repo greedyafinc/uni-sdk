@@ -33,10 +33,7 @@ function resolveSlug(input: ProviderLogoInput, theme: LogoTheme): LogoSlug {
  * Returns a data-URI for the given provider/author's logo.
  * Works in any environment (Node, browser, Electron, Tauri) with no bundler config.
  */
-export function getProviderLogo(
-  input: ProviderLogoInput,
-  theme: LogoTheme = "light",
-): string {
+export function getProviderLogo(input: ProviderLogoInput, theme: LogoTheme = "light"): string {
   return LOGO_DATA_URIS[resolveSlug(input, theme)];
 }
 

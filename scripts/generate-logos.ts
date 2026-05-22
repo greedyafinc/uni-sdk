@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
 const LOGOS_DIR = join(import.meta.dir, "..", "src", "assets", "logos");
@@ -11,8 +11,7 @@ const slugs = readdirSync(LOGOS_DIR)
   .sort();
 
 // URL-encoded SVG is ~30% smaller than base64 and compresses better under gzip.
-const toDataUri = (svg: string) =>
-  `data:image/svg+xml;utf8,${encodeURIComponent(svg.trim())}`;
+const toDataUri = (svg: string) => `data:image/svg+xml;utf8,${encodeURIComponent(svg.trim())}`;
 
 const entries = slugs.map((slug) => ({
   slug,
