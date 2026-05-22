@@ -4,9 +4,12 @@ export { UnifiedAI, type UnifiedAIOptions } from "./client";
 export {
   UnifiedAIAuthError,
   type UnifiedAIAuthErrorCode,
+  UnifiedAIError,
+  type UnifiedAIHttpErrorCode,
   UnifiedError,
   type UnifiedErrorCode,
 } from "./errors";
+export type { ListModelsResponse, Model, ModelType } from "./resources/models";
 export type { RequestOptions } from "./core";
 export type { Identity } from "./identity";
 export type {

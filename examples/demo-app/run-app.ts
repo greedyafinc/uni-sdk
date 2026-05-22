@@ -9,9 +9,10 @@ const API_BASE = process.env.UNIFIEDAI_API_BASE ?? "http://localhost:3141";
 
 process.env.UNIFIEDAI_AUTHORIZE_URL = `${WEB_BASE}/oauth/authorize`;
 process.env.UNIFIEDAI_TOKEN_URL = `${API_BASE}/oauth/token`;
+process.env.UNIFIEDAI_API_BASE = API_BASE;
 
 console.log(
-  `[harness] authorize=${process.env.UNIFIEDAI_AUTHORIZE_URL}  token=${process.env.UNIFIEDAI_TOKEN_URL}`,
+  `[harness] authorize=${process.env.UNIFIEDAI_AUTHORIZE_URL}  token=${process.env.UNIFIEDAI_TOKEN_URL}  api=${API_BASE}`,
 );
 
 await import("./basic-app");

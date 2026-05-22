@@ -31,3 +31,28 @@ export class UnifiedAIAuthError extends UnifiedError {
     this.name = "UnifiedAIAuthError";
   }
 }
+
+export type UnifiedAIHttpErrorCode =
+  | "unauthorized"
+  | "forbidden"
+  | "not_found"
+  | "server_error"
+  | "request_failed";
+
+export class UnifiedAIError extends UnifiedError {
+  readonly body: unknown;
+
+  constructor(code: UnifiedAIHttpErrorCode, message: string, status: number, body: unknown) {
+    super(code, message, status);
+    this.name = "UnifiedAIError";
+    this.body = body;
+  }
+}
+
+export function httpErrorCodeFromStatus(status: number): UnifiedAIHttpErrorCode {
+  if (status === 401) return "unauthorized";
+  if (status === 403) return "forbidden";
+  if (status === 404) return "not_found";
+  if (status >= 500) return "server_error";
+  return "request_failed";
+}
