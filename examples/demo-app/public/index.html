@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>demo-app</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="card">
+    <section class="signed-in" id="signed-in" hidden>
+      <div class="brand">demo-app</div>
+      <h1 class="title">Signed in</h1>
+      <div class="avatar" id="avatar">?</div>
+      <div class="user-id" id="user-id"></div>
+      <div class="meta" id="client-id"></div>
+
+      <div class="actions">
+        <button data-action="list-models">List models</button>
+        <button data-action="test-refresh">Test refresh</button>
+        <button data-action="signout">Sign out</button>
+      </div>
+
+      <ul class="models" id="models"></ul>
+      <pre class="log" id="log"></pre>
+    </section>
+
+    <section class="farewell" id="farewell" hidden>
+      <div class="brand">demo-app</div>
+      <h1 class="title">Signed out</h1>
+      <p>You can close this tab.</p>
+    </section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
