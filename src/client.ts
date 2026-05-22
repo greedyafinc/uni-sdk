@@ -8,8 +8,14 @@ import { defaultOpenUrl } from "./_internal/open-url";
 import { refreshTokens } from "./_internal/refresh";
 import type { TokenSet } from "./_internal/tokens";
 import { Core, type CoreOptions, type RequestOptions } from "./core";
-import { UnifiedAIAuthError, UnifiedError } from "./errors";
+import {
+  UnifiedAIAuthError,
+  UnifiedAIError,
+  UnifiedError,
+  httpErrorCodeFromStatus,
+} from "./errors";
 import type { Identity } from "./identity";
+import { Models } from "./resources/models";
 
 const DEFAULT_AUTHORIZE_URL = "https://web.unifiedai.app/oauth/authorize";
 const DEFAULT_TOKEN_URL = "https://api.unifiedai.app/oauth/token";
@@ -36,6 +42,8 @@ export class UnifiedAI extends Core {
   private readonly loopback: LoopbackServer;
   private bootstrapPromise: Promise<void> | undefined;
   private refreshPromise: Promise<TokenSet> | undefined;
+
+  readonly models: Models = new Models(this);
 
   constructor(options: UnifiedAIOptions = {}) {
     super(options);
@@ -117,8 +125,13 @@ export class UnifiedAI extends Core {
     }
     if (!res.ok) {
       const status = res.status;
-      await drain(res);
-      throw new UnifiedError("request_failed", `request to ${path} returned ${status}`, status);
+      const body = await readErrorBody(res);
+      throw new UnifiedAIError(
+        httpErrorCodeFromStatus(status),
+        `request to ${path} returned ${status}`,
+        status,
+        body,
+      );
     }
     if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
@@ -270,5 +283,20 @@ async function drain(res: Response): Promise<void> {
     await res.text();
   } catch {
     // ignore
+  }
+}
+
+async function readErrorBody(res: Response): Promise<unknown> {
+  let text: string;
+  try {
+    text = await res.text();
+  } catch {
+    return undefined;
+  }
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
   }
 }

@@ -16,29 +16,33 @@ function openInBrowser(url: string): void {
   spawn(cmd, args, { detached: true, stdio: "ignore" }).unref();
 }
 
-// In-process API the demo points the SDK at. It accepts any Bearer token
-// (we trust the bootstrap'd session) except that when `forceNext401` is set,
-// the next request returns 401 — simulating an expired access token. The SDK
-// then transparently refreshes and retries; the retry succeeds.
+// Point the SDK at the real unified-api so sdk.models.list() returns the
+// provider's actual catalog. UNIFIEDAI_API_BASE is set by run-app.ts.
+const API_BASE = process.env.UNIFIEDAI_API_BASE ?? "http://localhost:3141";
+
+// The refresh-test button needs to deterministically force a 401 to exercise
+// the SDK's transparent-refresh path. We wrap fetch so calls to a synthetic
+// /__demo/ping path (only used by the refresh test) are answered locally; all
+// other traffic (including /api/v1/models) goes straight to unified-api.
+const realFetch = globalThis.fetch.bind(globalThis);
 let forceNext401 = false;
 let lastBearer = "";
-const testApi = Bun.serve({
-  port: 0,
-  hostname: "127.0.0.1",
-  fetch: (req) => {
-    const auth = req.headers.get("authorization") ?? "";
-    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+
+const interceptingFetch: typeof fetch = async (input, init) => {
+  const url = typeof input === "string" ? input : (input as Request).url;
+  if (url.includes("/__demo/ping")) {
+    const auth = new Headers(init?.headers).get("authorization") ?? "";
+    lastBearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
     if (forceNext401) {
       forceNext401 = false;
       return new Response("unauthorized", { status: 401 });
     }
-    lastBearer = token;
-    return Response.json({ ok: true, token: `${token.slice(0, 12)}…` });
-  },
-});
-const testApiUrl = `http://127.0.0.1:${testApi.port}`;
+    return Response.json({ ok: true });
+  }
+  return realFetch(input, init);
+};
 
-const sdk = new UnifiedAI({ appId: APP_ID, apiUrl: testApiUrl });
+const sdk = new UnifiedAI({ appId: APP_ID, apiUrl: API_BASE, fetch: interceptingFetch });
 
 try {
   await sdk.bootstrap();
@@ -133,6 +137,7 @@ const page = `<!doctype html>
       <div class="user-id">${escapeHtml(identity.user_id)}</div>
       <div class="meta">client: ${escapeHtml(identity.client_id)}</div>
       <div class="actions">
+        <button id="list-models">List models</button>
         <button id="test-refresh">Test refresh</button>
         <button id="signout">Sign out</button>
       </div>
@@ -146,6 +151,20 @@ const page = `<!doctype html>
   </main>
   <script>
     const log = document.getElementById("log");
+
+    document.getElementById("list-models").addEventListener("click", async (e) => {
+      e.target.disabled = true;
+      log.textContent = "";
+      try {
+        const r = await fetch("/list-models", { method: "POST" });
+        const data = await r.json();
+        log.textContent = data.log.join("\\n");
+      } catch (err) {
+        log.textContent = "error: " + (err && err.message ? err.message : err);
+      } finally {
+        e.target.disabled = false;
+      }
+    });
 
     document.getElementById("test-refresh").addEventListener("click", async (e) => {
       e.target.disabled = true;
@@ -184,14 +203,14 @@ function escapeHtml(s: string): string {
 
 async function runRefreshTest(): Promise<string[]> {
   const log: string[] = [];
-  await sdk.request("/ping");
+  await sdk.request("/__demo/ping");
   const before = lastBearer;
   log.push(`baseline call → 200 OK (token ${before.slice(0, 12)}…)`);
 
   forceNext401 = true;
   log.push("forcing next call to 401…");
   try {
-    await sdk.request("/ping");
+    await sdk.request("/__demo/ping");
   } catch (e) {
     const err = e as UnifiedError;
     log.push(`refresh path failed: ${err.code ?? "error"} — ${err.message}`);
@@ -220,10 +239,23 @@ const server = Bun.serve({
       }
       console.log(`signed out ${identity.user_id}`);
       setTimeout(() => {
-        testApi.stop(true);
         process.exit(0);
       }, 250);
       return new Response(null, { status: 204 });
+    }
+
+    if (url.pathname === "/list-models" && req.method === "POST") {
+      const log: string[] = [];
+      try {
+        const { data } = await sdk.models.list();
+        log.push(`sdk.models.list() → ${data.length} models`);
+        for (const m of data) log.push(`  ${m.id}  (${m.type}, owned_by ${m.owned_by})`);
+      } catch (e) {
+        const err = e as UnifiedError;
+        log.push(`models.list failed: ${err.code ?? "error"} — ${err.message}`);
+      }
+      for (const line of log) console.log(`[models] ${line}`);
+      return Response.json({ log });
     }
 
     if (url.pathname === "/test-refresh" && req.method === "POST") {
