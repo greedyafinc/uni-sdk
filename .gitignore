@@ -36,3 +36,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # demo-app local state
 examples/demo-app/.data
+
+# generated logo data-URIs (built from src/assets/logos/)
+src/resources/logos.generated.ts

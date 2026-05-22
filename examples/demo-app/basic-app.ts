@@ -6,7 +6,7 @@
 
 import { spawn } from "node:child_process";
 import { platform } from "node:os";
-import { UnifiedAI, UnifiedError } from "../../src/index";
+import { UnifiedAI, UnifiedError, getProviderLogo } from "../../src/index";
 import { APP_ID } from "./constants";
 
 function openInBrowser(url: string): void {
@@ -123,6 +123,22 @@ const page = `<!doctype html>
       white-space: pre-wrap;
     }
     .log:empty { display: none; }
+    .models { list-style: none; padding: 0; margin: 16px 0 0; max-height: 320px; overflow: auto; text-align: left; }
+    .models:empty { display: none; }
+    .models li {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px;
+      border-radius: 8px;
+    }
+    .models li + li { margin-top: 4px; }
+    .models li:nth-child(odd) { background: rgba(0,0,0,.03); }
+    .models .logo {
+      width: 24px; height: 24px; flex: 0 0 24px;
+      border-radius: 4px; object-fit: contain;
+      background: var(--logo-bg, #f3f4f6);
+    }
+    .models .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; flex: 1; word-break: break-all; }
+    .models .meta { font-size: 11px; opacity: .6; }
     .farewell { display: none; }
     .farewell.show { display: block; }
     .signed-in.hide { display: none; }
@@ -141,6 +157,7 @@ const page = `<!doctype html>
         <button id="test-refresh">Test refresh</button>
         <button id="signout">Sign out</button>
       </div>
+      <ul class="models" id="models"></ul>
       <pre class="log" id="log"></pre>
     </div>
     <div class="farewell">
@@ -152,13 +169,33 @@ const page = `<!doctype html>
   <script>
     const log = document.getElementById("log");
 
+    const modelsList = document.getElementById("models");
     document.getElementById("list-models").addEventListener("click", async (e) => {
       e.target.disabled = true;
       log.textContent = "";
+      modelsList.innerHTML = "";
       try {
         const r = await fetch("/list-models", { method: "POST" });
         const data = await r.json();
-        log.textContent = data.log.join("\\n");
+        if (data.models) {
+          for (const m of data.models) {
+            const li = document.createElement("li");
+            if (m.color) li.style.setProperty("--logo-bg", m.color + "22");
+            const img = document.createElement("img");
+            img.className = "logo";
+            img.src = m.logo;
+            img.alt = m.owned_by;
+            const id = document.createElement("span");
+            id.className = "id";
+            id.textContent = m.id;
+            const meta = document.createElement("span");
+            meta.className = "meta";
+            meta.textContent = m.type + " · " + m.owned_by;
+            li.append(img, id, meta);
+            modelsList.appendChild(li);
+          }
+        }
+        if (data.log && data.log.length) log.textContent = data.log.join("\\n");
       } catch (err) {
         log.textContent = "error: " + (err && err.message ? err.message : err);
       } finally {
@@ -246,16 +283,31 @@ const server = Bun.serve({
 
     if (url.pathname === "/list-models" && req.method === "POST") {
       const log: string[] = [];
+      const models: Array<{
+        id: string;
+        type: string;
+        owned_by: string;
+        logo: string;
+        color: string | null;
+      }> = [];
       try {
-        const { data } = await sdk.models.list();
+        const { data } = await sdk.models.list({ include: ["author"] });
         log.push(`sdk.models.list() → ${data.length} models`);
-        for (const m of data) log.push(`  ${m.id}  (${m.type}, owned_by ${m.owned_by})`);
+        for (const m of data) {
+          models.push({
+            id: m.id,
+            type: m.type,
+            owned_by: m.owned_by,
+            logo: getProviderLogo(m.model_author?.name ?? m.owned_by),
+            color: m.model_author?.color ?? null,
+          });
+        }
       } catch (e) {
         const err = e as UnifiedError;
         log.push(`models.list failed: ${err.code ?? "error"} — ${err.message}`);
       }
       for (const line of log) console.log(`[models] ${line}`);
-      return Response.json({ log });
+      return Response.json({ log, models });
     }
 
     if (url.pathname === "/test-refresh" && req.method === "POST") {
