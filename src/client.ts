@@ -1,18 +1,8 @@
-import {
-  type LoopbackServer,
-  type OpenUrl,
-  runBrowserPkce,
-} from "./_internal/browser-auth";
-import {
-  createDefaultDiscoveryReader,
-  type DiscoveryReader,
-} from "./_internal/discovery";
-import { defaultEnvReader, type EnvReader } from "./_internal/env";
+import { type LoopbackServer, type OpenUrl, runBrowserPkce } from "./_internal/browser-auth";
+import { type DiscoveryReader, createDefaultDiscoveryReader } from "./_internal/discovery";
+import { type EnvReader, defaultEnvReader } from "./_internal/env";
 import { requestHandoff } from "./_internal/handoff";
-import {
-  createDefaultKeychain,
-  type KeychainAdapter,
-} from "./_internal/keychain";
+import { type KeychainAdapter, createDefaultKeychain } from "./_internal/keychain";
 import { createNodeLoopback } from "./_internal/loopback";
 import { defaultOpenUrl } from "./_internal/open-url";
 import type { TokenSet } from "./_internal/tokens";
@@ -47,8 +37,9 @@ export class UnifiedAI extends Core {
 
   constructor(options: UnifiedAIOptions = {}) {
     super(options);
-    this.authorizeUrl = options.authorizeUrl ?? DEFAULT_AUTHORIZE_URL;
-    this.tokenUrl = options.tokenUrl ?? DEFAULT_TOKEN_URL;
+    this.authorizeUrl =
+      options.authorizeUrl ?? process.env.UNIFIEDAI_AUTHORIZE_URL ?? DEFAULT_AUTHORIZE_URL;
+    this.tokenUrl = options.tokenUrl ?? process.env.UNIFIEDAI_TOKEN_URL ?? DEFAULT_TOKEN_URL;
     this.env = options.env ?? defaultEnvReader;
     this.discovery = options.discovery ?? createDefaultDiscoveryReader();
     this.keychain = options.keychain ?? createDefaultKeychain();
@@ -72,6 +63,23 @@ export class UnifiedAI extends Core {
       throw new UnifiedError("not_bootstrapped", "call bootstrap() before identity()");
     }
     return { user_id: t.user_id, client_id: t.client_id };
+  }
+
+  async signOut(): Promise<void> {
+    tokenStore.delete(this);
+    this.bootstrapPromise = undefined;
+    let clientId: string;
+    try {
+      clientId = this.resolveClientId();
+    } catch {
+      return;
+    }
+    try {
+      await this.keychain.clear(clientId);
+    } catch (err) {
+      if (err instanceof UnifiedError && err.code === "keychain_unavailable") return;
+      throw err;
+    }
   }
 
   private async doBootstrap(): Promise<void> {

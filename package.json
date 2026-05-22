@@ -25,7 +25,7 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "docs": "typedoc",
-    "demo": "bun install && bun run --cwd examples/demo-app start",
+    "demo": "bun install && bun examples/demo-app/run-app.ts",
     "changeset": "changeset",
     "release": "bun run build && changeset publish"
   },

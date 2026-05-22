@@ -1,4 +1,4 @@
-import { createServer, type Server } from "node:http";
+import { type Server, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { UnifiedError } from "../errors";
 import type { LoopbackHandle, LoopbackServer } from "./browser-auth";
@@ -28,9 +28,7 @@ export function createNodeLoopback(): LoopbackServer {
           const state = url.searchParams.get("state");
           if (!code || !state) {
             res.writeHead(400).end();
-            reject(
-              new UnifiedError("auth_token_exchange_failed", "callback missing code/state"),
-            );
+            reject(new UnifiedError("auth_token_exchange_failed", "callback missing code/state"));
             return;
           }
           res
@@ -39,12 +37,13 @@ export function createNodeLoopback(): LoopbackServer {
           resolve({ code, state });
         });
       });
+      if (!server) throw new Error("loopback server not initialised");
+      const s = server;
       await new Promise<void>((resolve, reject) => {
-        if (!server) return reject(new Error("loopback server not initialised"));
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => resolve());
+        s.once("error", reject);
+        s.listen(0, "127.0.0.1", () => resolve());
       });
-      const addr = server!.address() as AddressInfo;
+      const addr = s.address() as AddressInfo;
       const port = addr.port;
       const pending = codePromise;
       return {
