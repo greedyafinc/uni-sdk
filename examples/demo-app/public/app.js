@@ -8,7 +8,7 @@ function setLog(text) {
 }
 
 function appendLog(lines) {
-  if (lines && lines.length) log.textContent = lines.join("\n");
+  if (lines?.length) log.textContent = lines.join("\n");
 }
 
 async function postJson(path) {
@@ -23,7 +23,7 @@ const handlers = {
     const data = await postJson("/list-models");
     for (const m of data.models ?? []) {
       const li = document.createElement("li");
-      if (m.color) li.style.setProperty("--logo-bg", m.color + "22");
+      if (m.color) li.style.setProperty("--logo-bg", `${m.color}22`);
 
       const img = document.createElement("img");
       img.className = "logo";
@@ -51,7 +51,9 @@ const handlers = {
   },
 
   signout: async () => {
-    try { await postJson("/signout"); } catch {}
+    try {
+      await postJson("/signout");
+    } catch {}
     document.getElementById("signed-in").hidden = true;
     document.getElementById("farewell").hidden = false;
   },
@@ -67,7 +69,7 @@ document.addEventListener("click", async (e) => {
   try {
     await fn();
   } catch (err) {
-    setLog("error: " + (err?.message ?? err));
+    setLog(`error: ${err?.message ?? err}`);
   } finally {
     btn.disabled = false;
   }
@@ -81,4 +83,4 @@ async function init() {
   document.getElementById("signed-in").hidden = false;
 }
 
-init().catch((e) => setLog("init error: " + (e?.message ?? e)));
+init().catch((e) => setLog(`init error: ${e?.message ?? e}`));
