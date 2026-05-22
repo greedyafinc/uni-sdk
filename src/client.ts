@@ -16,6 +16,7 @@ import {
 } from "./errors";
 import type { Identity } from "./identity";
 import { Models } from "./resources/models";
+import { Usage } from "./resources/usage";
 
 const DEFAULT_AUTHORIZE_URL = "https://web.unifiedai.app/oauth/authorize";
 const DEFAULT_TOKEN_URL = "https://api.unifiedai.app/oauth/token";
@@ -44,6 +45,7 @@ export class UnifiedAI extends Core {
   private refreshPromise: Promise<TokenSet> | undefined;
 
   readonly models: Models = new Models(this);
+  readonly usage: Usage = new Usage(this);
 
   constructor(options: UnifiedAIOptions = {}) {
     super(options);
@@ -114,12 +116,13 @@ export class UnifiedAI extends Core {
       }
       res = await send(fresh.access_token);
       if (res.status === 401) {
-        await drain(res);
+        const body = await readErrorBody(res);
         await this.clearLocalSession(fresh.client_id);
         throw new UnifiedAIAuthError(
           "auth_retry_still_unauthorized",
-          "request still 401 after refresh",
+          `request still 401 after refresh: ${formatBody(body)}`,
           401,
+          body,
         );
       }
     }
@@ -275,6 +278,20 @@ export class UnifiedAI extends Core {
       }
       throw err;
     }
+  }
+}
+
+// Cap the length of server-body excerpts in error messages so a runaway HTML
+// error page doesn't flood the surfaced UnifiedAIError.message.
+const MAX_ERROR_BODY_CHARS = 400;
+
+function formatBody(body: unknown): string {
+  if (body === undefined || body === null) return "<empty body>";
+  if (typeof body === "string") return body.slice(0, MAX_ERROR_BODY_CHARS);
+  try {
+    return JSON.stringify(body).slice(0, MAX_ERROR_BODY_CHARS);
+  } catch {
+    return "<unserializable body>";
   }
 }
 
