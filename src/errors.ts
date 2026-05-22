@@ -26,9 +26,12 @@ export class UnifiedError extends Error {
 export type UnifiedAIAuthErrorCode = "auth_refresh_failed" | "auth_retry_still_unauthorized";
 
 export class UnifiedAIAuthError extends UnifiedError {
-  constructor(code: UnifiedAIAuthErrorCode, message: string, status?: number) {
+  readonly body: unknown;
+
+  constructor(code: UnifiedAIAuthErrorCode, message: string, status?: number, body?: unknown) {
     super(code, message, status);
     this.name = "UnifiedAIAuthError";
+    this.body = body;
   }
 }
 

@@ -16,6 +16,13 @@ export type {
   ModelAuthor,
   ModelType,
 } from "./resources/models";
+export type {
+  GetUsageOptions,
+  UsageCredits,
+  UsageDaily,
+  UsagePeriod,
+  UsageResponse,
+} from "./resources/usage";
 export {
   getProviderLogo,
   listProviderLogos,

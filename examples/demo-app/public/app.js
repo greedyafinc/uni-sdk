@@ -44,6 +44,13 @@ const handlers = {
     appendLog(data.log);
   },
 
+  "get-usage": async () => {
+    setLog("");
+    modelsList.innerHTML = "";
+    const data = await postJson("/usage");
+    appendLog(data.log);
+  },
+
   "test-refresh": async () => {
     setLog("");
     const data = await postJson("/test-refresh");

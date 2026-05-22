@@ -40,6 +40,31 @@ export async function listModels(): Promise<Response> {
   return Response.json({ log, models });
 }
 
+export async function getUsage(): Promise<Response> {
+  const log: string[] = [];
+  let usage: unknown = null;
+  try {
+    const res = await sdk.usage.get();
+    usage = res;
+    log.push(
+      `sdk.usage.get() → period.cost=$${res.period.cost.toFixed(4)} ` +
+        `(${res.period.request_count} reqs, ${res.period.input_tokens} in / ${res.period.output_tokens} out)`,
+    );
+    log.push(
+      `daily: $${res.daily.used.toFixed(4)} / $${res.daily.limit.toFixed(2)}, resets at ${res.daily.resets_at}`,
+    );
+    log.push(`credits.balance: $${res.credits.balance.toFixed(4)}`);
+  } catch (e) {
+    const err = e as UnifiedError & { body?: unknown };
+    log.push(`usage.get failed: ${err.code ?? "error"} — ${err.message}`);
+    if (err.body !== undefined) {
+      log.push(`server body: ${JSON.stringify(err.body).slice(0, 400)}`);
+    }
+  }
+  for (const line of log) console.log(`[usage] ${line}`);
+  return Response.json({ log, usage });
+}
+
 export async function testRefresh(): Promise<Response> {
   const log: string[] = [];
 
