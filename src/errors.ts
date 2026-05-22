@@ -6,6 +6,7 @@ export type UnifiedErrorCode =
   | "auth_user_cancelled"
   | "auth_state_mismatch"
   | "auth_token_exchange_failed"
+  | "auth_refresh_failed"
   | "keychain_unavailable"
   | (string & {});
 
@@ -18,5 +19,12 @@ export class UnifiedError extends Error {
     this.name = "UnifiedError";
     this.code = code;
     this.status = status;
+  }
+}
+
+export class UnifiedAIAuthError extends UnifiedError {
+  constructor(message: string, status?: number) {
+    super("auth_refresh_failed", message, status);
+    this.name = "UnifiedAIAuthError";
   }
 }

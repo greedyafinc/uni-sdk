@@ -5,6 +5,8 @@ export interface FakeWebAuth {
   readonly authorizeUrl: string;
   readonly tokenUrl: string;
   readonly stop: () => Promise<void>;
+  readonly refreshCallCount: () => number;
+  readonly revokeRefreshTokens: () => void;
 }
 
 export interface FakeWebAuthConfig {
@@ -14,6 +16,9 @@ export interface FakeWebAuthConfig {
 
 export async function startFakeWebAuth(config: FakeWebAuthConfig): Promise<FakeWebAuth> {
   const issuedCodes = new Map<string, { verifierChallenge: string; clientId: string }>();
+  const liveRefresh = new Set<string>();
+  let refreshCalls = 0;
+  let revokeRefresh = false;
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -38,10 +43,36 @@ export async function startFakeWebAuth(config: FakeWebAuthConfig): Promise<FakeW
 
       if (url.pathname === "/oauth/token" && req.method === "POST") {
         const body = (await req.json()) as {
+          grant_type?: string;
           code?: string;
           code_verifier?: string;
           client_id?: string;
+          refresh_token?: string;
         };
+
+        if (body.grant_type === "refresh_token") {
+          refreshCalls += 1;
+          const rt = body.refresh_token;
+          if (
+            revokeRefresh ||
+            !rt ||
+            !liveRefresh.has(rt) ||
+            body.client_id !== config.expectedClientId
+          ) {
+            return new Response("invalid_grant", { status: 400 });
+          }
+          liveRefresh.delete(rt);
+          const newRefresh = `web_refresh_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+          liveRefresh.add(newRefresh);
+          return Response.json({
+            access_token: `web_access_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            refresh_token: newRefresh,
+            expires_at: Math.floor(Date.now() / 1000) + 3600,
+            user_id: config.userId,
+            client_id: body.client_id,
+          });
+        }
+
         const code = body.code;
         const verifier = body.code_verifier;
         const issued = code ? issuedCodes.get(code) : undefined;
@@ -53,9 +84,11 @@ export async function startFakeWebAuth(config: FakeWebAuthConfig): Promise<FakeW
           return new Response("invalid_grant", { status: 400 });
         }
         issuedCodes.delete(code);
+        const refresh = `web_refresh_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        liveRefresh.add(refresh);
         return Response.json({
           access_token: `web_access_${Date.now()}`,
-          refresh_token: `web_refresh_${Date.now()}`,
+          refresh_token: refresh,
           expires_at: Math.floor(Date.now() / 1000) + 3600,
           user_id: config.userId,
           client_id: issued.clientId,
@@ -72,6 +105,10 @@ export async function startFakeWebAuth(config: FakeWebAuthConfig): Promise<FakeW
     tokenUrl: `${base}/oauth/token`,
     stop: async () => {
       await server.stop(true);
+    },
+    refreshCallCount: () => refreshCalls,
+    revokeRefreshTokens: () => {
+      revokeRefresh = true;
     },
   };
 }

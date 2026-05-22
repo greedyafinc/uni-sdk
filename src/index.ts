@@ -1,7 +1,8 @@
 import { UnifiedAI } from "./client";
 
 export { UnifiedAI, type UnifiedAIOptions } from "./client";
-export { UnifiedError, type UnifiedErrorCode } from "./errors";
+export { UnifiedAIAuthError, UnifiedError, type UnifiedErrorCode } from "./errors";
+export type { RequestOptions } from "./core";
 export type { Identity } from "./identity";
 export type {
   LoopbackHandle,

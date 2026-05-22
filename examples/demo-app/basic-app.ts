@@ -1,7 +1,8 @@
 // demo-app — a tiny marketplace app built on @unifiedai/sdk.
 //
 // Authenticates via the SDK, then opens a small web UI showing the signed-in
-// user and a sign-out button.
+// user, a sign-out button, and a "Test refresh" button that forces a 401 on
+// the next SDK request to demonstrate transparent refresh.
 
 import { spawn } from "node:child_process";
 import { platform } from "node:os";
@@ -15,7 +16,29 @@ function openInBrowser(url: string): void {
   spawn(cmd, args, { detached: true, stdio: "ignore" }).unref();
 }
 
-const sdk = new UnifiedAI({ appId: APP_ID });
+// In-process API the demo points the SDK at. It accepts any Bearer token
+// (we trust the bootstrap'd session) except that when `forceNext401` is set,
+// the next request returns 401 — simulating an expired access token. The SDK
+// then transparently refreshes and retries; the retry succeeds.
+let forceNext401 = false;
+let lastBearer = "";
+const testApi = Bun.serve({
+  port: 0,
+  hostname: "127.0.0.1",
+  fetch: (req) => {
+    const auth = req.headers.get("authorization") ?? "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    if (forceNext401) {
+      forceNext401 = false;
+      return new Response("unauthorized", { status: 401 });
+    }
+    lastBearer = token;
+    return Response.json({ ok: true, token: `${token.slice(0, 12)}…` });
+  },
+});
+const testApiUrl = `http://127.0.0.1:${testApi.port}`;
+
+const sdk = new UnifiedAI({ appId: APP_ID, apiUrl: testApiUrl });
 
 try {
   await sdk.bootstrap();
@@ -50,7 +73,7 @@ const page = `<!doctype html>
       .card { background: #1e293b; box-shadow: 0 8px 32px rgba(0,0,0,.4); }
     }
     .card {
-      max-width: 420px;
+      max-width: 480px;
       width: calc(100% - 32px);
       padding: 32px;
       background: #ffffff;
@@ -70,8 +93,8 @@ const page = `<!doctype html>
     }
     .user-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; opacity: .7; word-break: break-all; }
     .meta { font-size: 13px; opacity: .6; margin-top: 4px; }
+    .actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 24px; }
     button {
-      margin-top: 24px;
       padding: 10px 20px;
       font: inherit; font-weight: 500;
       border: 1px solid currentColor;
@@ -83,6 +106,19 @@ const page = `<!doctype html>
     }
     button:hover { background: rgba(127,127,127,.1); }
     button:disabled { opacity: .4; cursor: wait; }
+    .log {
+      margin: 16px 0 0;
+      padding: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      text-align: left;
+      background: rgba(0,0,0,.04);
+      border-radius: 8px;
+      max-height: 200px;
+      overflow: auto;
+      white-space: pre-wrap;
+    }
+    .log:empty { display: none; }
     .farewell { display: none; }
     .farewell.show { display: block; }
     .signed-in.hide { display: none; }
@@ -96,7 +132,11 @@ const page = `<!doctype html>
       <div class="avatar">${escapeHtml(initial(identity.user_id))}</div>
       <div class="user-id">${escapeHtml(identity.user_id)}</div>
       <div class="meta">client: ${escapeHtml(identity.client_id)}</div>
-      <button id="signout">Sign out</button>
+      <div class="actions">
+        <button id="test-refresh">Test refresh</button>
+        <button id="signout">Sign out</button>
+      </div>
+      <pre class="log" id="log"></pre>
     </div>
     <div class="farewell">
       <div class="brand">demo-app</div>
@@ -105,11 +145,25 @@ const page = `<!doctype html>
     </div>
   </main>
   <script>
+    const log = document.getElementById("log");
+
+    document.getElementById("test-refresh").addEventListener("click", async (e) => {
+      e.target.disabled = true;
+      log.textContent = "";
+      try {
+        const r = await fetch("/test-refresh", { method: "POST" });
+        const data = await r.json();
+        log.textContent = data.log.join("\\n");
+      } catch (err) {
+        log.textContent = "error: " + (err && err.message ? err.message : err);
+      } finally {
+        e.target.disabled = false;
+      }
+    });
+
     document.getElementById("signout").addEventListener("click", async (e) => {
       e.target.disabled = true;
-      try {
-        await fetch("/signout", { method: "POST" });
-      } catch {}
+      try { await fetch("/signout", { method: "POST" }); } catch {}
       document.querySelector(".signed-in").classList.add("hide");
       document.querySelector(".farewell").classList.add("show");
     });
@@ -128,6 +182,30 @@ function escapeHtml(s: string): string {
   );
 }
 
+async function runRefreshTest(): Promise<string[]> {
+  const log: string[] = [];
+  await sdk.request("/ping");
+  const before = lastBearer;
+  log.push(`baseline call → 200 OK (token ${before.slice(0, 12)}…)`);
+
+  forceNext401 = true;
+  log.push("forcing next call to 401…");
+  try {
+    await sdk.request("/ping");
+  } catch (e) {
+    const err = e as UnifiedError;
+    log.push(`refresh path failed: ${err.code ?? "error"} — ${err.message}`);
+    return log;
+  }
+  const after = lastBearer;
+  if (after === before) {
+    log.push(`call recovered but token did not rotate (${after.slice(0, 12)}…)`);
+  } else {
+    log.push(`call recovered after transparent refresh (token ${after.slice(0, 12)}…)`);
+  }
+  return log;
+}
+
 const server = Bun.serve({
   port: 0,
   hostname: "127.0.0.1",
@@ -141,8 +219,17 @@ const server = Bun.serve({
         console.error("sign-out failed:", e);
       }
       console.log(`signed out ${identity.user_id}`);
-      setTimeout(() => process.exit(0), 250);
+      setTimeout(() => {
+        testApi.stop(true);
+        process.exit(0);
+      }, 250);
       return new Response(null, { status: 204 });
+    }
+
+    if (url.pathname === "/test-refresh" && req.method === "POST") {
+      const log = await runRefreshTest();
+      for (const line of log) console.log(`[refresh-test] ${line}`);
+      return Response.json({ log });
     }
 
     if (url.pathname === "/") {
