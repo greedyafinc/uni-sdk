@@ -6,6 +6,8 @@ export type UnifiedErrorCode =
   | "auth_user_cancelled"
   | "auth_state_mismatch"
   | "auth_token_exchange_failed"
+  | "auth_refresh_failed"
+  | "auth_retry_still_unauthorized"
   | "keychain_unavailable"
   | (string & {});
 
@@ -18,5 +20,14 @@ export class UnifiedError extends Error {
     this.name = "UnifiedError";
     this.code = code;
     this.status = status;
+  }
+}
+
+export type UnifiedAIAuthErrorCode = "auth_refresh_failed" | "auth_retry_still_unauthorized";
+
+export class UnifiedAIAuthError extends UnifiedError {
+  constructor(code: UnifiedAIAuthErrorCode, message: string, status?: number) {
+    super(code, message, status);
+    this.name = "UnifiedAIAuthError";
   }
 }

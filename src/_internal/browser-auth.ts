@@ -1,6 +1,7 @@
 import { UnifiedError } from "../errors";
 import { challengeFor, generateState, generateVerifier } from "./pkce";
-import { type TokenSet, isTokenSet } from "./tokens";
+import { postTokenGrant } from "./token-endpoint";
+import type { TokenSet } from "./tokens";
 
 export interface LoopbackHandle {
   readonly redirectUri: string;
@@ -39,40 +40,18 @@ export async function runBrowserPkce(args: BrowserPkceArgs): Promise<TokenSet> {
     url.searchParams.set("state", state);
     await openUrl(url.toString());
     const code = await handle.waitForCode(state);
-    let res: Response;
-    try {
-      res = await fetch(tokenUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          grant_type: "authorization_code",
-          code,
-          code_verifier: verifier,
-          client_id: clientId,
-          redirect_uri: handle.redirectUri,
-        }),
-      });
-    } catch {
-      throw new UnifiedError(
-        "auth_token_exchange_failed",
-        `token endpoint ${tokenUrl} unreachable`,
-      );
-    }
-    if (!res.ok) {
-      throw new UnifiedError(
-        "auth_token_exchange_failed",
-        `token endpoint returned ${res.status}`,
-        res.status,
-      );
-    }
-    const body = (await res.json()) as unknown;
-    if (!isTokenSet(body)) {
-      throw new UnifiedError(
-        "auth_token_exchange_failed",
-        "token endpoint returned malformed payload",
-      );
-    }
-    return body;
+    return await postTokenGrant({
+      tokenUrl,
+      fetch,
+      body: {
+        grant_type: "authorization_code",
+        code,
+        code_verifier: verifier,
+        client_id: clientId,
+        redirect_uri: handle.redirectUri,
+      },
+      makeError: (msg, status) => new UnifiedError("auth_token_exchange_failed", msg, status),
+    });
   } finally {
     await loopback.stop();
   }
