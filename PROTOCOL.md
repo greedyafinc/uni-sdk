@@ -157,6 +157,7 @@ Stored value is the `TokenSet` JSON, UTF-8.
 | `UNIFIEDAI_TOKEN_URL` | Override the OAuth token endpoint URL (testing / staging). |
 | `UNIFIEDAI_REVOKE_URL` | Override the OAuth revoke endpoint URL. Defaults to `tokenUrl` with `/oauth/token` → `/oauth/revoke`. |
 | `UNIFIEDAI_AUTHORIZE_URL` | Override the OAuth authorize endpoint URL (testing / staging). |
+| `UNIFIEDAI_API_URL` | Override the base URL for `/api/v1/*` and `/v1/messages` requests. Defaults to `https://api.unifiedai.app`. |
 
 ## Error codes
 

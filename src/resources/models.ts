@@ -4,7 +4,6 @@ export type ModelType = "text" | "image" | "video" | "audio" | "embedding";
 
 export interface ModelAuthor {
   name: string;
-  logo?: string | null;
   color?: string | null;
 }
 
