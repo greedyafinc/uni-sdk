@@ -6,6 +6,7 @@ import { type KeychainAdapter, createDefaultKeychain } from "./_internal/keychai
 import { createNodeLoopback } from "./_internal/loopback";
 import { defaultOpenUrl } from "./_internal/open-url";
 import { refreshTokens } from "./_internal/refresh";
+import { deriveRevokeUrl, revokeToken } from "./_internal/revoke";
 import type { TokenSet } from "./_internal/tokens";
 import { Core, type CoreOptions, type RequestOptions } from "./core";
 import {
@@ -24,6 +25,7 @@ const DEFAULT_TOKEN_URL = "https://api.unifiedai.app/oauth/token";
 export interface UnifiedAIOptions extends CoreOptions {
   authorizeUrl?: string;
   tokenUrl?: string;
+  revokeUrl?: string;
   env?: EnvReader;
   discovery?: DiscoveryReader;
   keychain?: KeychainAdapter;
@@ -36,6 +38,7 @@ const tokenStore = new WeakMap<UnifiedAI, TokenSet>();
 export class UnifiedAI extends Core {
   private readonly authorizeUrl: string;
   private readonly tokenUrl: string;
+  private readonly revokeUrl: string;
   private readonly env: EnvReader;
   private readonly discovery: DiscoveryReader;
   private readonly keychain: KeychainAdapter;
@@ -52,6 +55,8 @@ export class UnifiedAI extends Core {
     this.authorizeUrl =
       options.authorizeUrl ?? process.env.UNIFIEDAI_AUTHORIZE_URL ?? DEFAULT_AUTHORIZE_URL;
     this.tokenUrl = options.tokenUrl ?? process.env.UNIFIEDAI_TOKEN_URL ?? DEFAULT_TOKEN_URL;
+    this.revokeUrl =
+      options.revokeUrl ?? process.env.UNIFIEDAI_REVOKE_URL ?? deriveRevokeUrl(this.tokenUrl);
     this.env = options.env ?? defaultEnvReader;
     this.discovery = options.discovery ?? createDefaultDiscoveryReader();
     this.keychain = options.keychain ?? createDefaultKeychain();
@@ -83,6 +88,17 @@ export class UnifiedAI extends Core {
       clientId = this.resolveClientId();
     } catch {
       // appId unresolvable: no keychain entry to clear, just drop in-memory state
+    }
+    const tokens = tokenStore.get(this) ?? (clientId ? await this.keychain.get(clientId) : null);
+    if (tokens) {
+      // Best-effort: server-side family revoke. Failure must not block local sign-out.
+      await revokeToken({
+        revokeUrl: this.revokeUrl,
+        clientId: tokens.client_id,
+        token: tokens.refresh_token,
+        tokenTypeHint: "refresh_token",
+        fetch: this.options.fetch,
+      });
     }
     await this.clearLocalSession(clientId, { throwOnKeychain: true });
   }

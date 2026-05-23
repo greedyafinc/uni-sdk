@@ -112,6 +112,29 @@ Body: {
 The SDK MUST bind the loopback server before opening the browser and close it
 after the callback (or on cancellation).
 
+## Sign-out / token revocation
+
+`signOut()` MUST attempt server-side revocation before clearing local state.
+
+```
+POST /oauth/revoke
+Content-Type: application/json
+Body: {
+  "token": "<refresh_token>",
+  "token_type_hint": "refresh_token",
+  "client_id": "<string>"
+}
+
+200 → {} (always, per RFC 7009 §2.2 — even for unknown tokens)
+```
+
+Per RFC 7009 the server revokes the entire token family (the supplied token
+and any rotated children). SDKs MUST treat the call as best-effort: network
+failure, 4xx, or 5xx MUST NOT block clearing the local keychain entry. The
+default revoke URL is derived from the token URL by replacing `/oauth/token`
+with `/oauth/revoke`; it can be overridden via the `UNIFIEDAI_REVOKE_URL` env
+var or an explicit `revokeUrl` option.
+
 ## Keychain storage
 
 Tokens persist in the OS-native secret store. SDKs in any language read/write
@@ -131,6 +154,9 @@ Stored value is the `TokenSet` JSON, UTF-8.
 | --- | --- |
 | `UNIFIEDAI_HANDOFF_PORT` | Desktop handoff endpoint port. Set by the desktop when it launches an installed app. |
 | `UNIFIEDAI_CLIENT_ID` | Optional fallback client_id when the SDK is not configured with one. |
+| `UNIFIEDAI_TOKEN_URL` | Override the OAuth token endpoint URL (testing / staging). |
+| `UNIFIEDAI_REVOKE_URL` | Override the OAuth revoke endpoint URL. Defaults to `tokenUrl` with `/oauth/token` → `/oauth/revoke`. |
+| `UNIFIEDAI_AUTHORIZE_URL` | Override the OAuth authorize endpoint URL (testing / staging). |
 
 ## Error codes
 
