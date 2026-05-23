@@ -7,7 +7,67 @@ const modelsList = document.getElementById("models");
 const state = {
   selected: { id: "auto", logo: null, color: null, owned_by: "" },
   models: [],
+  streamCtl: null,
 };
+
+async function runStream(path, label) {
+  if (state.streamCtl) state.streamCtl.abort();
+  modelsList.innerHTML = "";
+  log.textContent = `[${label}] streaming with ${state.selected.id}…\n`;
+  const ctl = new AbortController();
+  state.streamCtl = ctl;
+  let r;
+  try {
+    r = await fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: state.selected.id }),
+      signal: ctl.signal,
+    });
+  } catch (e) {
+    log.textContent += `\nfetch failed: ${e?.message ?? e}`;
+    state.streamCtl = null;
+    return;
+  }
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let sep = buf.indexOf("\n\n");
+      while (sep !== -1) {
+        const frame = buf.slice(0, sep);
+        buf = buf.slice(sep + 2);
+        const lines = frame.split("\n");
+        let evt;
+        let data = "";
+        for (const l of lines) {
+          if (l.startsWith("event:")) evt = l.slice(6).trim();
+          else if (l.startsWith("data:")) data += l.slice(5).trimStart();
+        }
+        if (evt === "done") {
+          log.textContent += "\n[done]";
+        } else if (evt === "error") {
+          log.textContent += `\n[error] ${data}`;
+        } else if (data) {
+          try {
+            log.textContent += JSON.parse(data);
+          } catch {
+            log.textContent += data;
+          }
+        }
+        sep = buf.indexOf("\n\n");
+      }
+    }
+  } catch (e) {
+    if (e?.name !== "AbortError") log.textContent += `\nstream error: ${e?.message ?? e}`;
+  } finally {
+    state.streamCtl = null;
+  }
+}
 
 function setLog(text) {
   log.textContent = text;
@@ -73,9 +133,7 @@ document.addEventListener("keydown", (e) => {
 
 function renderMenu(models) {
   ddMenu.innerHTML = "";
-  const auto = { id: "auto", logo: null, color: null, owned_by: "" };
-  const items = [auto, ...models];
-  for (const m of items) {
+  for (const m of models) {
     const li = document.createElement("li");
     li.setAttribute("role", "option");
     li.className = "dd-item";
@@ -170,6 +228,17 @@ const handlers = {
     appendLog(data.log);
   },
 
+  "chat-stream": () => runStream("/chat-stream", "chat.completions"),
+  "response-stream": () => runStream("/response-stream", "responses"),
+  "message-stream": () => runStream("/message-stream", "messages"),
+
+  "abort-stream": () => {
+    if (state.streamCtl) {
+      state.streamCtl.abort();
+      log.textContent += "\n[aborted by user]";
+    }
+  },
+
   "test-refresh": async () => {
     setLog("");
     const data = await postJson("/test-refresh");
@@ -206,9 +275,17 @@ document.addEventListener("click", async (e) => {
 async function loadModelsForDropdown() {
   try {
     const data = await postJson("/list-models");
-    state.models = (data.models ?? []).filter((m) => m.type === "text");
+    const fromServer = (data.models ?? []).filter((m) => m.type === "text");
+    // Issue acceptance requires `model: "auto"` to be exercisable. The server
+    // usually surfaces it, but guarantee its presence here so the demo always
+    // can route via auto regardless of upstream catalog drift.
+    const hasAuto = fromServer.some((m) => m.id === "auto");
+    state.models = hasAuto
+      ? fromServer
+      : [{ id: "auto", logo: null, color: null, owned_by: "" }, ...fromServer];
     renderMenu(state.models);
-    setSelected({ id: "auto", logo: null, color: null, owned_by: "" });
+    const auto = state.models.find((m) => m.id === "auto") ?? state.models[0];
+    if (auto) setSelected(auto);
   } catch (err) {
     ddLabel.textContent = `failed: ${err?.message ?? err}`;
   }

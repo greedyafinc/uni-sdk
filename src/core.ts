@@ -33,4 +33,8 @@ export class Core {
   async request<T>(_path: string, _options: RequestOptions = {}): Promise<T> {
     throw new UnifiedError("not_implemented", "Core.request is not wired up yet");
   }
+
+  async stream(_path: string, _options: RequestOptions = {}): Promise<ReadableStream<Uint8Array>> {
+    throw new UnifiedError("not_implemented", "Core.stream is not wired up yet");
+  }
 }
