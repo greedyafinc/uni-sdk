@@ -38,6 +38,9 @@ export type {
   ChatCompletionUsage,
   ChatCompletionUserContentPart,
   ChatCompletionUserMessage,
+  ChatCompletionChunk,
+  ChatCompletionChunkChoice,
+  ChatCompletionStream,
   ChatCreateOptions,
 } from "./resources/chat";
 export type {
@@ -46,6 +49,8 @@ export type {
   ResponseInputContentPart,
   ResponseInputItem,
   ResponseObject,
+  ResponseStream,
+  ResponseStreamEvent,
   ResponseTool,
   ResponseToolChoice,
 } from "./resources/responses";
@@ -59,7 +64,10 @@ export type {
   AnthropicToolDefinition,
   MessageCreateOptions,
   MessageCreateParams,
+  MessageStream,
+  MessageStreamEvent,
 } from "./resources/messages";
+export { UnifiedStream } from "./_internal/stream";
 export {
   getProviderLogo,
   listProviderLogos,

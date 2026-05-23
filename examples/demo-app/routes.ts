@@ -149,6 +149,130 @@ export async function createMessage(model: string): Promise<Response> {
   return Response.json({ log, text });
 }
 
+// ─── Streaming routes ────────────────────────────────────────────────────────
+// Each opens an SDK stream against unified-api and forwards token-text frames
+// to the browser as SSE. If the browser aborts the fetch, the route calls
+// `.abort()` on the SDK stream so the upstream connection is released.
+
+function ssePipe(
+  generate: (controller: AbortSignal, write: (text: string) => void) => Promise<void>,
+): Response {
+  const encoder = new TextEncoder();
+  const abort = new AbortController();
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      // After cancel(), enqueue/close throw 'Invalid stream state'. Guard every
+      // controller op so an abort race doesn't surface as an unhandled rejection.
+      const safeEnqueue = (chunk: Uint8Array) => {
+        if (cancelled) return;
+        try {
+          controller.enqueue(chunk);
+        } catch {
+          // stream was closed/cancelled between checks; nothing to do
+        }
+      };
+      const safeClose = () => {
+        if (cancelled) return;
+        try {
+          controller.close();
+        } catch {
+          // already closed
+        }
+      };
+      const write = (text: string) => {
+        safeEnqueue(encoder.encode(`data: ${JSON.stringify(text)}\n\n`));
+      };
+      try {
+        await generate(abort.signal, write);
+        safeEnqueue(encoder.encode("event: done\ndata: {}\n\n"));
+      } catch (e) {
+        if (!cancelled) {
+          const err = e as { code?: string; message?: string };
+          safeEnqueue(
+            encoder.encode(
+              `event: error\ndata: ${JSON.stringify({ code: err.code ?? "error", message: err.message ?? String(e) })}\n\n`,
+            ),
+          );
+        }
+      } finally {
+        safeClose();
+      }
+    },
+    cancel() {
+      cancelled = true;
+      abort.abort();
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+    },
+  });
+}
+
+export function chatCompletionStream(model: string): Response {
+  return ssePipe(async (signal, write) => {
+    const s = sdk.chat.completions.create({
+      model,
+      stream: true,
+      messages: [
+        { role: "system", content: "You are a terse assistant. Reply in two short sentences." },
+        { role: "user", content: "Say a friendly hello from sdk.chat.completions streaming." },
+      ],
+    });
+    signal.addEventListener("abort", () => s.abort(), { once: true });
+    console.log(`[chat-stream] start model=${model}`);
+    for await (const chunk of s) {
+      const piece = chunk.choices[0]?.delta.content;
+      if (piece) write(piece);
+    }
+    console.log("[chat-stream] done");
+  });
+}
+
+export function createResponseStream(model: string): Response {
+  return ssePipe(async (signal, write) => {
+    const s = sdk.responses.create({
+      model,
+      stream: true,
+      input: "Say a friendly hello from sdk.responses streaming in two short sentences.",
+    });
+    signal.addEventListener("abort", () => s.abort(), { once: true });
+    console.log(`[response-stream] start model=${model}`);
+    for await (const ev of s) {
+      if (ev.type === "response.output_text.delta") {
+        const delta = (ev as { delta?: string }).delta;
+        if (typeof delta === "string") write(delta);
+      }
+    }
+    console.log("[response-stream] done");
+  });
+}
+
+export function createMessageStream(model: string): Response {
+  return ssePipe(async (signal, write) => {
+    const s = sdk.messages.create({
+      model,
+      max_tokens: 256,
+      stream: true,
+      system: "You are a terse assistant. Reply in two short sentences.",
+      messages: [{ role: "user", content: "Say a friendly hello from sdk.messages streaming." }],
+    });
+    signal.addEventListener("abort", () => s.abort(), { once: true });
+    console.log(`[message-stream] start model=${model}`);
+    for await (const ev of s) {
+      if (ev.type === "content_block_delta") {
+        const d = (ev as { delta?: { type?: string; text?: string } }).delta;
+        if (d?.type === "text_delta" && typeof d.text === "string") write(d.text);
+      }
+    }
+    console.log("[message-stream] done");
+  });
+}
+
 export async function testRefresh(): Promise<Response> {
   const log: string[] = [];
 

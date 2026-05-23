@@ -166,6 +166,84 @@ export class UnifiedAI extends Core {
     return (await res.json()) as T;
   }
 
+  override async stream(
+    path: string,
+    options: RequestOptions = {},
+  ): Promise<ReadableStream<Uint8Array>> {
+    const tokens = tokenStore.get(this);
+    if (!tokens) {
+      throw new UnifiedError("not_bootstrapped", "call bootstrap() before making requests");
+    }
+    const url = this.buildUrl(path, options.query);
+    const bodyText = options.body !== undefined ? JSON.stringify(options.body) : undefined;
+    const send = (accessToken: string) => {
+      const headers = this.buildHeaders(accessToken, bodyText !== undefined);
+      headers.accept = "text/event-stream";
+      const init: RequestInit = {
+        method: options.method ?? "GET",
+        headers,
+      };
+      if (bodyText !== undefined) init.body = bodyText;
+      if (options.signal) init.signal = options.signal;
+      return this.options.fetch(url, init);
+    };
+
+    let res = await send(tokens.access_token);
+    if (res.status === 401) {
+      await drain(res);
+      let fresh: TokenSet;
+      try {
+        fresh = await this.ensureFreshToken();
+      } catch (err) {
+        await this.clearLocalSession(tokens.client_id);
+        throw err;
+      }
+      res = await send(fresh.access_token);
+      if (res.status === 401) {
+        const body = await readErrorBody(res);
+        await this.clearLocalSession(fresh.client_id);
+        throw new UnifiedAIAuthError(
+          "auth_retry_still_unauthorized",
+          `stream still 401 after refresh: ${formatBody(body)}`,
+          401,
+          body,
+        );
+      }
+    }
+    if (!res.ok) {
+      const status = res.status;
+      const body = await readErrorBody(res);
+      throw new UnifiedAIError(
+        httpErrorCodeFromStatus(status),
+        `stream to ${path} returned ${status}`,
+        status,
+        body,
+      );
+    }
+    if (!res.body) {
+      throw new UnifiedAIError(
+        "request_failed",
+        `stream to ${path} returned no body`,
+        res.status,
+        undefined,
+      );
+    }
+    // Defence in depth: a 2xx with a non-SSE content-type (e.g. an endpoint that
+    // ignored `stream: true` and returned JSON) would otherwise silently yield
+    // zero events. Fail loudly so callers don't see a phantom empty stream.
+    const ct = res.headers.get("content-type") ?? "";
+    if (!ct.toLowerCase().includes("text/event-stream")) {
+      const body = await readErrorBody(res);
+      throw new UnifiedAIError(
+        "request_failed",
+        `stream to ${path} expected text/event-stream, got ${ct || "<none>"}`,
+        res.status,
+        body,
+      );
+    }
+    return res.body;
+  }
+
   /**
    * Single-flight: concurrent callers share one refresh promise per cycle.
    * Resolves to the new TokenSet on success; rejects with UnifiedAIAuthError on failure.

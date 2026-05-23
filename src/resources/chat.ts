@@ -1,4 +1,7 @@
+import { parseSSE } from "../_internal/sse";
+import { UnifiedStream } from "../_internal/stream";
 import type { Core, RequestOptions } from "../core";
+import { UnifiedAIError } from "../errors";
 
 // ── Request types (OpenAI chat.completions, mirrored from unified-api) ─────────
 
@@ -131,16 +134,97 @@ export interface ChatCreateOptions {
   signal?: AbortSignal;
 }
 
+// ── Streaming event types (OpenAI chat.completion.chunk) ──────────────────────
+
+export interface ChatCompletionChunk {
+  id: string;
+  object: "chat.completion.chunk";
+  created: number;
+  model: string;
+  choices: ChatCompletionChunkChoice[];
+  usage?: ChatCompletionUsage | null;
+  system_fingerprint?: string | null;
+}
+
+export interface ChatCompletionChunkChoice {
+  index: number;
+  delta: {
+    role?: "assistant";
+    content?: string | null;
+    reasoning_content?: string | null;
+    tool_calls?: Array<{
+      index: number;
+      id?: string;
+      type?: "function";
+      function?: { name?: string; arguments?: string };
+    }>;
+  };
+  finish_reason: "stop" | "length" | "tool_calls" | "content_filter" | null;
+  logprobs?: unknown | null;
+}
+
+export type ChatCompletionStream = UnifiedStream<ChatCompletionChunk>;
+
 export class ChatCompletions {
   constructor(private readonly client: Core) {}
 
   create(
-    params: ChatCompletionCreateParams,
+    params: ChatCompletionCreateParams & { stream: true },
+    options?: ChatCreateOptions,
+  ): ChatCompletionStream;
+  create(
+    params: ChatCompletionCreateParams & { stream?: false },
+    options?: ChatCreateOptions,
+  ): Promise<ChatCompletionResponse>;
+  create(
+    params: ChatCompletionCreateParams & { stream?: boolean },
     options: ChatCreateOptions = {},
-  ): Promise<ChatCompletionResponse> {
+  ): ChatCompletionStream | Promise<ChatCompletionResponse> {
+    if (params.stream) {
+      return this.createStream(params as ChatCompletionCreateParams & { stream: true }, options);
+    }
     const req: RequestOptions = { method: "POST", body: params };
     if (options.signal) req.signal = options.signal;
     return this.client.request<ChatCompletionResponse>("/api/v1/chat/completions", req);
+  }
+
+  private createStream(
+    params: ChatCompletionCreateParams & { stream: true },
+    options: ChatCreateOptions,
+  ): ChatCompletionStream {
+    const controller = new AbortController();
+    if (options.signal) {
+      if (options.signal.aborted) controller.abort();
+      else options.signal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+    const client = this.client;
+    const iter = (async function* (): AsyncGenerator<ChatCompletionChunk, void, void> {
+      const body = await client.stream("/api/v1/chat/completions", {
+        method: "POST",
+        body: params,
+        signal: controller.signal,
+      });
+      for await (const msg of parseSSE(body)) {
+        if (msg.data === "[DONE]") return;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(msg.data);
+        } catch {
+          continue;
+        }
+        const obj = parsed as { error?: { message?: string; type?: string } };
+        if (obj.error) {
+          throw new UnifiedAIError(
+            "request_failed",
+            `chat.completions stream error: ${obj.error.message ?? "unknown"}`,
+            0,
+            obj.error,
+          );
+        }
+        yield parsed as ChatCompletionChunk;
+      }
+    })();
+    return new UnifiedStream(iter, controller);
   }
 }
 

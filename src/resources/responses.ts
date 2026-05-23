@@ -1,4 +1,7 @@
+import { parseSSE } from "../_internal/sse";
+import { UnifiedStream } from "../_internal/stream";
 import type { Core, RequestOptions } from "../core";
+import { UnifiedAIError } from "../errors";
 
 // ── Input content parts (OpenAI Responses, mirrored from unified-api) ─────────
 
@@ -123,15 +126,104 @@ export interface ResponseCreateOptions {
   signal?: AbortSignal;
 }
 
+// ── Streaming event types (OpenAI Responses) ──────────────────────────────────
+// Event names match unified-api/src/modules/responses/service.ts.
+
+export type ResponseStreamEvent =
+  | { type: "response.created"; response: Partial<ResponseObject> & { id: string } }
+  | {
+      type: "response.output_item.added";
+      output_index: number;
+      item: { id?: string; type: string; role?: string; content?: unknown[] };
+    }
+  | {
+      type: "response.content_part.added";
+      output_index: number;
+      content_index: number;
+      part: { type: string; text?: string };
+    }
+  | {
+      type: "response.output_text.delta";
+      output_index: number;
+      content_index: number;
+      delta: string;
+    }
+  | {
+      type: "response.reasoning.delta";
+      output_index: number;
+      delta: string;
+    }
+  | {
+      type: "response.output_text.done";
+      output_index: number;
+      content_index: number;
+      text: string;
+    }
+  | { type: "response.completed"; response: ResponseObject }
+  | { type: "error"; message: string; code?: string }
+  | { type: string; [key: string]: unknown };
+
+export type ResponseStream = UnifiedStream<ResponseStreamEvent>;
+
 export class Responses {
   constructor(private readonly client: Core) {}
 
   create(
-    params: ResponseCreateParams,
+    params: ResponseCreateParams & { stream: true },
+    options?: ResponseCreateOptions,
+  ): ResponseStream;
+  create(
+    params: ResponseCreateParams & { stream?: false },
+    options?: ResponseCreateOptions,
+  ): Promise<ResponseObject>;
+  create(
+    params: ResponseCreateParams & { stream?: boolean },
     options: ResponseCreateOptions = {},
-  ): Promise<ResponseObject> {
+  ): ResponseStream | Promise<ResponseObject> {
+    if (params.stream) {
+      return this.createStream(params as ResponseCreateParams & { stream: true }, options);
+    }
     const req: RequestOptions = { method: "POST", body: params };
     if (options.signal) req.signal = options.signal;
     return this.client.request<ResponseObject>("/api/v1/responses", req);
+  }
+
+  private createStream(
+    params: ResponseCreateParams & { stream: true },
+    options: ResponseCreateOptions,
+  ): ResponseStream {
+    const controller = new AbortController();
+    if (options.signal) {
+      if (options.signal.aborted) controller.abort();
+      else options.signal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+    const client = this.client;
+    const iter = (async function* (): AsyncGenerator<ResponseStreamEvent, void, void> {
+      const body = await client.stream("/api/v1/responses", {
+        method: "POST",
+        body: params,
+        signal: controller.signal,
+      });
+      for await (const msg of parseSSE(body)) {
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(msg.data) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        const type = msg.event ?? (typeof parsed.type === "string" ? parsed.type : undefined);
+        if (!type) continue;
+        if (type === "error") {
+          // unified-api emits `{type:"error", error:{message, type}}`; accept either
+          // shape so we surface the real upstream message instead of a generic fallback.
+          const err = (parsed.error ?? parsed) as { message?: string };
+          const m = typeof err.message === "string" ? err.message : "unknown";
+          throw new UnifiedAIError("request_failed", `responses stream error: ${m}`, 0, parsed);
+        }
+        yield { ...parsed, type } as ResponseStreamEvent;
+        if (type === "response.completed") return;
+      }
+    })();
+    return new UnifiedStream(iter, controller);
   }
 }

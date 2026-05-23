@@ -8,8 +8,11 @@ import { platform } from "node:os";
 import { UnifiedError } from "../../src/index";
 import {
   chatCompletion,
+  chatCompletionStream,
   createMessage,
+  createMessageStream,
   createResponse,
+  createResponseStream,
   getUsage,
   listModels,
   me,
@@ -73,6 +76,18 @@ const server = Bun.serve({
     if (req.method === "POST" && url.pathname === "/message") {
       const { model } = await readModel(req);
       return createMessage(model);
+    }
+    if (req.method === "POST" && url.pathname === "/chat-stream") {
+      const { model } = await readModel(req);
+      return chatCompletionStream(model);
+    }
+    if (req.method === "POST" && url.pathname === "/response-stream") {
+      const { model } = await readModel(req);
+      return createResponseStream(model);
+    }
+    if (req.method === "POST" && url.pathname === "/message-stream") {
+      const { model } = await readModel(req);
+      return createMessageStream(model);
     }
     if (req.method === "POST" && url.pathname === "/test-refresh") return testRefresh();
     if (req.method === "POST" && url.pathname === "/signout") return signOut(identity);
