@@ -38,6 +38,14 @@ console.log(`signed in as ${identity.user_id}`);
 
 const PUBLIC_DIR = new URL("./public/", import.meta.url);
 
+async function readModel(req: Request): Promise<{ model: string }> {
+  try {
+    const body = (await req.json()) as { model?: unknown };
+    if (typeof body?.model === "string" && body.model) return { model: body.model };
+  } catch {}
+  return { model: "auto" };
+}
+
 async function serveStatic(pathname: string): Promise<Response> {
   const rel = pathname === "/" ? "index.html" : pathname.slice(1);
   const file = Bun.file(new URL(rel, PUBLIC_DIR));
@@ -54,9 +62,18 @@ const server = Bun.serve({
     if (req.method === "GET" && url.pathname === "/me") return me(identity);
     if (req.method === "POST" && url.pathname === "/list-models") return listModels();
     if (req.method === "POST" && url.pathname === "/usage") return getUsage();
-    if (req.method === "POST" && url.pathname === "/chat-completion") return chatCompletion();
-    if (req.method === "POST" && url.pathname === "/response") return createResponse();
-    if (req.method === "POST" && url.pathname === "/message") return createMessage();
+    if (req.method === "POST" && url.pathname === "/chat-completion") {
+      const { model } = await readModel(req);
+      return chatCompletion(model);
+    }
+    if (req.method === "POST" && url.pathname === "/response") {
+      const { model } = await readModel(req);
+      return createResponse(model);
+    }
+    if (req.method === "POST" && url.pathname === "/message") {
+      const { model } = await readModel(req);
+      return createMessage(model);
+    }
     if (req.method === "POST" && url.pathname === "/test-refresh") return testRefresh();
     if (req.method === "POST" && url.pathname === "/signout") return signOut(identity);
 

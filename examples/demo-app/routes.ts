@@ -65,12 +65,12 @@ export async function getUsage(): Promise<Response> {
   return Response.json({ log, usage });
 }
 
-export async function chatCompletion(): Promise<Response> {
+export async function chatCompletion(model: string): Promise<Response> {
   const log: string[] = [];
   let text: string | null = null;
   try {
     const res = await sdk.chat.completions.create({
-      model: "auto",
+      model,
       messages: [
         { role: "system", content: "You are a terse assistant. Reply in one short sentence." },
         { role: "user", content: "Say hello from sdk.chat.completions." },
@@ -90,12 +90,12 @@ export async function chatCompletion(): Promise<Response> {
   return Response.json({ log, text });
 }
 
-export async function createResponse(): Promise<Response> {
+export async function createResponse(model: string): Promise<Response> {
   const log: string[] = [];
   let text: string | null = null;
   try {
     const res = await sdk.responses.create({
-      model: "auto",
+      model,
       input: "Say hello from sdk.responses in one short sentence.",
     });
     log.push(
@@ -121,12 +121,12 @@ export async function createResponse(): Promise<Response> {
   return Response.json({ log, text });
 }
 
-export async function createMessage(): Promise<Response> {
+export async function createMessage(model: string): Promise<Response> {
   const log: string[] = [];
   let text: string | null = null;
   try {
     const res = await sdk.messages.create({
-      model: "auto",
+      model,
       max_tokens: 256,
       system: "You are a terse assistant. Reply in one short sentence.",
       messages: [{ role: "user", content: "Say hello from sdk.messages." }],
