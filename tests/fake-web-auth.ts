@@ -7,6 +7,13 @@ export interface FakeWebAuth {
   readonly stop: () => Promise<void>;
   readonly refreshCallCount: () => number;
   readonly revokeRefreshTokens: () => void;
+  readonly revokeUrl: string;
+  readonly revokeCalls: () => ReadonlyArray<{
+    token: string;
+    client_id: string;
+    token_type_hint?: string;
+  }>;
+  readonly failRevoke: (status: number) => void;
 }
 
 export interface FakeWebAuthConfig {
@@ -19,6 +26,8 @@ export async function startFakeWebAuth(config: FakeWebAuthConfig): Promise<FakeW
   const liveRefresh = new Set<string>();
   let refreshCalls = 0;
   let revokeRefresh = false;
+  const revokeCallsLog: { token: string; client_id: string; token_type_hint?: string }[] = [];
+  let revokeFailStatus = 0;
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -95,6 +104,27 @@ export async function startFakeWebAuth(config: FakeWebAuthConfig): Promise<FakeW
         });
       }
 
+      if (url.pathname === "/oauth/revoke" && req.method === "POST") {
+        const body = (await req.json()) as {
+          token?: string;
+          client_id?: string;
+          token_type_hint?: string;
+        };
+        const entry: { token: string; client_id: string; token_type_hint?: string } = {
+          token: body.token ?? "",
+          client_id: body.client_id ?? "",
+        };
+        if (body.token_type_hint !== undefined) entry.token_type_hint = body.token_type_hint;
+        revokeCallsLog.push(entry);
+        if (revokeFailStatus) {
+          return new Response("err", { status: revokeFailStatus });
+        }
+        if (body.token && body.client_id === config.expectedClientId) {
+          liveRefresh.delete(body.token);
+        }
+        return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      }
+
       return new Response("not found", { status: 404 });
     },
   });
@@ -109,6 +139,11 @@ export async function startFakeWebAuth(config: FakeWebAuthConfig): Promise<FakeW
     refreshCallCount: () => refreshCalls,
     revokeRefreshTokens: () => {
       revokeRefresh = true;
+    },
+    revokeUrl: `${base}/oauth/revoke`,
+    revokeCalls: () => revokeCallsLog,
+    failRevoke: (status: number) => {
+      revokeFailStatus = status;
     },
   };
 }
