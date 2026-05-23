@@ -24,6 +24,7 @@ import { Usage } from "./resources/usage";
 
 const DEFAULT_AUTHORIZE_URL = "https://web.unifiedai.app/oauth/authorize";
 const DEFAULT_TOKEN_URL = "https://api.unifiedai.app/oauth/token";
+const DEFAULT_API_URL = "https://api.unifiedai.app";
 
 export interface UnifiedAIOptions extends CoreOptions {
   authorizeUrl?: string;
@@ -57,7 +58,10 @@ export class UnifiedAI extends Core {
   readonly messages: Messages = new Messages(this);
 
   constructor(options: UnifiedAIOptions = {}) {
-    super(options);
+    super({
+      ...options,
+      apiUrl: options.apiUrl ?? process.env.UNIFIEDAI_API_URL ?? DEFAULT_API_URL,
+    });
     this.authorizeUrl =
       options.authorizeUrl ?? process.env.UNIFIEDAI_AUTHORIZE_URL ?? DEFAULT_AUTHORIZE_URL;
     this.tokenUrl = options.tokenUrl ?? process.env.UNIFIEDAI_TOKEN_URL ?? DEFAULT_TOKEN_URL;
