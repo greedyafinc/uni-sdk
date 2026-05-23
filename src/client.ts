@@ -16,7 +16,10 @@ import {
   httpErrorCodeFromStatus,
 } from "./errors";
 import type { Identity } from "./identity";
+import { Chat } from "./resources/chat";
+import { Messages } from "./resources/messages";
 import { Models } from "./resources/models";
+import { Responses } from "./resources/responses";
 import { Usage } from "./resources/usage";
 
 const DEFAULT_AUTHORIZE_URL = "https://web.unifiedai.app/oauth/authorize";
@@ -49,6 +52,9 @@ export class UnifiedAI extends Core {
 
   readonly models: Models = new Models(this);
   readonly usage: Usage = new Usage(this);
+  readonly chat: Chat = new Chat(this);
+  readonly responses: Responses = new Responses(this);
+  readonly messages: Messages = new Messages(this);
 
   constructor(options: UnifiedAIOptions = {}) {
     super(options);

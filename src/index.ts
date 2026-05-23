@@ -23,6 +23,43 @@ export type {
   UsagePeriod,
   UsageResponse,
 } from "./resources/usage";
+export type {
+  ChatCompletionAssistantMessage,
+  ChatCompletionChoice,
+  ChatCompletionCreateParams,
+  ChatCompletionMessage,
+  ChatCompletionResponse,
+  ChatCompletionResponseFormat,
+  ChatCompletionSystemMessage,
+  ChatCompletionToolCall,
+  ChatCompletionToolChoice,
+  ChatCompletionToolDefinition,
+  ChatCompletionToolMessage,
+  ChatCompletionUsage,
+  ChatCompletionUserContentPart,
+  ChatCompletionUserMessage,
+  ChatCreateOptions,
+} from "./resources/chat";
+export type {
+  ResponseCreateOptions,
+  ResponseCreateParams,
+  ResponseInputContentPart,
+  ResponseInputItem,
+  ResponseObject,
+  ResponseTool,
+  ResponseToolChoice,
+} from "./resources/responses";
+export type {
+  AnthropicContentBlock,
+  AnthropicImageBlock,
+  AnthropicMessage,
+  AnthropicMessageResponse,
+  AnthropicTextBlock,
+  AnthropicToolChoice,
+  AnthropicToolDefinition,
+  MessageCreateOptions,
+  MessageCreateParams,
+} from "./resources/messages";
 export {
   getProviderLogo,
   listProviderLogos,

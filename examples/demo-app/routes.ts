@@ -65,6 +65,90 @@ export async function getUsage(): Promise<Response> {
   return Response.json({ log, usage });
 }
 
+export async function chatCompletion(): Promise<Response> {
+  const log: string[] = [];
+  let text: string | null = null;
+  try {
+    const res = await sdk.chat.completions.create({
+      model: "auto",
+      messages: [
+        { role: "system", content: "You are a terse assistant. Reply in one short sentence." },
+        { role: "user", content: "Say hello from sdk.chat.completions." },
+      ],
+    });
+    text = res.choices[0]?.message.content ?? null;
+    log.push(
+      `sdk.chat.completions.create() → ${res.model} (${res.usage.prompt_tokens}+${res.usage.completion_tokens} tokens)`,
+    );
+    if (text) log.push(`assistant: ${text}`);
+  } catch (e) {
+    const err = e as UnifiedError & { body?: unknown };
+    log.push(`chat.completions failed: ${err.code ?? "error"} — ${err.message}`);
+    if (err.body !== undefined) log.push(`server body: ${JSON.stringify(err.body).slice(0, 400)}`);
+  }
+  for (const line of log) console.log(`[chat] ${line}`);
+  return Response.json({ log, text });
+}
+
+export async function createResponse(): Promise<Response> {
+  const log: string[] = [];
+  let text: string | null = null;
+  try {
+    const res = await sdk.responses.create({
+      model: "auto",
+      input: "Say hello from sdk.responses in one short sentence.",
+    });
+    log.push(
+      `sdk.responses.create() → ${res.model} status=${res.status} (${res.usage.input_tokens}+${res.usage.output_tokens} tokens)`,
+    );
+    for (const item of res.output) {
+      const it = item as { type?: string; content?: Array<{ type?: string; text?: string }> };
+      if (it.type === "message" && Array.isArray(it.content)) {
+        for (const c of it.content) {
+          if (c.type === "output_text" && typeof c.text === "string") {
+            text = c.text;
+          }
+        }
+      }
+    }
+    if (text) log.push(`assistant: ${text}`);
+  } catch (e) {
+    const err = e as UnifiedError & { body?: unknown };
+    log.push(`responses.create failed: ${err.code ?? "error"} — ${err.message}`);
+    if (err.body !== undefined) log.push(`server body: ${JSON.stringify(err.body).slice(0, 400)}`);
+  }
+  for (const line of log) console.log(`[responses] ${line}`);
+  return Response.json({ log, text });
+}
+
+export async function createMessage(): Promise<Response> {
+  const log: string[] = [];
+  let text: string | null = null;
+  try {
+    const res = await sdk.messages.create({
+      model: "auto",
+      max_tokens: 256,
+      system: "You are a terse assistant. Reply in one short sentence.",
+      messages: [{ role: "user", content: "Say hello from sdk.messages." }],
+    });
+    log.push(
+      `sdk.messages.create() → ${res.model} stop=${res.stop_reason} (${res.usage.input_tokens}+${res.usage.output_tokens} tokens)`,
+    );
+    for (const block of res.content) {
+      if (block.type === "text") {
+        text = block.text;
+      }
+    }
+    if (text) log.push(`assistant: ${text}`);
+  } catch (e) {
+    const err = e as UnifiedError & { body?: unknown };
+    log.push(`messages.create failed: ${err.code ?? "error"} — ${err.message}`);
+    if (err.body !== undefined) log.push(`server body: ${JSON.stringify(err.body).slice(0, 400)}`);
+  }
+  for (const line of log) console.log(`[messages] ${line}`);
+  return Response.json({ log, text });
+}
+
 export async function testRefresh(): Promise<Response> {
   const log: string[] = [];
 

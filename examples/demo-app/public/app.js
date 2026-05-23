@@ -51,6 +51,27 @@ const handlers = {
     appendLog(data.log);
   },
 
+  "chat-completion": async () => {
+    setLog("");
+    modelsList.innerHTML = "";
+    const data = await postJson("/chat-completion");
+    appendLog(data.log);
+  },
+
+  response: async () => {
+    setLog("");
+    modelsList.innerHTML = "";
+    const data = await postJson("/response");
+    appendLog(data.log);
+  },
+
+  message: async () => {
+    setLog("");
+    modelsList.innerHTML = "";
+    const data = await postJson("/message");
+    appendLog(data.log);
+  },
+
   "test-refresh": async () => {
     setLog("");
     const data = await postJson("/test-refresh");

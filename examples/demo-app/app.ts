@@ -6,7 +6,16 @@
 import { spawn } from "node:child_process";
 import { platform } from "node:os";
 import { UnifiedError } from "../../src/index";
-import { getUsage, listModels, me, signOut, testRefresh } from "./routes";
+import {
+  chatCompletion,
+  createMessage,
+  createResponse,
+  getUsage,
+  listModels,
+  me,
+  signOut,
+  testRefresh,
+} from "./routes";
 import { sdk } from "./sdk";
 
 function openInBrowser(url: string): void {
@@ -45,6 +54,9 @@ const server = Bun.serve({
     if (req.method === "GET" && url.pathname === "/me") return me(identity);
     if (req.method === "POST" && url.pathname === "/list-models") return listModels();
     if (req.method === "POST" && url.pathname === "/usage") return getUsage();
+    if (req.method === "POST" && url.pathname === "/chat-completion") return chatCompletion();
+    if (req.method === "POST" && url.pathname === "/response") return createResponse();
+    if (req.method === "POST" && url.pathname === "/message") return createMessage();
     if (req.method === "POST" && url.pathname === "/test-refresh") return testRefresh();
     if (req.method === "POST" && url.pathname === "/signout") return signOut(identity);
 
