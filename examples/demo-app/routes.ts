@@ -1,7 +1,7 @@
 // JSON route handlers. Each returns a Response; app.ts wires them up.
 
-import { type UnifiedError, getProviderLogo } from "../../src/index";
-import type { Identity } from "../../src/index";
+import { type UnifiedError, getProviderLogo } from "../../src/node/index";
+import type { Identity } from "../../src/node/index";
 import { refreshTest, sdk } from "./sdk";
 
 export function me(identity: Identity): Response {

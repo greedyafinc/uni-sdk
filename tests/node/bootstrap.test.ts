@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import type { OpenUrl } from "../src/_internal/browser-auth";
-import type { DiscoveryReader } from "../src/_internal/discovery";
-import type { EnvReader } from "../src/_internal/env";
-import { InMemoryKeychain } from "../src/_internal/keychain";
-import { UnifiedAI, UnifiedError } from "../src/index";
-import { startFakeDesktop } from "./fake-desktop";
-import { startFakeWebAuth } from "./fake-web-auth";
+import type { OpenUrl } from "../../src/node/_internal/browser-auth";
+import type { DiscoveryReader } from "../../src/node/_internal/discovery";
+import type { EnvReader } from "../../src/node/_internal/env";
+import { InMemoryKeychain } from "../../src/node/_internal/keychain";
+import { UnifiedAI, UnifiedError } from "../../src/node/index";
+import { startFakeDesktop } from "../fake-desktop";
+import { startFakeWebAuth } from "../fake-web-auth";
 
 const CLIENT = "app_test";
 const USER = "user_test";

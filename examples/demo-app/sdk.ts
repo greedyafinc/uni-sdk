@@ -5,7 +5,9 @@
 // SDK's transparent-refresh path. All other traffic passes through to
 // unified-api unchanged.
 
-import { UnifiedAI } from "../../src/index";
+// Imports the node-capable UnifiedAI subclass — this demo runs the full
+// OAuth/keychain/handoff flow against unified-api locally.
+import { UnifiedAI } from "../../src/node/index";
 import { APP_ID } from "./constants";
 
 const API_BASE = process.env.UNIFIEDAI_API_BASE ?? "http://localhost:3141";

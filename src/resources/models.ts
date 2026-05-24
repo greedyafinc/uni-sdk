@@ -1,4 +1,4 @@
-import type { Core, RequestOptions } from "../core";
+import type { Core, RequestOptions } from "../core/core";
 
 export type ModelType = "text" | "image" | "video" | "audio" | "embedding";
 

@@ -1,18 +1,40 @@
 {
   "name": "@unifiedai/sdk",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Official SDK for Unifiedai marketplace apps.",
   "type": "module",
-  "sideEffects": false,
-  "files": ["dist", "README.md", "LICENSE"],
-  "main": "./dist/index.js",
-  "module": "./dist/index.js",
+  "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
+  "main": "./dist/index.browser.js",
+  "module": "./dist/index.browser.js",
   "types": "./dist/index.d.ts",
+  "browser": "./dist/index.browser.js",
   "exports": {
     ".": {
+      "browser": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.browser.js"
+      },
+      "node": {
+        "types": "./dist/node/index.d.ts",
+        "default": "./dist/node/index.js"
+      },
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.browser.js"
+      },
+      "default": "./dist/index.browser.js"
+    },
+    "./node": {
+      "types": "./dist/node/index.d.ts",
+      "import": "./dist/node/index.js",
+      "default": "./dist/node/index.js"
+    },
+    "./browser": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
+      "import": "./dist/index.browser.js",
+      "default": "./dist/index.browser.js"
+    },
+    "./package.json": "./package.json"
   },
   "publishConfig": {
     "access": "public"
@@ -20,7 +42,11 @@
   "scripts": {
     "clean": "rm -rf dist docs",
     "logos": "bun run scripts/generate-logos.ts",
-    "build": "bun run clean && bun run logos && bun build ./src/index.ts --outdir dist --target node --format esm --sourcemap --external @napi-rs/keyring && tsc -p tsconfig.build.json",
+    "build": "bun run clean && bun run logos && bun run build:browser && bun run build:node && bun run build:types && bun run build:verify",
+    "build:browser": "bun build ./src/index.ts --outdir dist --target browser --format esm --sourcemap --entry-naming index.browser.js",
+    "build:node": "bun build ./src/node/index.ts --outdir dist/node --target node --format esm --sourcemap --external @napi-rs/keyring --entry-naming index.js",
+    "build:types": "tsc -p tsconfig.build.json",
+    "build:verify": "bun run scripts/verify-browser-bundle.ts",
     "typecheck": "bun run logos && tsc --noEmit",
     "test": "bun run logos && bun test",
     "lint": "biome check .",

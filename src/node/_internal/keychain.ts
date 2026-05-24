@@ -1,5 +1,5 @@
-import { UnifiedError } from "../errors";
-import { type TokenSet, isTokenSet } from "./tokens";
+import { UnifiedError } from "../../core/errors";
+import { type TokenSet, isTokenSet } from "../../core/_internal/tokens";
 
 export interface KeychainAdapter {
   get(clientId: string): Promise<TokenSet | null>;
