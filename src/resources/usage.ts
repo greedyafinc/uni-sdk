@@ -1,10 +1,22 @@
 import type { Core, RequestOptions } from "../core/core";
 
+export interface UsagePlan {
+  id: number;
+  name: string;
+  limit: number;
+  limit_period_seconds: number;
+  monthly_price: number | null;
+  annual_price: number | null;
+}
+
 export interface UsagePeriod {
   input_tokens: number;
   output_tokens: number;
   request_count: number;
   cost: number;
+  started_at: string | null;
+  resets_at: string;
+  days_remaining: number | null;
 }
 
 export interface UsageDaily {
@@ -18,6 +30,7 @@ export interface UsageCredits {
 }
 
 export interface UsageResponse {
+  plan: UsagePlan;
   period: UsagePeriod;
   daily: UsageDaily;
   credits: UsageCredits;
