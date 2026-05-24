@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { InMemoryKeychain } from "../src/_internal/keychain";
-import type { TokenSet } from "../src/_internal/tokens";
-import { UnifiedAI, UnifiedError } from "../src/index";
+import type { TokenSet } from "../../src/core/_internal/tokens";
+import { InMemoryKeychain } from "../../src/node/_internal/keychain";
+import { UnifiedAI, UnifiedError } from "../../src/node/index";
 
 describe("UnifiedAI", () => {
   test("can be instantiated with no arguments", () => {

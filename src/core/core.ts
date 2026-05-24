@@ -1,7 +1,19 @@
 import { UnifiedError } from "./errors";
 
+export type TokenProvider = string | (() => string | Promise<string>);
+
 export interface CoreOptions {
-  token?: string;
+  /**
+   * Trusted-token mode. When set, the SDK bypasses OAuth/PKCE/handoff/keychain
+   * and uses the supplied bearer token for every request. Pass a function to
+   * have the host resolve a fresh token per request (e.g. read from an auth
+   * store). On 401, the SDK re-invokes the provider once to give the host a
+   * chance to refresh; if the retry still 401s, the call fails.
+   *
+   * Intended for first-party apps that already manage their own auth lifecycle.
+   * External integrations should leave this unset and use the OAuth flow.
+   */
+  token?: TokenProvider;
   apiUrl?: string;
   workspaceId?: string;
   appId?: string;
@@ -17,7 +29,7 @@ export interface RequestOptions {
 
 export class Core {
   protected readonly options: Readonly<Required<Omit<CoreOptions, "token">>> & {
-    token: string | undefined;
+    token: TokenProvider | undefined;
   };
 
   constructor(options: CoreOptions = {}) {

@@ -1,7 +1,7 @@
-import { parseSSE } from "../_internal/sse";
-import { UnifiedStream } from "../_internal/stream";
-import type { Core, RequestOptions } from "../core";
-import { UnifiedAIError } from "../errors";
+import { parseSSE } from "../core/_internal/sse";
+import { UnifiedStream } from "../core/_internal/stream";
+import type { Core, RequestOptions } from "../core/core";
+import { UnifiedAIError } from "../core/errors";
 
 // ── Content blocks (Anthropic Messages, mirrored from unified-api) ────────────
 

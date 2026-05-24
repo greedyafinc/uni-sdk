@@ -14,6 +14,34 @@ export interface FakeWebAuth {
     token_type_hint?: string;
   }>;
   readonly failRevoke: (status: number) => void;
+  /**
+   * Make subsequent /oauth/token refresh requests block until releaseRefresh()
+   * is called. Used by race tests that need to pin a refresh in flight while
+   * issuing a concurrent signOut.
+   */
+  readonly pauseRefresh: () => void;
+  /** Release any /oauth/token refresh requests blocked by pauseRefresh(). */
+  readonly releaseRefresh: () => void;
+  /**
+   * Make the /oauth/revoke endpoint hang indefinitely. The request body is
+   * still recorded in revokeCalls(). Used by tests that need to prove
+   * timeout-driven abandonment of revoke completes signOut.
+   */
+  readonly hangRevoke: () => void;
+  /**
+   * Resolves when at least one refresh request has reached the /oauth/token
+   * handler (i.e. the SDK has dispatched its refresh POST). Useful for
+   * deterministically sequencing race-condition tests instead of relying on
+   * microtask yields.
+   */
+  readonly waitForRefreshStarted: () => Promise<void>;
+  /**
+   * Resolves when at least one revoke request has reached the /oauth/revoke
+   * handler. Mirrors waitForRefreshStarted — use it to synchronize tests on
+   * "signOut has reached its revoke fetch", which necessarily means
+   * clearLocalSession has completed.
+   */
+  readonly waitForRevokeRequest: () => Promise<void>;
 }
 
 export interface FakeWebAuthConfig {
@@ -28,6 +56,15 @@ export async function startFakeWebAuth(config: FakeWebAuthConfig): Promise<FakeW
   let revokeRefresh = false;
   const revokeCallsLog: { token: string; client_id: string; token_type_hint?: string }[] = [];
   let revokeFailStatus = 0;
+
+  // Refresh gating for race tests. When `refreshGate` is non-null the handler
+  // awaits it before composing the response, letting a test pin a refresh in
+  // flight while it runs concurrent work (e.g. signOut).
+  let refreshGate: Promise<void> | null = null;
+  let releaseRefreshGate: (() => void) | null = null;
+  const refreshStartedWaiters: Array<() => void> = [];
+  const revokeRequestWaiters: Array<() => void> = [];
+  let revokeHang = false;
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -61,6 +98,13 @@ export async function startFakeWebAuth(config: FakeWebAuthConfig): Promise<FakeW
 
         if (body.grant_type === "refresh_token") {
           refreshCalls += 1;
+          // Notify anyone waiting for "refresh request actually hit the server".
+          while (refreshStartedWaiters.length > 0) {
+            const w = refreshStartedWaiters.shift();
+            w?.();
+          }
+          // Hold the response if the test has paused refresh.
+          if (refreshGate) await refreshGate;
           const rt = body.refresh_token;
           if (
             revokeRefresh ||
@@ -116,6 +160,21 @@ export async function startFakeWebAuth(config: FakeWebAuthConfig): Promise<FakeW
         };
         if (body.token_type_hint !== undefined) entry.token_type_hint = body.token_type_hint;
         revokeCallsLog.push(entry);
+        // Notify any test awaiting "revoke request actually hit the server".
+        while (revokeRequestWaiters.length > 0) {
+          const w = revokeRequestWaiters.shift();
+          w?.();
+        }
+        if (revokeHang) {
+          // Honor the client's AbortSignal so signOut can still complete via
+          // timeout — but never resolve on our own. This models a black-holed
+          // endpoint accurately.
+          return new Promise<Response>((_resolve, reject) => {
+            const onAbort = () => reject(new DOMException("aborted", "AbortError"));
+            if (req.signal.aborted) onAbort();
+            else req.signal.addEventListener("abort", onAbort, { once: true });
+          });
+        }
         if (revokeFailStatus) {
           return new Response("err", { status: revokeFailStatus });
         }
@@ -145,6 +204,29 @@ export async function startFakeWebAuth(config: FakeWebAuthConfig): Promise<FakeW
     failRevoke: (status: number) => {
       revokeFailStatus = status;
     },
+    pauseRefresh: () => {
+      if (refreshGate) return; // already paused
+      refreshGate = new Promise<void>((resolve) => {
+        releaseRefreshGate = resolve;
+      });
+    },
+    releaseRefresh: () => {
+      const r = releaseRefreshGate;
+      refreshGate = null;
+      releaseRefreshGate = null;
+      r?.();
+    },
+    waitForRefreshStarted: () =>
+      new Promise<void>((resolve) => {
+        refreshStartedWaiters.push(resolve);
+      }),
+    hangRevoke: () => {
+      revokeHang = true;
+    },
+    waitForRevokeRequest: () =>
+      new Promise<void>((resolve) => {
+        revokeRequestWaiters.push(resolve);
+      }),
   };
 }
 

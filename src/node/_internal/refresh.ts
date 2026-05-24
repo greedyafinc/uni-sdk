@@ -1,6 +1,6 @@
-import { UnifiedAIAuthError } from "../errors";
+import type { TokenSet } from "../../core/_internal/tokens";
+import { UnifiedAIAuthError } from "../../core/errors";
 import { postTokenGrant } from "./token-endpoint";
-import type { TokenSet } from "./tokens";
 
 export interface RefreshArgs {
   readonly tokenUrl: string;

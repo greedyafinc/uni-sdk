@@ -1,6 +1,6 @@
 import { type Server, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { UnifiedError } from "../errors";
+import { UnifiedError } from "../../core/errors";
 import type { LoopbackHandle, LoopbackServer } from "./browser-auth";
 
 export function createNodeLoopback(): LoopbackServer {

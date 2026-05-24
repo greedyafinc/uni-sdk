@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { InMemoryKeychain } from "../src/_internal/keychain";
-import { parseSSE } from "../src/_internal/sse";
-import type { TokenSet } from "../src/_internal/tokens";
-import { UnifiedAI, UnifiedAIError } from "../src/index";
+import { parseSSE } from "../../src/core/_internal/sse";
+import type { TokenSet } from "../../src/core/_internal/tokens";
+import { InMemoryKeychain } from "../../src/node/_internal/keychain";
+import { UnifiedAI, UnifiedAIError } from "../../src/node/index";
 
 const CLIENT = "app_test";
 const USER = "user_test";

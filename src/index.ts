@@ -1,88 +1,41 @@
-import { UnifiedAI } from "./client";
+// Browser-safe entry. Pulls zero `node:*` modules — safe for Vite, Webpack,
+// Rollup, esbuild, Workers, Deno, and any browser bundler.
+//
+// For OAuth flows (PKCE + keychain + handoff + loopback), import from
+// "@unifiedai/sdk/node" instead.
 
-export { UnifiedAI, type UnifiedAIOptions } from "./client";
+export { UnifiedAI } from "./core/client";
+export type { UnifiedAIOptions } from "./core/client";
 export {
-  UnifiedAIAuthError,
-  type UnifiedAIAuthErrorCode,
-  UnifiedAIError,
-  type UnifiedAIHttpErrorCode,
+  extractServerMessage,
+  formatBody,
+  httpErrorMessage,
+} from "./core/_internal/http-errors";
+
+export { Core } from "./core/core";
+export type { CoreOptions, RequestOptions, TokenProvider } from "./core/core";
+
+export {
   UnifiedError,
-  type UnifiedErrorCode,
-} from "./errors";
+  UnifiedAIError,
+  UnifiedAIAuthError,
+  httpErrorCodeFromStatus,
+} from "./core/errors";
 export type {
-  ListModelsOptions,
-  ListModelsResponse,
-  Model,
-  ModelAuthor,
-  ModelType,
-} from "./resources/models";
-export type {
-  GetUsageOptions,
-  UsageCredits,
-  UsageDaily,
-  UsagePeriod,
-  UsageResponse,
-} from "./resources/usage";
-export type {
-  ChatCompletionAssistantMessage,
-  ChatCompletionChoice,
-  ChatCompletionCreateParams,
-  ChatCompletionMessage,
-  ChatCompletionResponse,
-  ChatCompletionResponseFormat,
-  ChatCompletionSystemMessage,
-  ChatCompletionToolCall,
-  ChatCompletionToolChoice,
-  ChatCompletionToolDefinition,
-  ChatCompletionToolMessage,
-  ChatCompletionUsage,
-  ChatCompletionUserContentPart,
-  ChatCompletionUserMessage,
-  ChatCompletionChunk,
-  ChatCompletionChunkChoice,
-  ChatCompletionStream,
-  ChatCreateOptions,
-} from "./resources/chat";
-export type {
-  ResponseCreateOptions,
-  ResponseCreateParams,
-  ResponseInputContentPart,
-  ResponseInputItem,
-  ResponseObject,
-  ResponseStream,
-  ResponseStreamEvent,
-  ResponseTool,
-  ResponseToolChoice,
-} from "./resources/responses";
-export type {
-  AnthropicContentBlock,
-  AnthropicImageBlock,
-  AnthropicMessage,
-  AnthropicMessageResponse,
-  AnthropicTextBlock,
-  AnthropicToolChoice,
-  AnthropicToolDefinition,
-  MessageCreateOptions,
-  MessageCreateParams,
-  MessageStream,
-  MessageStreamEvent,
-} from "./resources/messages";
-export { UnifiedStream } from "./_internal/stream";
-export {
-  getProviderLogo,
-  listProviderLogos,
-  type LogoTheme,
-  type ProviderLogoInput,
-} from "./resources/logos";
-export type { RequestOptions } from "./core";
-export type { Identity } from "./identity";
-export type {
-  LoopbackHandle,
-  LoopbackServer,
-  OpenUrl,
-} from "./_internal/browser-auth";
-export type { DiscoveryReader, DiscoveryRecord } from "./_internal/discovery";
-export type { Env, EnvReader } from "./_internal/env";
-export type { KeychainAdapter } from "./_internal/keychain";
+  UnifiedErrorCode,
+  UnifiedAIAuthErrorCode,
+  UnifiedAIHttpErrorCode,
+} from "./core/errors";
 
-export default UnifiedAI;
+export type { Identity } from "./core/identity";
+
+export { UnifiedStream } from "./core/_internal/stream";
+export { parseSSE } from "./core/_internal/sse";
+
+// Resource modules — all browser-safe.
+export * from "./resources/chat";
+export * from "./resources/messages";
+export * from "./resources/models";
+export * from "./resources/responses";
+export * from "./resources/usage";
+export * from "./resources/logos";

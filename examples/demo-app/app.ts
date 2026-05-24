@@ -5,7 +5,7 @@
 
 import { spawn } from "node:child_process";
 import { platform } from "node:os";
-import { UnifiedError } from "../../src/index";
+import { UnifiedError } from "../../src/node/index";
 import {
   chatCompletion,
   chatCompletionStream,

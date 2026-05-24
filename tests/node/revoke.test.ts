@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { InMemoryKeychain } from "../src/_internal/keychain";
-import { UnifiedAI, UnifiedAIAuthError } from "../src/index";
-import { startFakeApi } from "./fake-api";
-import { startFakeWebAuth } from "./fake-web-auth";
+import { InMemoryKeychain } from "../../src/node/_internal/keychain";
+import { UnifiedAI, UnifiedAIAuthError } from "../../src/node/index";
+import { startFakeApi } from "../fake-api";
+import { startFakeWebAuth } from "../fake-web-auth";
 
 const CLIENT = "app_test";
 const USER = "user_test";
