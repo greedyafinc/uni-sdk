@@ -188,8 +188,8 @@ describe("transport refresh-on-401", () => {
       // Exactly one revoke call, targeting the ORIGINAL refresh_token —
       // never a freshly-rotated one issued by an in-flight refresh.
       expect(revokes.length).toBe(1);
-      expect(revokes[0].token).toBe(original.refresh_token);
-      expect(revokes[0].client_id).toBe(original.client_id);
+      expect(revokes[0]?.token).toBe(original.refresh_token);
+      expect(revokes[0]?.client_id).toBe(original.client_id);
 
       expect(await h.keychain.get(CLIENT)).toBeNull();
       expect(h.web.refreshCallCount()).toBe(1);
@@ -375,7 +375,7 @@ describe("transport refresh-on-401", () => {
       // around clearLocalSession this assertion would fail (revoke skipped).
       const revokes = web.revokeCalls();
       expect(revokes.length).toBe(1);
-      expect(revokes[0].token).toBe(original.refresh_token);
+      expect(revokes[0]?.token).toBe(original.refresh_token);
     } finally {
       await api.stop();
       await web.stop();

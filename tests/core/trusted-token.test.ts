@@ -29,10 +29,10 @@ describe("browser UnifiedAI (trusted-token mode)", () => {
   test("token provider can be a string or async function", async () => {
     let calls = 0;
     const captured: Request[] = [];
-    const fakeFetch: typeof fetch = async (input, init) => {
+    const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       captured.push(new Request(input as string, init));
       return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
-    };
+    }) as unknown as typeof fetch;
 
     const sdk = new UnifiedAI({
       apiUrl: "https://example.test",
@@ -47,18 +47,18 @@ describe("browser UnifiedAI (trusted-token mode)", () => {
     await sdk.usage.get();
 
     expect(calls).toBe(2);
-    const auth1 = captured[0].headers.get("authorization");
-    const auth2 = captured[1].headers.get("authorization");
+    const auth1 = captured[0]?.headers.get("authorization");
+    const auth2 = captured[1]?.headers.get("authorization");
     expect(auth1).toBe("Bearer dynamic-token-1");
     expect(auth2).toBe("Bearer dynamic-token-2");
   });
 
   test("empty token string omits the Authorization header", async () => {
     let captured: Request | undefined;
-    const fakeFetch: typeof fetch = async (input, init) => {
+    const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       captured = new Request(input as string, init);
       return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
-    };
+    }) as unknown as typeof fetch;
 
     const sdk = new UnifiedAI({
       apiUrl: "https://example.test",
@@ -90,13 +90,13 @@ describe("browser UnifiedAI (trusted-token mode)", () => {
       releaseRefresh = resolve;
     });
 
-    const fakeFetch: typeof fetch = async (input, init) => {
+    const fakeFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const auth = (init?.headers as Record<string, string> | undefined)?.authorization ?? "";
       if (auth.endsWith(STALE)) return new Response("", { status: 401 });
       if (auth.endsWith(FRESH))
         return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
       throw new Error(`unexpected auth header: ${auth}`);
-    };
+    }) as unknown as typeof fetch;
 
     const sdk = new UnifiedAI({
       apiUrl: "https://example.test",
