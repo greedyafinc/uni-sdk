@@ -61,6 +61,7 @@
     "@biomejs/biome": "^1.9.0",
     "@changesets/cli": "^2.27.0",
     "@types/bun": "latest",
+    "@types/node": "^20",
     "typedoc": "^0.26.0",
     "typescript": "^5.5.0"
   },

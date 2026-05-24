@@ -7,7 +7,7 @@
     "moduleDetection": "force",
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
-    "types": ["bun"],
+    "types": ["bun", "node"],
     "noEmit": true,
 
     "strict": true,
