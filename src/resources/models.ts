@@ -9,11 +9,14 @@ export interface ModelAuthor {
 
 export interface Model {
   id: string;
+  name: string;
   type: ModelType;
   object: "model";
   created?: number;
   owned_by: string;
-  model_author?: ModelAuthor;
+  image_inp?: boolean;
+  logo: string | null;
+  model_author: ModelAuthor;
 }
 
 export interface ListModelsResponse {
