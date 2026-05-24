@@ -17,6 +17,7 @@ export interface Model {
   image_inp?: boolean;
   logo: string | null;
   model_author: ModelAuthor;
+  is_custom?: boolean;
 }
 
 export interface ListModelsResponse {
