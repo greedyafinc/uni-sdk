@@ -1,6 +1,6 @@
-import type { UnifiedError } from "../../core/errors";
 import { drainResponse } from "../../core/_internal/http-errors";
 import { type TokenSet, isTokenSet } from "../../core/_internal/tokens";
+import type { UnifiedError } from "../../core/errors";
 
 export interface PostTokenGrantArgs {
   readonly tokenUrl: string;

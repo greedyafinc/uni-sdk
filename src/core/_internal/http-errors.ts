@@ -60,9 +60,7 @@ export function extractServerMessage(body: unknown): string | undefined {
   const errors = obj.errors;
   if (Array.isArray(errors) && errors.length > 0) {
     const msgs = errors
-      .map((e) =>
-        e && typeof e === "object" ? (e as Record<string, unknown>).message : undefined,
-      )
+      .map((e) => (e && typeof e === "object" ? (e as Record<string, unknown>).message : undefined))
       .filter((m): m is string => typeof m === "string" && m.length > 0);
     if (msgs.length > 0) return clip(msgs.join("; "));
   }

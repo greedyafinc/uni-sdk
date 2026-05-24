@@ -1,4 +1,5 @@
-import { UnifiedAI as BaseUnifiedAI, type UnifiedAIOptions as BaseOptions } from "../core/client";
+import type { TokenSet } from "../core/_internal/tokens";
+import { type UnifiedAIOptions as BaseOptions, UnifiedAI as BaseUnifiedAI } from "../core/client";
 import { UnifiedAIAuthError, UnifiedError } from "../core/errors";
 import type { Identity } from "../core/identity";
 import { type LoopbackServer, type OpenUrl, runBrowserPkce } from "./_internal/browser-auth";
@@ -10,7 +11,6 @@ import { createNodeLoopback } from "./_internal/loopback";
 import { defaultOpenUrl } from "./_internal/open-url";
 import { refreshTokens } from "./_internal/refresh";
 import { deriveRevokeUrl, revokeToken } from "./_internal/revoke";
-import type { TokenSet } from "../core/_internal/tokens";
 
 const DEFAULT_AUTHORIZE_URL = "https://web.unifiedai.app/oauth/authorize";
 const DEFAULT_TOKEN_URL = "https://api.unifiedai.app/oauth/token";

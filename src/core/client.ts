@@ -1,17 +1,22 @@
-import { Core, type CoreOptions, type RequestOptions } from "./core";
-import { UnifiedAIAuthError, UnifiedAIError, UnifiedError, httpErrorCodeFromStatus } from "./errors";
-import type { Identity } from "./identity";
+import { Chat } from "../resources/chat";
+import { Messages } from "../resources/messages";
+import { Models } from "../resources/models";
+import { Responses } from "../resources/responses";
+import { Usage } from "../resources/usage";
 import {
   drainResponse,
   formatBody,
   httpErrorMessage,
   readErrorBody,
 } from "./_internal/http-errors";
-import { Chat } from "../resources/chat";
-import { Messages } from "../resources/messages";
-import { Models } from "../resources/models";
-import { Responses } from "../resources/responses";
-import { Usage } from "../resources/usage";
+import { Core, type CoreOptions, type RequestOptions } from "./core";
+import {
+  UnifiedAIAuthError,
+  UnifiedAIError,
+  UnifiedError,
+  httpErrorCodeFromStatus,
+} from "./errors";
+import type { Identity } from "./identity";
 
 const DEFAULT_API_URL = "https://api.unifiedai.app";
 
@@ -282,4 +287,3 @@ export class UnifiedAI extends Core {
     return h;
   }
 }
-
