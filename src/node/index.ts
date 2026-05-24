@@ -28,6 +28,7 @@ export type { Identity } from "../core/identity";
 
 // Stream + SSE.
 export { UnifiedStream } from "../core/_internal/stream";
+export type { StreamUsage, StreamUsageExtractor } from "../core/_internal/stream";
 export { parseSSE } from "../core/_internal/sse";
 
 // Error helpers.

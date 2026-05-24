@@ -269,6 +269,73 @@ describe("LLM streaming", () => {
     expect(count).toBeLessThan(50);
   });
 
+  test("responses stream exposes per-call usage on stream.usage after completion", async () => {
+    api.setFrames([
+      `event: response.created\ndata: ${JSON.stringify({ response: { id: "r1" } })}\n\n`,
+      `event: response.output_text.delta\ndata: ${JSON.stringify({
+        output_index: 0,
+        content_index: 0,
+        delta: "yo",
+      })}\n\n`,
+      `event: response.completed\ndata: ${JSON.stringify({
+        response: {
+          id: "r1",
+          object: "response",
+          created_at: 1,
+          model: "m",
+          output: [],
+          usage: { input_tokens: 7, output_tokens: 13, total_tokens: 20 },
+          status: "completed",
+        },
+      })}\n\n`,
+    ]);
+    const stream = sdk.responses.create({ model: "auto", input: "hi", stream: true });
+    expect(stream.usage).toBeNull();
+    for await (const _ of stream) {
+      // drain
+    }
+    expect(stream.usage).not.toBeNull();
+    expect(stream.usage?.input_tokens).toBe(7);
+    expect(stream.usage?.output_tokens).toBe(13);
+    expect(stream.usage?.total_tokens).toBe(20);
+    expect(stream.usage?.elapsed_ms).toBeGreaterThanOrEqual(0);
+    expect(stream.usage?.tokens_per_second).toBeGreaterThanOrEqual(0);
+  });
+
+  test("chat.completions stream exposes per-call usage from final usage chunk", async () => {
+    api.setFrames([
+      `data: ${JSON.stringify({
+        id: "x",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "m",
+        choices: [{ index: 0, delta: { content: "hi" }, finish_reason: null }],
+      })}\n\n`,
+      `data: ${JSON.stringify({
+        id: "x",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "m",
+        choices: [],
+        usage: { prompt_tokens: 4, completion_tokens: 9, total_tokens: 13 },
+      })}\n\n`,
+      "data: [DONE]\n\n",
+    ]);
+    const stream = sdk.chat.completions.create({
+      model: "auto",
+      messages: [{ role: "user", content: "hi" }],
+      stream: true,
+      stream_options: { include_usage: true },
+    });
+    for await (const _ of stream) {
+      // drain
+    }
+    expect(stream.usage?.input_tokens).toBe(4);
+    expect(stream.usage?.output_tokens).toBe(9);
+    expect(stream.usage?.total_tokens).toBe(13);
+    expect(stream.usage?.elapsed_ms).toBeGreaterThanOrEqual(0);
+  });
+
   test("non-2xx surfaces UnifiedAIError before iteration", async () => {
     api.setFrames([], { status: 400 });
     let caught: unknown;

@@ -224,7 +224,15 @@ export class ChatCompletions {
         yield parsed as ChatCompletionChunk;
       }
     })();
-    return new UnifiedStream(iter, controller);
+    return new UnifiedStream(iter, controller, (chunk) => {
+      const u = chunk.usage;
+      if (!u) return null;
+      return {
+        input_tokens: u.prompt_tokens ?? 0,
+        output_tokens: u.completion_tokens ?? 0,
+        total_tokens: u.total_tokens ?? (u.prompt_tokens ?? 0) + (u.completion_tokens ?? 0),
+      };
+    });
   }
 }
 

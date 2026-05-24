@@ -224,6 +224,15 @@ export class Responses {
         if (type === "response.completed") return;
       }
     })();
-    return new UnifiedStream(iter, controller);
+    return new UnifiedStream(iter, controller, (ev) => {
+      if (ev.type !== "response.completed") return null;
+      const u = (ev as { response?: { usage?: ResponseObject["usage"] } }).response?.usage;
+      if (!u) return null;
+      return {
+        input_tokens: u.input_tokens ?? 0,
+        output_tokens: u.output_tokens ?? 0,
+        total_tokens: u.total_tokens ?? (u.input_tokens ?? 0) + (u.output_tokens ?? 0),
+      };
+    });
   }
 }
