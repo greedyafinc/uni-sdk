@@ -55,12 +55,44 @@ describe("buildHttpError", () => {
     const body = { message: "Usage limit exceeded. Window cost: $1.2345 / $5.00" };
     const e = buildHttpError("msg", 429, body);
     expect(e).toBeInstanceOf(UsageLimitError);
-    expect(e).toBeInstanceOf(RateLimitError === undefined ? Object : UnifiedAIError);
+    // Sibling, not subclass — generic retry wrappers that catch only
+    // RateLimitError must not pick up quota-exhaustion errors.
+    expect(e).not.toBeInstanceOf(RateLimitError);
+    expect(e).toBeInstanceOf(UnifiedAIError);
     const u = e as UsageLimitError;
     expect(u.code).toBe("usage_limit_exceeded");
     expect(u.isUsageLimit).toBe(true);
     expect(u.periodCost).toBeCloseTo(1.2345, 4);
     expect(u.limit).toBeCloseTo(5.0, 2);
+  });
+
+  test("regex anchored on 'Window cost:' — leading $X/$Y pair is ignored", () => {
+    const body = {
+      message: "Usage limit exceeded. Plan tier $5 / $20. Window cost: $0.50 / $1.00",
+    };
+    const e = buildHttpError("msg", 429, body) as UsageLimitError;
+    expect(e).toBeInstanceOf(UsageLimitError);
+    expect(e.periodCost).toBeCloseTo(0.5, 2);
+    expect(e.limit).toBeCloseTo(1.0, 2);
+  });
+
+  test("429 with bare `limit` field stays a RateLimitError (not UsageLimitError)", () => {
+    // Future rate-limit body shape — `limit` as requests-per-window. Must
+    // not get mis-classified as quota exhaustion.
+    const body = { error: "rate_limited", limit: 60, window: "1m" };
+    const e = buildHttpError("msg", 429, body, { "retry-after": "5" });
+    expect(e).toBeInstanceOf(RateLimitError);
+    expect(e).not.toBeInstanceOf(UsageLimitError);
+    expect((e as RateLimitError).retryAfter).toBe(5);
+  });
+
+  test("usage-limit-ish phrase in throttle message stays RateLimitError", () => {
+    // The `/^usage limit exceeded/i` check is anchored to the start of
+    // the string so unrelated mentions don't misroute.
+    const body = { error: "rate_limited", message: "temporary usage limit on this endpoint" };
+    const e = buildHttpError("msg", 429, body);
+    expect(e).toBeInstanceOf(RateLimitError);
+    expect(e).not.toBeInstanceOf(UsageLimitError);
   });
 
   test("429 usage limit honors structured fields if present", () => {
@@ -104,21 +136,35 @@ describe("buildHttpError", () => {
 });
 
 describe("fetch path throws typed errors", () => {
-  test("401 from request() throws AuthenticationError (after refresh retry)", async () => {
+  test("persistent 401 surfaces as AuthenticationError (UnifiedAIAuthError is a subclass)", async () => {
     let call = 0;
     const fakeFetch = (async () => {
       call++;
-      return new Response(JSON.stringify({ message: "invalid key" }), { status: 401 });
+      return new Response(JSON.stringify({ message: "invalid key" }), {
+        status: 401,
+        headers: { "x-request-id": "req_401" },
+      });
     }) as unknown as typeof fetch;
     const sdk = new UnifiedAI({
       apiUrl: "https://example.test",
       fetch: fakeFetch,
       token: "abc",
     });
-    // The browser client's 401 path retries once with a fresh token before
-    // surfacing `UnifiedAIAuthError` for the still-401 case. So a persistent
-    // 401 here surfaces as the auth-retry error, not AuthenticationError.
-    await expect(sdk.usage.get()).rejects.toMatchObject({ status: 401 });
+    // The client retries once with a fresh token before surfacing the
+    // failure. Whether the underlying class name is UnifiedAIAuthError
+    // (still-401 after refresh) or AuthenticationError (initial 401 with
+    // no refresh available), consumers branching on instanceof
+    // AuthenticationError must catch both — UnifiedAIAuthError extends
+    // AuthenticationError for that reason.
+    try {
+      await sdk.usage.get();
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthenticationError);
+      expect(err).toBeInstanceOf(UnifiedAIError);
+      expect((err as AuthenticationError).status).toBe(401);
+      expect((err as AuthenticationError).requestId).toBe("req_401");
+    }
     expect(call).toBe(2);
   });
 

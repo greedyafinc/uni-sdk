@@ -25,16 +25,6 @@ export class UnifiedError extends Error {
 
 export type UnifiedAIAuthErrorCode = "auth_refresh_failed" | "auth_retry_still_unauthorized";
 
-export class UnifiedAIAuthError extends UnifiedError {
-  readonly body: unknown;
-
-  constructor(code: UnifiedAIAuthErrorCode, message: string, status?: number, body?: unknown) {
-    super(code, message, status);
-    this.name = "UnifiedAIAuthError";
-    this.body = body;
-  }
-}
-
 export type UnifiedAIHttpErrorCode =
   | "bad_request"
   | "unauthorized"
@@ -57,7 +47,7 @@ export class UnifiedAIError extends UnifiedError {
   readonly requestId: string | undefined;
 
   constructor(
-    code: UnifiedAIHttpErrorCode,
+    code: UnifiedAIHttpErrorCode | UnifiedAIAuthErrorCode,
     message: string,
     status: number,
     body: unknown,
@@ -89,9 +79,31 @@ export class AuthenticationError extends UnifiedAIError {
     status: number,
     body: unknown,
     headers?: Readonly<Record<string, string>>,
+    code: UnifiedAIHttpErrorCode | UnifiedAIAuthErrorCode = "unauthorized",
   ) {
-    super("unauthorized", message, status, body, headers);
+    super(code, message, status, body, headers);
     this.name = "AuthenticationError";
+  }
+}
+
+/**
+ * Subclass of `AuthenticationError` used when the SDK's automatic refresh
+ * flow fails (refresh-token exchange errored, or a retried request still
+ * returned 401). Subclassing `AuthenticationError` means user code that
+ * branches on `instanceof AuthenticationError` catches both the initial
+ * 401 and the refresh-failure case, and headers/requestId from the failing
+ * response are surfaced for support correlation.
+ */
+export class UnifiedAIAuthError extends AuthenticationError {
+  constructor(
+    code: UnifiedAIAuthErrorCode,
+    message: string,
+    status?: number,
+    body?: unknown,
+    headers?: Readonly<Record<string, string>>,
+  ) {
+    super(message, status ?? 401, body, headers, code);
+    this.name = "UnifiedAIAuthError";
   }
 }
 
@@ -121,9 +133,17 @@ function parseRetryAfter(
 }
 
 /**
- * Generic rate limiting: too many requests in a window. Distinct from
- * `UsageLimitError`, which signals quota exhaustion for the billing period.
- * Honor `retryAfter` (seconds) to back off.
+ * Generic rate limiting: too many requests in a window. Honor `retryAfter`
+ * (seconds) to back off.
+ *
+ * Sibling — NOT parent — of `UsageLimitError`. A 429 from plan-quota
+ * exhaustion throws `UsageLimitError`, not `RateLimitError`, so a generic
+ * retry wrapper that only checks `instanceof RateLimitError` will miss
+ * quota errors (which is correct: retrying won't help). Catch both
+ * explicitly when you want to surface 429s uniformly. Order matters if
+ * you use `else if` chains — `UsageLimitError` does NOT pass an
+ * `instanceof RateLimitError` check, but check the more specific class
+ * first regardless to stay future-proof.
  */
 export class RateLimitError extends UnifiedAIError {
   readonly retryAfter: number | undefined;
@@ -197,7 +217,13 @@ function parseUsageFields(body: unknown): {
     if (typeof obj.reset_at === "string") resetAt = obj.reset_at;
     const msg = typeof obj.message === "string" ? obj.message : undefined;
     if (msg && (periodCost === undefined || limit === undefined)) {
-      const m = msg.match(/\$([0-9]+(?:\.[0-9]+)?)\s*\/\s*\$([0-9]+(?:\.[0-9]+)?)/);
+      // Anchored to the "Window cost: $X / $Y" phrasing that unified-api
+      // emits today (src/lib/auth.ts → enforceUsageLimit). Unanchored
+      // matching would mis-extract from any prior "$X / $Y" substring in
+      // a future message wording.
+      const m = msg.match(
+        /Window\s+cost:\s*\$([0-9]+(?:\.[0-9]+)?)\s*\/\s*\$([0-9]+(?:\.[0-9]+)?)/i,
+      );
       if (m) {
         if (periodCost === undefined) periodCost = Number(m[1]);
         if (limit === undefined) limit = Number(m[2]);
@@ -212,13 +238,25 @@ function parseUsageFields(body: unknown): {
  * `apiKeyAuthPlugin` emits `{message: "Usage limit exceeded..."}` for
  * billing-window exhaustion; its in-memory rate limiter emits
  * `{error: "rate_limited"}` for transient throttling.
+ *
+ * Match conditions are intentionally narrow to avoid false positives:
+ *   - explicit `code: "usage_limit_exceeded"`, OR
+ *   - `period_cost` AND `limit` both present (the structured shape we'd
+ *     prefer unified-api to migrate to), OR
+ *   - `message` starting with "Usage limit exceeded" (current shape).
+ *
+ * NB: a single `limit` field alone is NOT enough — a future rate-limit
+ * response may include `{error: "rate_limited", limit: 60}` (requests
+ * per window), and that should stay a `RateLimitError`.
  */
 function isUsageLimitBody(body: unknown): boolean {
   if (!body || typeof body !== "object") return false;
   const obj = body as Record<string, unknown>;
-  if (typeof obj.message === "string" && /usage limit/i.test(obj.message)) return true;
   if (obj.code === "usage_limit_exceeded") return true;
-  if (typeof obj.period_cost === "number" || typeof obj.limit === "number") return true;
+  if (typeof obj.period_cost === "number" && typeof obj.limit === "number") return true;
+  if (typeof obj.message === "string" && /^\s*usage limit exceeded\b/i.test(obj.message)) {
+    return true;
+  }
   return false;
 }
 

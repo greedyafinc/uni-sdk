@@ -134,6 +134,7 @@ export class UnifiedAI extends Core {
           `request still 401 after refresh: ${formatBody(body)}`,
           401,
           body,
+          headersToRecord(res.headers),
         );
       }
     }
@@ -189,6 +190,7 @@ export class UnifiedAI extends Core {
           `stream still 401 after refresh: ${formatBody(body)}`,
           401,
           body,
+          headersToRecord(res.headers),
         );
       }
     }
@@ -208,6 +210,7 @@ export class UnifiedAI extends Core {
         `stream to ${path} returned no body`,
         res.status,
         undefined,
+        headersToRecord(res.headers),
       );
     }
     // Defence in depth: a 2xx with a non-SSE content-type (e.g. an endpoint that
@@ -221,6 +224,7 @@ export class UnifiedAI extends Core {
         `stream to ${path} expected text/event-stream, got ${ct || "<none>"}`,
         res.status,
         body,
+        headersToRecord(res.headers),
       );
     }
     return res.body;

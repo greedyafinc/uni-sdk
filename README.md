@@ -135,10 +135,14 @@ working for catch-all handlers.
 | `UsageLimitError`      | 429    | `periodCost`, `limit`, `resetAt`, `isUsageLimit` |
 | `ServerError`          | 5xx    | —                                           |
 | `UnifiedAIError`       | other  | base — has `code`, `status`, `body`, `headers`, `requestId` |
+| `UnifiedAIAuthError`   | 401    | refresh-token failures; extends `AuthenticationError` |
 
 `RateLimitError` covers transient throttling (e.g. too many requests in a
 short window — wait and retry). `UsageLimitError` signals plan-quota
-exhaustion for the billing period; retrying won't help.
+exhaustion for the billing period; retrying won't help. They are
+**siblings**, not parent/child — `UsageLimitError` does *not* pass an
+`instanceof RateLimitError` check, so a generic retry wrapper must catch
+both explicitly. Always check the more specific class first.
 
 ```ts
 import {
