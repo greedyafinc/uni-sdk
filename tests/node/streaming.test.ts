@@ -236,6 +236,153 @@ describe("LLM streaming", () => {
     expect(types).toEqual(["message_start", "content_block_delta", "message_stop"]);
   });
 
+  test("messages stream finalMessage() aggregates text + tool_use blocks", async () => {
+    api.setFrames([
+      `event: message_start\ndata: ${JSON.stringify({
+        message: {
+          id: "m1",
+          type: "message",
+          role: "assistant",
+          model: "claude",
+          content: [],
+          stop_reason: null,
+          usage: { input_tokens: 5, output_tokens: 0 },
+        },
+      })}\n\n`,
+      `event: content_block_start\ndata: ${JSON.stringify({
+        index: 0,
+        content_block: { type: "text", text: "" },
+      })}\n\n`,
+      `event: content_block_delta\ndata: ${JSON.stringify({
+        index: 0,
+        delta: { type: "text_delta", text: "hel" },
+      })}\n\n`,
+      `event: content_block_delta\ndata: ${JSON.stringify({
+        index: 0,
+        delta: { type: "text_delta", text: "lo" },
+      })}\n\n`,
+      `event: content_block_stop\ndata: ${JSON.stringify({ index: 0 })}\n\n`,
+      `event: content_block_start\ndata: ${JSON.stringify({
+        index: 1,
+        content_block: { type: "tool_use", id: "tu_1", name: "get_weather", input: {} },
+      })}\n\n`,
+      `event: content_block_delta\ndata: ${JSON.stringify({
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: '{"city":' },
+      })}\n\n`,
+      `event: content_block_delta\ndata: ${JSON.stringify({
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: '"sf"}' },
+      })}\n\n`,
+      `event: content_block_stop\ndata: ${JSON.stringify({ index: 1 })}\n\n`,
+      `event: message_delta\ndata: ${JSON.stringify({
+        delta: { stop_reason: "tool_use" },
+        usage: { output_tokens: 23 },
+      })}\n\n`,
+      `event: message_stop\ndata: ${JSON.stringify({})}\n\n`,
+    ]);
+    const stream = sdk.messages.create({
+      model: "auto",
+      max_tokens: 64,
+      messages: [{ role: "user", content: "weather?" }],
+      stream: true,
+    });
+    const final = await stream.finalMessage();
+    expect(final.id).toBe("m1");
+    expect(final.role).toBe("assistant");
+    expect(final.model).toBe("claude");
+    expect(final.stop_reason).toBe("tool_use");
+    expect(final.usage).toEqual({ input_tokens: 5, output_tokens: 23 });
+    expect(final.content).toEqual([
+      { type: "text", text: "hello" },
+      { type: "tool_use", id: "tu_1", name: "get_weather", input: { city: "sf" } },
+    ]);
+  });
+
+  test("messages stream surfaces mid-stream `error` event as UnifiedAIError", async () => {
+    api.setFrames([
+      `event: message_start\ndata: ${JSON.stringify({
+        message: {
+          id: "m1",
+          type: "message",
+          role: "assistant",
+          model: "m",
+          content: [],
+          stop_reason: null,
+          usage: { input_tokens: 1, output_tokens: 0 },
+        },
+      })}\n\n`,
+      `event: error\ndata: ${JSON.stringify({
+        type: "error",
+        error: { type: "overloaded_error", message: "upstream overloaded" },
+      })}\n\n`,
+    ]);
+    const stream = sdk.messages.create({
+      model: "auto",
+      max_tokens: 64,
+      messages: [{ role: "user", content: "hi" }],
+      stream: true,
+    });
+    let caught: unknown;
+    try {
+      for await (const _ of stream) {
+        // drain until error
+      }
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(UnifiedAIError);
+    expect((caught as UnifiedAIError).message).toContain("upstream overloaded");
+  });
+
+  test("messages stream .abort() closes the underlying fetch", async () => {
+    api.setFrames(
+      [
+        `event: message_start\ndata: ${JSON.stringify({
+          message: {
+            id: "m1",
+            type: "message",
+            role: "assistant",
+            model: "m",
+            content: [],
+            stop_reason: null,
+            usage: { input_tokens: 1, output_tokens: 0 },
+          },
+        })}\n\n`,
+        ...Array.from(
+          { length: 50 },
+          (_, i) =>
+            `event: content_block_delta\ndata: ${JSON.stringify({
+              index: 0,
+              delta: { type: "text_delta", text: `${i}` },
+            })}\n\n`,
+        ),
+      ],
+      { delayMs: 20 },
+    );
+    const before = api.aborted();
+    const stream = sdk.messages.create({
+      model: "auto",
+      max_tokens: 64,
+      messages: [{ role: "user", content: "hi" }],
+      stream: true,
+    });
+    let count = 0;
+    try {
+      for await (const _ of stream) {
+        count++;
+        if (count === 2) stream.abort();
+      }
+    } catch {
+      // abort surfaces as AbortError; ignore
+    }
+    expect(count).toBeGreaterThanOrEqual(1);
+    expect(count).toBeLessThan(50);
+    // Give the server's cancel handler a tick to record the abort.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(api.aborted()).toBeGreaterThan(before);
+  });
+
   test(".abort() stops the stream mid-flight", async () => {
     api.setFrames(
       Array.from(

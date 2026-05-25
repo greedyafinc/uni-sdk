@@ -111,7 +111,110 @@ export type MessageStreamEvent =
   | { type: "ping" }
   | { type: "error"; error: { type: string; message: string } };
 
-export type MessageStream = UnifiedStream<MessageStreamEvent>;
+// Parity with the Anthropic SDK's `.stream()` helper: callers who don't want to
+// walk events can `await stream.finalMessage()` to drain and get the assembled
+// response. Internally drains the same async iterator the consumer would walk.
+export class MessageStream extends UnifiedStream<MessageStreamEvent> {
+  private finalPromise: Promise<AnthropicMessageResponse> | null = null;
+
+  finalMessage(): Promise<AnthropicMessageResponse> {
+    if (!this.finalPromise) this.finalPromise = aggregateFinalMessage(this);
+    return this.finalPromise;
+  }
+}
+
+async function aggregateFinalMessage(
+  stream: AsyncIterable<MessageStreamEvent>,
+): Promise<AnthropicMessageResponse> {
+  let message: AnthropicMessageResponse | null = null;
+  const partialJson: Record<number, string> = {};
+  for await (const ev of stream) {
+    switch (ev.type) {
+      case "message_start": {
+        const m = ev.message;
+        message = {
+          id: m.id,
+          type: "message",
+          role: m.role,
+          model: m.model,
+          content: [],
+          stop_reason: m.stop_reason ?? null,
+          stop_sequence: m.stop_sequence ?? null,
+          usage: {
+            input_tokens: m.usage?.input_tokens ?? 0,
+            output_tokens: m.usage?.output_tokens ?? 0,
+          },
+        };
+        break;
+      }
+      case "content_block_start": {
+        if (!message) break;
+        // Clone the seed block so subsequent deltas mutate our copy, not the event.
+        const block = JSON.parse(JSON.stringify(ev.content_block)) as AnthropicContentBlock;
+        if (block.type === "tool_use") {
+          block.input = block.input ?? {};
+          partialJson[ev.index] = "";
+        }
+        message.content[ev.index] = block;
+        break;
+      }
+      case "content_block_delta": {
+        if (!message) break;
+        const block = message.content[ev.index];
+        if (!block) break;
+        const d = ev.delta;
+        if (d.type === "text_delta" && block.type === "text") {
+          block.text += d.text;
+        } else if (d.type === "input_json_delta" && block.type === "tool_use") {
+          partialJson[ev.index] = (partialJson[ev.index] ?? "") + d.partial_json;
+        } else if (d.type === "thinking_delta" && block.type === "thinking") {
+          block.thinking += d.thinking;
+        } else if (d.type === "signature_delta" && block.type === "thinking") {
+          block.signature = d.signature;
+        }
+        break;
+      }
+      case "content_block_stop": {
+        if (!message) break;
+        const block = message.content[ev.index];
+        if (block?.type === "tool_use") {
+          const raw = partialJson[ev.index];
+          if (raw && raw.length > 0) {
+            try {
+              block.input = JSON.parse(raw);
+            } catch {
+              // Leave the seeded input as-is on malformed JSON.
+            }
+          }
+          delete partialJson[ev.index];
+        }
+        break;
+      }
+      case "message_delta": {
+        if (!message) break;
+        if (ev.delta.stop_reason !== undefined) message.stop_reason = ev.delta.stop_reason;
+        if (ev.delta.stop_sequence !== undefined) message.stop_sequence = ev.delta.stop_sequence;
+        if (ev.usage?.output_tokens !== undefined) {
+          message.usage.output_tokens = ev.usage.output_tokens;
+        }
+        break;
+      }
+      case "message_stop":
+      case "ping":
+      case "error":
+        break;
+    }
+  }
+  if (!message) {
+    throw new UnifiedAIError(
+      "request_failed",
+      "messages stream ended before message_start",
+      0,
+      null,
+    );
+  }
+  return message;
+}
 
 export class Messages {
   constructor(private readonly client: Core) {}
@@ -178,7 +281,7 @@ export class Messages {
     // final output_tokens on `message_delta`. Hold input across events and emit
     // the combined usage once both are seen.
     let inputTokens = 0;
-    return new UnifiedStream(iter, controller, (ev) => {
+    return new MessageStream(iter, controller, (ev) => {
       if (ev.type === "message_start") {
         const u = (
           ev as { message?: { usage?: { input_tokens?: number; output_tokens?: number } } }

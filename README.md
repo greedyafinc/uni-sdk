@@ -73,6 +73,38 @@ for (const item of res.data) {
 response mirrors the OpenAI Embeddings shape:
 `{ object, data: [{ object, embedding, index }], model, usage }`.
 
+#### Messages (Anthropic) streaming
+
+```ts
+const stream = sdk.messages.create({
+  model: "claude-sonnet-4-5",
+  max_tokens: 1024,
+  messages: [{ role: "user", content: "Stream a haiku." }],
+  stream: true,
+});
+
+// Walk events as they arrive…
+for await (const event of stream) {
+  if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+    process.stdout.write(event.delta.text);
+  }
+}
+
+// …or skip the events and just await the assembled message:
+const message = await sdk.messages
+  .create({
+    model: "claude-sonnet-4-5",
+    max_tokens: 1024,
+    messages: [{ role: "user", content: "Stream a haiku." }],
+    stream: true,
+  })
+  .finalMessage();
+console.log(message.stop_reason, message.usage);
+```
+
+Call `stream.abort()` to cancel mid-flight; it closes the underlying fetch and
+ends the iterator. `stream.usage` is populated once `message_delta` lands.
+
 ### OAuth mode (Node CLI, desktop)
 
 ```ts
