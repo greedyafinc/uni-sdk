@@ -16,7 +16,8 @@ import {
   UnifiedAIAuthError,
   UnifiedAIError,
   UnifiedError,
-  httpErrorCodeFromStatus,
+  buildHttpError,
+  headersToRecord,
 } from "./errors";
 import type { Identity } from "./identity";
 
@@ -139,11 +140,11 @@ export class UnifiedAI extends Core {
     if (!res.ok) {
       const status = res.status;
       const body = await readErrorBody(res);
-      throw new UnifiedAIError(
-        httpErrorCodeFromStatus(status),
+      throw buildHttpError(
         httpErrorMessage("request", path, status, body),
         status,
         body,
+        headersToRecord(res.headers),
       );
     }
     if (res.status === 204) return undefined as T;
@@ -194,11 +195,11 @@ export class UnifiedAI extends Core {
     if (!res.ok) {
       const status = res.status;
       const body = await readErrorBody(res);
-      throw new UnifiedAIError(
-        httpErrorCodeFromStatus(status),
+      throw buildHttpError(
         httpErrorMessage("stream", path, status, body),
         status,
         body,
+        headersToRecord(res.headers),
       );
     }
     if (!res.body) {

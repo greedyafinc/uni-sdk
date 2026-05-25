@@ -1,6 +1,6 @@
 {
   "name": "@unifiedai/sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Official SDK for Unifiedai marketplace apps.",
   "type": "module",
   "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
