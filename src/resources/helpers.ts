@@ -80,6 +80,7 @@ export type ResponsesAudioPart = {
 export type ResponsesVideoPart = {
   type: "input_video";
   video_url?: string;
+  file_data?: string;
   file_id?: string;
 };
 export type ResponsesFilePart = {
@@ -131,22 +132,45 @@ async function normaliseSource(source: MultimodalSource, opts: PartOptions): Pro
         "Pass raw base64 as `{ data, mimeType }` instead.",
     );
   }
-  if (isFileIdInput(source)) {
-    return {
-      fileId: source.fileId,
-      mimeType: opts.mimeType ?? source.mimeType,
-      filename: opts.filename,
-    };
-  }
-  if (isUrlInput(source)) {
-    return { url: source.url, mimeType: opts.mimeType ?? source.mimeType, filename: opts.filename };
-  }
-  if (isRawBase64Input(source)) {
-    return {
-      base64: source.data,
-      mimeType: opts.mimeType ?? source.mimeType,
-      filename: opts.filename,
-    };
+  // Object-shape discriminators: refuse ambiguous inputs that set more than
+  // one transport (e.g. { url, fileId }) so callers don't silently get a
+  // different wire shape than they expected.
+  if (typeof source === "object" && source !== null && !isBinaryLike(source)) {
+    const hits: string[] = [];
+    if (typeof (source as { fileId?: unknown }).fileId === "string") hits.push("fileId");
+    if (typeof (source as { url?: unknown }).url === "string") hits.push("url");
+    if (typeof (source as { data?: unknown }).data === "string") hits.push("data");
+    if (hits.length > 1) {
+      throw inputError(
+        `multimodal source has overlapping transports (${hits.join(", ")}); set exactly one of fileId / url / data`,
+      );
+    }
+    if (hits.length === 0) {
+      throw inputError(
+        "multimodal object source must set one of `fileId`, `url`, or `data` (with `mimeType`)",
+      );
+    }
+    if (isFileIdInput(source)) {
+      return {
+        fileId: source.fileId,
+        mimeType: opts.mimeType ?? source.mimeType,
+        filename: opts.filename,
+      };
+    }
+    if (isUrlInput(source)) {
+      return {
+        url: source.url,
+        mimeType: opts.mimeType ?? source.mimeType,
+        filename: opts.filename,
+      };
+    }
+    if (isRawBase64Input(source)) {
+      return {
+        base64: source.data,
+        mimeType: opts.mimeType ?? source.mimeType,
+        filename: opts.filename,
+      };
+    }
   }
 
   // Binary inputs from here down.
@@ -157,6 +181,18 @@ async function normaliseSource(source: MultimodalSource, opts: PartOptions): Pro
     mimeType: mime,
     filename: opts.filename ?? filenameOf(source),
   };
+}
+
+function isBinaryLike(s: unknown): boolean {
+  if (s instanceof Uint8Array) return true;
+  if (s instanceof ArrayBuffer) return true;
+  if (typeof Blob !== "undefined" && s instanceof Blob) return true;
+  // Cross-realm Blob / Blob-polyfill: duck-type the arrayBuffer() method.
+  return (
+    typeof s === "object" &&
+    s !== null &&
+    typeof (s as { arrayBuffer?: unknown }).arrayBuffer === "function"
+  );
 }
 
 function isFileIdInput(s: unknown): s is { fileId: string; mimeType?: string } {
@@ -178,12 +214,21 @@ function isRawBase64Input(s: unknown): s is { data: string; mimeType: string } {
 
 // ─── Binary → bytes → base64 ──────────────────────────────────────────────────
 
-async function toBytes(source: Blob | ArrayBuffer | Uint8Array): Promise<Uint8Array> {
+async function toBytes(source: unknown): Promise<Uint8Array> {
   if (source instanceof Uint8Array) return source;
   if (source instanceof ArrayBuffer) return new Uint8Array(source);
-  // Blob/File — both browser and Node 18+ implement arrayBuffer().
+  // Blob/File. Use instanceof when both ends share a realm; fall back to
+  // duck-typing on arrayBuffer() for iframes/workers/polyfills.
   if (typeof Blob !== "undefined" && source instanceof Blob) {
     return new Uint8Array(await source.arrayBuffer());
+  }
+  if (
+    typeof source === "object" &&
+    source !== null &&
+    typeof (source as { arrayBuffer?: unknown }).arrayBuffer === "function"
+  ) {
+    const buf = await (source as { arrayBuffer: () => Promise<ArrayBuffer> }).arrayBuffer();
+    return new Uint8Array(buf);
   }
   throw inputError(
     "unsupported multimodal source; expected Blob/File/Buffer/Uint8Array/ArrayBuffer",
@@ -196,13 +241,11 @@ function bytesToBase64(bytes: Uint8Array): string {
   const g = globalThis as { Buffer?: { from(b: Uint8Array): { toString(enc: string): string } } };
   if (typeof g.Buffer !== "undefined") return g.Buffer.from(bytes).toString("base64");
   if (typeof btoa === "function") {
+    // Build the binary string one byte at a time. Spreading a typed array into
+    // String.fromCharCode is faster but blows the stack-arg limit on JSC for
+    // ≥~10k elements and on V8 around 65k — both reachable for typical images.
     let binary = "";
-    // Chunk to stay under the argument-count limit on String.fromCharCode.
-    const CHUNK = 0x8000;
-    for (let i = 0; i < bytes.length; i += CHUNK) {
-      const slice = bytes.subarray(i, i + CHUNK);
-      binary += String.fromCharCode(...(slice as unknown as number[]));
-    }
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i] ?? 0);
     return btoa(binary);
   }
   throw inputError("no base64 encoder available (neither Buffer nor btoa)");
@@ -210,21 +253,33 @@ function bytesToBase64(bytes: Uint8Array): string {
 
 // ─── Mime detection ───────────────────────────────────────────────────────────
 
+// Order matters: more specific signatures first.
 const MAGIC: Array<{ mime: string; bytes: number[]; offset?: number }> = [
   { mime: "image/png", bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] },
   { mime: "image/jpeg", bytes: [0xff, 0xd8, 0xff] },
   { mime: "image/gif", bytes: [0x47, 0x49, 0x46, 0x38] },
-  // WebP: "RIFF....WEBP"
-  { mime: "image/webp", bytes: [0x57, 0x45, 0x42, 0x50], offset: 8 },
   { mime: "application/pdf", bytes: [0x25, 0x50, 0x44, 0x46] }, // %PDF
-  { mime: "audio/wav", bytes: [0x57, 0x41, 0x56, 0x45], offset: 8 }, // RIFF....WAVE
   { mime: "audio/mpeg", bytes: [0x49, 0x44, 0x33] }, // ID3 (MP3 with tag)
   { mime: "audio/mpeg", bytes: [0xff, 0xfb] }, // MP3 frame, no tag
   { mime: "audio/mpeg", bytes: [0xff, 0xf3] },
   { mime: "audio/mpeg", bytes: [0xff, 0xf2] },
-  { mime: "video/mp4", bytes: [0x66, 0x74, 0x79, 0x70], offset: 4 }, // ....ftyp
   { mime: "video/webm", bytes: [0x1a, 0x45, 0xdf, 0xa3] },
 ];
+
+// "RIFF....WEBP" and "RIFF....WAVE" share the RIFF prefix; resolve them by
+// matching both the RIFF header AND the form-type at offset 8 so unrelated
+// buffers that happen to contain "WEBP"/"WAVE" at offset 8 don't false-match.
+const RIFF = [0x52, 0x49, 0x46, 0x46];
+const WEBP_FORM = [0x57, 0x45, 0x42, 0x50];
+const WAVE_FORM = [0x57, 0x41, 0x56, 0x45];
+
+// MP4 / M4A / MOV are all ISO-BMFF containers identified by an `ftyp` box at
+// offset 4; distinguish by the brand at offset 8 so .m4a isn't misclassified
+// as video/mp4 and .mov as video/mp4.
+const FTYP = [0x66, 0x74, 0x79, 0x70];
+const MP4_BRANDS = new Set(["mp41", "mp42", "isom", "iso2", "avc1", "mp71", "dash"]);
+const M4A_BRANDS = new Set(["M4A ", "M4B ", "mp42", "isom"]); // mp42/isom can be either
+const MOV_BRANDS = new Set(["qt  "]);
 
 const EXT_MIME: Record<string, string> = {
   png: "image/png",
@@ -242,18 +297,41 @@ const EXT_MIME: Record<string, string> = {
   webm: "video/webm",
 };
 
-function detectMime(source: Blob | ArrayBuffer | Uint8Array, bytes: Uint8Array): string | null {
+function detectMime(source: unknown, bytes: Uint8Array): string | null {
   // 1. Blob/File carries its own type.
   if (typeof Blob !== "undefined" && source instanceof Blob && source.type) return source.type;
+  // Cross-realm Blob — duck-type the `type` property.
+  if (
+    typeof source === "object" &&
+    source !== null &&
+    typeof (source as { arrayBuffer?: unknown }).arrayBuffer === "function"
+  ) {
+    const t = (source as { type?: unknown }).type;
+    if (typeof t === "string" && t.length > 0) return t;
+  }
   // 2. File name extension (browser File or filename hint).
   const fname = filenameOf(source);
   if (fname) {
     const ext = fname.split(".").pop()?.toLowerCase();
     if (ext && EXT_MIME[ext]) return EXT_MIME[ext];
   }
-  // 3. Magic bytes.
+  // 3. Magic bytes — order-independent, exact signatures.
   for (const m of MAGIC) {
     if (matchMagic(bytes, m.bytes, m.offset ?? 0)) return m.mime;
+  }
+  // 4. RIFF containers — disambiguate by form-type at offset 8.
+  if (matchMagic(bytes, RIFF, 0)) {
+    if (matchMagic(bytes, WEBP_FORM, 8)) return "image/webp";
+    if (matchMagic(bytes, WAVE_FORM, 8)) return "audio/wav";
+  }
+  // 5. ISO-BMFF (ftyp) — disambiguate by brand at offset 8.
+  if (matchMagic(bytes, FTYP, 4) && bytes.length >= 12) {
+    const brand = String.fromCharCode(bytes[8] ?? 0, bytes[9] ?? 0, bytes[10] ?? 0, bytes[11] ?? 0);
+    if (M4A_BRANDS.has(brand)) return brand.startsWith("M4A") ? "audio/mp4" : "video/mp4";
+    if (MOV_BRANDS.has(brand)) return "video/quicktime";
+    if (MP4_BRANDS.has(brand)) return "video/mp4";
+    // Unknown brand — default to mp4 (most common) but only when ftyp matched.
+    return "video/mp4";
   }
   return null;
 }
@@ -266,6 +344,8 @@ function matchMagic(bytes: Uint8Array, sig: number[], offset: number): boolean {
 
 function filenameOf(source: unknown): string | undefined {
   // Browser File extends Blob with a `name`. Buffer/Uint8Array carry none.
+  if (source === null || source === undefined) return undefined;
+  if (typeof source !== "object") return undefined;
   const n = (source as { name?: unknown }).name;
   return typeof n === "string" ? n : undefined;
 }
@@ -366,7 +446,7 @@ export async function toChatFilePart(
   const n = await normaliseSource(source, opts);
   const file: ChatFilePart["file"] = {};
   if (n.fileId) file.file_id = n.fileId;
-  else if (n.url && isHttpUrl(n.url)) file.file_url = n.url;
+  else if (n.url && !isDataUrl(n.url)) file.file_url = n.url;
   else file.file_data = dataUrlFor(n, "file");
   if (n.filename) file.filename = n.filename;
   return { type: "file", file };
@@ -390,8 +470,11 @@ export async function toResponsesAudioPart(
   source: MultimodalSource,
   opts: AudioPartOptions = {},
 ): Promise<ResponsesAudioPart> {
-  // Audio on /responses uses the same shape as chat input_audio.
-  return toChatAudioPart(source, opts);
+  // Audio on /responses uses the same shape as chat input_audio. Re-construct
+  // through ResponsesAudioPart so divergence in either type surfaces at compile
+  // time rather than silently passing wrong shapes downstream.
+  const { input_audio } = await toChatAudioPart(source, opts);
+  return { type: "input_audio", input_audio };
 }
 
 export async function toResponsesVideoPart(
@@ -401,7 +484,8 @@ export async function toResponsesVideoPart(
   const n = await normaliseSource(source, opts);
   const part: ResponsesVideoPart = { type: "input_video" };
   if (n.fileId) part.file_id = n.fileId;
-  else part.video_url = dataUrlFor(n, "video");
+  else if (n.url && !isDataUrl(n.url)) part.video_url = n.url;
+  else part.file_data = dataUrlFor(n, "video");
   return part;
 }
 
@@ -412,7 +496,7 @@ export async function toResponsesFilePart(
   const n = await normaliseSource(source, opts);
   const part: ResponsesFilePart = { type: "input_file" };
   if (n.fileId) part.file_id = n.fileId;
-  else if (n.url && isHttpUrl(n.url)) part.file_url = n.url;
+  else if (n.url && !isDataUrl(n.url)) part.file_url = n.url;
   else part.file_data = dataUrlFor(n, "file");
   if (n.filename) part.filename = n.filename;
   return part;
@@ -468,8 +552,14 @@ export async function toMessagesDocumentPart(
 
 function base64FromDataUrl(url: string | undefined): string | undefined {
   if (!url || !isDataUrl(url)) return undefined;
+  // Only `data:<mime>;base64,<payload>` carries base64; `data:<mime>,<payload>`
+  // (URL-encoded form) would return raw bytes that the caller would then
+  // mis-label as base64. Refuse to guess.
   const i = url.indexOf(",");
-  return i >= 0 ? url.slice(i + 1) : undefined;
+  if (i < 0) return undefined;
+  const meta = url.slice(5, i); // strip "data:" prefix
+  if (!/;base64$/i.test(meta)) return undefined;
+  return url.slice(i + 1);
 }
 
 function formatFromMime(mime: string | undefined): AudioFormat | undefined {
@@ -482,25 +572,64 @@ function formatFromMime(mime: string | undefined): AudioFormat | undefined {
 // ─── Public Helpers facade ────────────────────────────────────────────────────
 
 /**
- * Stateless factory exposed as `sdk.helpers`. All methods mirror the free
- * functions exported above — keep them in sync.
+ * Stateless factory exposed as `sdk.helpers`. All methods delegate to the free
+ * functions exported above — keep them in sync. Methods live on the prototype
+ * so we don't allocate fresh closures per UnifiedAI instance.
+ *
+ * `toImagePart` / `toAudioPart` / `toVideoPart` / `toFilePart` default to the
+ * chat.completions wire shape; use `toResponses…` / `toMessages…` for the
+ * other surfaces.
  */
 export class Helpers {
-  toImagePart = toChatImagePart;
-  toAudioPart = toChatAudioPart;
-  toVideoPart = toChatVideoPart;
-  toFilePart = toChatFilePart;
+  toImagePart(source: MultimodalSource, opts?: PartOptions): Promise<ChatImagePart> {
+    return toChatImagePart(source, opts);
+  }
+  toAudioPart(source: MultimodalSource, opts?: AudioPartOptions): Promise<ChatAudioPart> {
+    return toChatAudioPart(source, opts);
+  }
+  toVideoPart(source: MultimodalSource, opts?: PartOptions): Promise<ChatVideoPart> {
+    return toChatVideoPart(source, opts);
+  }
+  toFilePart(source: MultimodalSource, opts?: PartOptions): Promise<ChatFilePart> {
+    return toChatFilePart(source, opts);
+  }
 
-  toChatImagePart = toChatImagePart;
-  toChatAudioPart = toChatAudioPart;
-  toChatVideoPart = toChatVideoPart;
-  toChatFilePart = toChatFilePart;
+  toChatImagePart(source: MultimodalSource, opts?: PartOptions): Promise<ChatImagePart> {
+    return toChatImagePart(source, opts);
+  }
+  toChatAudioPart(source: MultimodalSource, opts?: AudioPartOptions): Promise<ChatAudioPart> {
+    return toChatAudioPart(source, opts);
+  }
+  toChatVideoPart(source: MultimodalSource, opts?: PartOptions): Promise<ChatVideoPart> {
+    return toChatVideoPart(source, opts);
+  }
+  toChatFilePart(source: MultimodalSource, opts?: PartOptions): Promise<ChatFilePart> {
+    return toChatFilePart(source, opts);
+  }
 
-  toResponsesImagePart = toResponsesImagePart;
-  toResponsesAudioPart = toResponsesAudioPart;
-  toResponsesVideoPart = toResponsesVideoPart;
-  toResponsesFilePart = toResponsesFilePart;
+  toResponsesImagePart(source: MultimodalSource, opts?: PartOptions): Promise<ResponsesImagePart> {
+    return toResponsesImagePart(source, opts);
+  }
+  toResponsesAudioPart(
+    source: MultimodalSource,
+    opts?: AudioPartOptions,
+  ): Promise<ResponsesAudioPart> {
+    return toResponsesAudioPart(source, opts);
+  }
+  toResponsesVideoPart(source: MultimodalSource, opts?: PartOptions): Promise<ResponsesVideoPart> {
+    return toResponsesVideoPart(source, opts);
+  }
+  toResponsesFilePart(source: MultimodalSource, opts?: PartOptions): Promise<ResponsesFilePart> {
+    return toResponsesFilePart(source, opts);
+  }
 
-  toMessagesImagePart = toMessagesImagePart;
-  toMessagesDocumentPart = toMessagesDocumentPart;
+  toMessagesImagePart(source: MultimodalSource, opts?: PartOptions): Promise<MessagesImagePart> {
+    return toMessagesImagePart(source, opts);
+  }
+  toMessagesDocumentPart(
+    source: MultimodalSource,
+    opts?: PartOptions,
+  ): Promise<MessagesDocumentPart> {
+    return toMessagesDocumentPart(source, opts);
+  }
 }

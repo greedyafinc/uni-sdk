@@ -149,6 +149,14 @@ describe("toChatFilePart", () => {
     expect(part.file.file_data).toBeUndefined();
   });
 
+  test("gs:// URL → file_url (not file_data)", async () => {
+    // Regression: gs:// was previously misrouted into file_data, sending the
+    // bucket URL where the provider expected base64.
+    const part = await toChatFilePart("gs://bucket/doc.pdf");
+    expect(part.file.file_url).toBe("gs://bucket/doc.pdf");
+    expect(part.file.file_data).toBeUndefined();
+  });
+
   test("file_id passes through", async () => {
     const part = await toChatFilePart({ fileId: "file_abc" });
     expect(part.file.file_id).toBe("file_abc");
@@ -193,11 +201,28 @@ describe("toResponsesVideoPart", () => {
     expect(part.type).toBe("input_video");
     expect(part.file_id).toBe("file_v");
     expect(part.video_url).toBeUndefined();
+    expect(part.file_data).toBeUndefined();
   });
 
-  test("URL path", async () => {
+  test("hosted URL path → video_url", async () => {
     const part = await toResponsesVideoPart("https://x/y.mp4");
     expect(part.video_url).toBe("https://x/y.mp4");
+    expect(part.file_data).toBeUndefined();
+  });
+
+  test("gs:// URL → video_url (not file_data)", async () => {
+    const part = await toResponsesVideoPart("gs://b/clip.mp4");
+    expect(part.video_url).toBe("gs://b/clip.mp4");
+    expect(part.file_data).toBeUndefined();
+  });
+
+  test("binary bytes → file_data (not video_url) — /responses input_video " +
+    "uses file_data for inline base64", async () => {
+    const part = await toResponsesVideoPart(new Uint8Array([1, 2, 3]), {
+      mimeType: "video/mp4",
+    });
+    expect(part.file_data?.startsWith("data:video/mp4;base64,")).toBe(true);
+    expect(part.video_url).toBeUndefined();
   });
 });
 
@@ -211,6 +236,12 @@ describe("toResponsesFilePart", () => {
   test("http URL → file_url", async () => {
     const part = await toResponsesFilePart("https://example.com/d.pdf");
     expect(part.file_url).toBe("https://example.com/d.pdf");
+  });
+
+  test("gs:// URL → file_url (not file_data)", async () => {
+    const part = await toResponsesFilePart("gs://b/x.pdf");
+    expect(part.file_url).toBe("gs://b/x.pdf");
+    expect(part.file_data).toBeUndefined();
   });
 
   test("file_id path", async () => {
@@ -281,12 +312,140 @@ describe("toMessagesDocumentPart", () => {
 // Helpers facade + cross-runtime sanity
 // ────────────────────────────────────────────────────────────────────────────
 
+describe("Mime detection regressions", () => {
+  test("MP4 ftyp box → video/mp4", async () => {
+    // size...|ftyp|mp42
+    const mp4 = new Uint8Array([
+      0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32, 0, 0, 0, 0,
+    ]);
+    const part = await toChatVideoPart(mp4);
+    expect(part.video_url.url.startsWith("data:video/mp4;base64,")).toBe(true);
+  });
+
+  test("M4A ftyp box → audio/mp4 (not video/mp4)", async () => {
+    // size...|ftyp|M4A␣
+    const m4a = new Uint8Array([
+      0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34, 0x41, 0x20, 0, 0, 0, 0,
+    ]);
+    // Caller can override format; the regression is that detectMime no longer
+    // claims video/mp4 for M4A bytes, so this resolves cleanly with explicit format.
+    const part = await toChatAudioPart(m4a, { format: "mp3" });
+    expect(part.type).toBe("input_audio");
+  });
+
+  test("MOV ftyp box → video/quicktime (not video/mp4)", async () => {
+    // size...|ftyp|qt␣␣
+    const mov = new Uint8Array([
+      0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20, 0, 0, 0, 0,
+    ]);
+    const part = await toChatVideoPart(mov);
+    expect(part.video_url.url.startsWith("data:video/quicktime;base64,")).toBe(true);
+  });
+
+  test("Bytes with WEBP at offset 8 but no RIFF prefix do not falsely match", async () => {
+    const fake = new Uint8Array([
+      0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x57, 0x45, 0x42, 0x50, 0xff,
+    ]);
+    // No magic match → for an image helper this should fail Anthropic strict-mime
+    // check rather than silently advertise image/webp.
+    await expect(toMessagesImagePart(fake)).rejects.toBeInstanceOf(UnifiedError);
+  });
+
+  test("Bytes with WAVE at offset 8 but no RIFF prefix do not falsely match", async () => {
+    const fake = new Uint8Array([
+      0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x57, 0x41, 0x56, 0x45, 0xff,
+    ]);
+    // No detected audio format → toChatAudioPart should refuse without explicit format.
+    await expect(toChatAudioPart(fake)).rejects.toBeInstanceOf(UnifiedError);
+  });
+});
+
+describe("Data URL validation", () => {
+  test("Non-base64 data URL passed to messages is rejected (not silently corrupted)", async () => {
+    // data:image/png,<url-encoded raw> — no ;base64 marker.
+    await expect(toMessagesImagePart("data:image/png,%89PNG%0D%0A")).rejects.toBeInstanceOf(
+      UnifiedError,
+    );
+  });
+
+  test("Base64 data URL with explicit ;base64 marker accepted", async () => {
+    const part = await toMessagesImagePart("data:image/png;base64,iVBORw0K");
+    if (part.source.type !== "base64") throw new Error("expected base64 source");
+    expect(part.source.data).toBe("iVBORw0K");
+  });
+});
+
+describe("Ambiguous-object input rejection", () => {
+  test("{ fileId, url } throws (overlapping transports)", async () => {
+    await expect(
+      toChatFilePart({ fileId: "f", url: "https://x" } as unknown as { fileId: string }),
+    ).rejects.toBeInstanceOf(UnifiedError);
+  });
+
+  test("{ url, data } throws (overlapping transports)", async () => {
+    await expect(
+      toChatFilePart({
+        url: "https://x",
+        data: "AAAA",
+        mimeType: "application/pdf",
+      } as unknown as { url: string }),
+    ).rejects.toBeInstanceOf(UnifiedError);
+  });
+
+  test("empty object throws", async () => {
+    await expect(toChatFilePart({} as unknown as { fileId: string })).rejects.toBeInstanceOf(
+      UnifiedError,
+    );
+  });
+});
+
+describe("Cross-realm Blob (duck-typed)", () => {
+  test("object with only arrayBuffer() and type is accepted", async () => {
+    // Simulate a cross-realm Blob: not instanceof Blob in this realm, but
+    // exposes arrayBuffer() and type.
+    const fakeBlob = {
+      type: "image/png",
+      arrayBuffer: async () => PNG.buffer.slice(0) as ArrayBuffer,
+    };
+    const part = await toChatImagePart(fakeBlob as unknown as Blob);
+    expect(part.image_url.url.startsWith("data:image/png;base64,")).toBe(true);
+  });
+});
+
+describe("Large-bytes base64 (btoa fallback)", () => {
+  test("encodes 200KB without RangeError when Buffer is hidden", async () => {
+    const big = new Uint8Array(200_000);
+    for (let i = 0; i < big.length; i++) big[i] = i & 0xff;
+    const realBuffer = (globalThis as { Buffer?: unknown }).Buffer;
+    try {
+      Object.defineProperty(globalThis, "Buffer", { value: undefined, configurable: true });
+      const part = await toChatImagePart(big, { mimeType: "image/png" });
+      const b64 = part.image_url.url.split(",")[1];
+      if (!b64) throw new Error("expected base64 payload");
+      // round-trip verification (Buffer restored at this point)
+      Object.defineProperty(globalThis, "Buffer", { value: realBuffer, configurable: true });
+      const decoded = Uint8Array.from(Buffer.from(b64, "base64"));
+      expect(decoded.length).toBe(big.length);
+      expect(decoded[0]).toBe(big[0]);
+      expect(decoded[big.length - 1]).toBe(big[big.length - 1]);
+    } finally {
+      Object.defineProperty(globalThis, "Buffer", { value: realBuffer, configurable: true });
+    }
+  });
+});
+
 describe("Helpers facade", () => {
   test("aliases match free functions", async () => {
     const h = new Helpers();
     const a = await h.toImagePart(PNG);
     const b = await toChatImagePart(PNG);
     expect(a).toEqual(b);
+  });
+
+  test("prototype methods (no per-instance closures)", () => {
+    const a = new Helpers();
+    const b = new Helpers();
+    expect(a.toImagePart).toBe(b.toImagePart);
   });
 
   test("base64 round-trip is byte-exact", async () => {

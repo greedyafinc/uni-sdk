@@ -25,13 +25,14 @@ export type AnthropicContentBlock =
   | {
       type: "tool_result";
       tool_use_id: string;
-      content?: string | Array<AnthropicTextBlock | AnthropicImageBlock>;
+      content?: string | Array<AnthropicTextBlock | AnthropicImageBlock | AnthropicDocumentBlock>;
       is_error?: boolean;
     }
   | { type: "thinking"; thinking: string; signature: string };
 
 export type AnthropicTextBlock = Extract<AnthropicContentBlock, { type: "text" }>;
 export type AnthropicImageBlock = Extract<AnthropicContentBlock, { type: "image" }>;
+export type AnthropicDocumentBlock = Extract<AnthropicContentBlock, { type: "document" }>;
 
 export interface AnthropicMessage {
   role: "user" | "assistant";

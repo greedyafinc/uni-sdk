@@ -20,6 +20,7 @@ export type ResponseInputContentPart =
   | {
       type: "input_video";
       video_url?: string;
+      file_data?: string;
       file_id?: string;
     }
   | {
