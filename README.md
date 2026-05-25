@@ -57,6 +57,22 @@ The SDK calls your `token` provider on every request. On 401 it calls it once
 more (single-flighted across concurrent requests) so your host can rotate the
 token; if the retry still 401s, the SDK throws `UnifiedAIAuthError`.
 
+#### Embeddings
+
+```ts
+const res = await sdk.embeddings.create({
+  model: "togethercomputer/m2-bert-80M-8k-retrieval",
+  input: ["the quick brown fox", "jumps over the lazy dog"],
+});
+for (const item of res.data) {
+  console.log(item.index, item.embedding.length);
+}
+```
+
+`input` accepts a single string or an array of strings (OpenAI parity). The
+response mirrors the OpenAI Embeddings shape:
+`{ object, data: [{ object, embedding, index }], model, usage }`.
+
 ### OAuth mode (Node CLI, desktop)
 
 ```ts

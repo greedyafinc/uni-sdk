@@ -40,6 +40,7 @@ export {
 
 // Resources.
 export * from "../resources/chat";
+export * from "../resources/embeddings";
 export * from "../resources/images";
 export * from "../resources/messages";
 export * from "../resources/models";
