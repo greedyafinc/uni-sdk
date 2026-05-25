@@ -1,0 +1,50 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/messages",
+        "body": {
+          "model": "claude-haiku-4-5",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Say hi"
+            }
+          ],
+          "max_tokens": 16
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-length": "306",
+          "content-type": "application/json;charset=utf-8",
+          "date": "Mon, 25 May 2026 02:29:46 GMT"
+        },
+        "body": {
+          "id": "msg_9ebe926f-4c35-42cb-bbbe-1c0397eb6c1f",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [],
+              "signature": "placeholder"
+            },
+            {
+              "type": "text",
+              "text": "Hey! 👋 How's it going?"
+            }
+          ],
+          "model": "claude-haiku-4-5",
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 9,
+            "output_tokens": 14
+          }
+        }
+      }
+    }
+  ]
+}

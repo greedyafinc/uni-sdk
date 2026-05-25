@@ -1,0 +1,36 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/chat/completions",
+        "body": {
+          "model": "google/gemma-4-e4b",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Say hi"
+            }
+          ],
+          "max_tokens": 16,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "no-cache",
+          "connection": "keep-alive",
+          "content-type": "text/event-stream",
+          "date": "Mon, 25 May 2026 02:29:44 GMT",
+          "transfer-encoding": "chunked"
+        },
+        "body": "data: {\"id\":\"chatcmpl-f6217f5c-946b-4ca7-9882-02a3174ca9db\",\"object\":\"chat.completion.chunk\",\"created\":1779676185,\"model\":\"google/gemma-4-e4b\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-f6217f5c-946b-4ca7-9882-02a3174ca9db\",\"object\":\"chat.completion.chunk\",\"created\":1779676185,\"model\":\"google/gemma-4-e4b\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"!\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-f6217f5c-946b-4ca7-9882-02a3174ca9db\",\"object\":\"chat.completion.chunk\",\"created\":1779676185,\"model\":\"google/gemma-4-e4b\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" 👋\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-f6217f5c-946b-4ca7-9882-02a3174ca9db\",\"object\":\"chat.completion.chunk\",\"created\":1779676185,\"model\":\"google/gemma-4-e4b\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+        "stream": true
+      }
+    }
+  ]
+}

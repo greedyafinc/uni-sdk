@@ -1,0 +1,48 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/responses",
+        "body": {
+          "model": "google/gemma-4-e4b",
+          "input": "Say hi",
+          "max_output_tokens": 16
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-length": "358",
+          "content-type": "application/json;charset=utf-8",
+          "date": "Mon, 25 May 2026 02:29:43 GMT"
+        },
+        "body": {
+          "id": "resp_b48b5cd9-81cd-448d-8918-48e2f70fe8da",
+          "object": "response",
+          "created_at": 1779676184,
+          "model": "google/gemma-4-e4b",
+          "output": [
+            {
+              "type": "message",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Hi! 😊 How can I help you today?"
+                }
+              ],
+              "status": "completed"
+            }
+          ],
+          "usage": {
+            "input_tokens": 18,
+            "output_tokens": 10,
+            "total_tokens": 28
+          },
+          "status": "completed"
+        }
+      }
+    }
+  ]
+}

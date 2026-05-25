@@ -1,0 +1,93 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/chat/completions",
+        "body": {
+          "model": "claude-haiku-4-5",
+          "messages": [
+            {
+              "role": "user",
+              "content": "What's the weather in Paris?"
+            }
+          ],
+          "max_tokens": 256,
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "get_weather",
+                "description": "Get the current weather for a location.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "location": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "location"
+                  ]
+                }
+              }
+            }
+          ],
+          "tool_choice": {
+            "type": "function",
+            "function": {
+              "name": "get_weather"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-length": "583",
+          "content-type": "application/json;charset=utf-8",
+          "date": "Mon, 25 May 2026 02:29:45 GMT"
+        },
+        "body": {
+          "id": "chatcmpl-cb2bcaed-7706-4d4c-a7a3-512ffb82509f",
+          "object": "chat.completion",
+          "created": 1779676186,
+          "model": "claude-haiku-4-5",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                  {
+                    "id": "toolu_01JYJwwwB5Hm4uTnjQxSiQ5X",
+                    "type": "function",
+                    "function": {
+                      "name": "get_weather",
+                      "arguments": "{\"location\":\"Paris\"}"
+                    }
+                  }
+                ]
+              },
+              "finish_reason": "tool_calls",
+              "logprobs": null
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 662,
+            "completion_tokens": 33,
+            "total_tokens": 695,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "system_fingerprint": null
+        }
+      }
+    }
+  ]
+}

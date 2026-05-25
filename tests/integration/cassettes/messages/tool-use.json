@@ -1,0 +1,75 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/v1/messages",
+        "body": {
+          "model": "claude-haiku-4-5",
+          "messages": [
+            {
+              "role": "user",
+              "content": "What's the weather in Paris?"
+            }
+          ],
+          "max_tokens": 256,
+          "tools": [
+            {
+              "name": "get_weather",
+              "description": "Get the current weather for a location.",
+              "input_schema": {
+                "type": "object",
+                "properties": {
+                  "location": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "location"
+                ]
+              }
+            }
+          ],
+          "tool_choice": {
+            "type": "tool",
+            "name": "get_weather"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-length": "365",
+          "content-type": "application/json;charset=utf-8",
+          "date": "Mon, 25 May 2026 02:29:48 GMT"
+        },
+        "body": {
+          "id": "msg_a81455bf-0181-4037-8263-a76cb92674b8",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [],
+              "signature": "placeholder"
+            },
+            {
+              "type": "tool_use",
+              "id": "toolu_01QKcQAHNm53ag5JQHBqA6u1",
+              "name": "get_weather",
+              "input": {
+                "location": "Paris"
+              }
+            }
+          ],
+          "model": "claude-haiku-4-5",
+          "stop_reason": "tool_use",
+          "usage": {
+            "input_tokens": 565,
+            "output_tokens": 54
+          }
+        }
+      }
+    }
+  ]
+}

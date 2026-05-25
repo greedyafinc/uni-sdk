@@ -1,0 +1,45 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/usage"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-length": "345",
+          "content-type": "application/json;charset=utf-8",
+          "date": "Mon, 25 May 2026 02:29:43 GMT"
+        },
+        "body": {
+          "plan": {
+            "id": 0,
+            "name": "Free",
+            "limit": 0,
+            "limit_period_seconds": 0,
+            "monthly_price": 0,
+            "annual_price": 0
+          },
+          "period": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "request_count": 0,
+            "cost": 0,
+            "started_at": null,
+            "resets_at": "2026-05-26T02:29:44.817Z",
+            "days_remaining": null
+          },
+          "daily": {
+            "used": 0,
+            "limit": 0,
+            "resets_at": "2026-05-26T02:29:44.817Z"
+          },
+          "credits": {
+            "balance": 0
+          }
+        }
+      }
+    }
+  ]
+}

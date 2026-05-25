@@ -1,0 +1,36 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/images/edits",
+        "body": {
+          "model": "google/flash-image-3.1",
+          "images": [
+            {
+              "image_url": "https://picsum.photos/seed/uni-sdk-test/256.jpg"
+            }
+          ],
+          "prompt": "make it blue",
+          "n": 1
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-length": "87",
+          "content-type": "application/json;charset=utf-8",
+          "date": "Mon, 25 May 2026 02:29:42 GMT"
+        },
+        "body": {
+          "created": 1779676182,
+          "data": [
+            {
+              "url": "https://api.together.ai/shrt/UkMVKU5MeWgIcbSm"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

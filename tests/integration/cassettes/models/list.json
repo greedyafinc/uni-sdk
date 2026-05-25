@@ -1,0 +1,465 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/models"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-length": "6850",
+          "content-type": "application/json;charset=utf-8",
+          "date": "Mon, 25 May 2026 02:29:45 GMT"
+        },
+        "body": {
+          "object": "list",
+          "data": [
+            {
+              "id": "auto",
+              "name": "Auto",
+              "type": "text",
+              "object": "model",
+              "owned_by": "unified-api",
+              "logo": null,
+              "model_author": {
+                "name": "unified-api"
+              }
+            },
+            {
+              "id": "deepseek-ai/DeepSeek-V4-Pro",
+              "name": "Deepseek V4 Pro",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "Deepseek AI",
+              "image_inp": false,
+              "logo": "/logos/deepseekai.svg",
+              "model_author": {
+                "name": "Deepseek AI",
+                "color": "#4D6BFE"
+              }
+            },
+            {
+              "id": "gemini-3.1-flash-lite-preview",
+              "name": "Gemini 3.1 Flash",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "Google",
+              "image_inp": true,
+              "logo": "/logos/google.svg",
+              "model_author": {
+                "name": "Google",
+                "color": "#4285F4"
+              }
+            },
+            {
+              "id": "google/gemma-4-31B-it",
+              "name": "Gemma 4 31B-it",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "Google",
+              "image_inp": true,
+              "logo": "/logos/google.svg",
+              "model_author": {
+                "name": "Google",
+                "color": "#4285F4"
+              }
+            },
+            {
+              "id": "moonshotai/Kimi-K2.5",
+              "name": "Kimi K2.5",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "Moonshot AI",
+              "image_inp": true,
+              "logo": "/logos/moonshotai.svg",
+              "model_author": {
+                "name": "Moonshot AI",
+                "color": "#6B5BFF"
+              }
+            },
+            {
+              "id": "gemini-3.1-pro-preview",
+              "name": "Gemini 3.1 Pro",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "Google",
+              "image_inp": true,
+              "logo": "/logos/google.svg",
+              "model_author": {
+                "name": "Google",
+                "color": "#4285F4"
+              }
+            },
+            {
+              "id": "zai-org/GLM-5.1",
+              "name": "GLM 5.1",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "Z.ai",
+              "image_inp": false,
+              "logo": "/logos/zai.svg",
+              "model_author": {
+                "name": "Z.ai",
+                "color": "#2EC4B6"
+              }
+            },
+            {
+              "id": "gpt-5.4",
+              "name": "GPT 5.4",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "OpenAI",
+              "image_inp": true,
+              "logo": "/logos/openai.svg",
+              "model_author": {
+                "name": "OpenAI",
+                "color": "#10A37F"
+              }
+            },
+            {
+              "id": "gpt-5.4-mini",
+              "name": "GPT 5.4 Mini",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "OpenAI",
+              "image_inp": true,
+              "logo": "/logos/openai.svg",
+              "model_author": {
+                "name": "OpenAI",
+                "color": "#10A37F"
+              }
+            },
+            {
+              "id": "grok-4.20-multi-agent-0309",
+              "name": "Grok 4.2 Multi-Agent",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "xAI",
+              "image_inp": true,
+              "logo": "/logos/xai.svg",
+              "model_author": {
+                "name": "xAI",
+                "color": "#64748B"
+              }
+            },
+            {
+              "id": "gpt-5.4-nano",
+              "name": "GPT 5.4 Nano",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "OpenAI",
+              "image_inp": true,
+              "logo": "/logos/openai.svg",
+              "model_author": {
+                "name": "OpenAI",
+                "color": "#10A37F"
+              }
+            },
+            {
+              "id": "google/imagen-4.0-fast",
+              "name": "Imagen 4.0 Fast",
+              "type": "image",
+              "object": "model",
+              "created": -1,
+              "owned_by": "Google",
+              "image_inp": false,
+              "logo": "/logos/google.svg",
+              "model_author": {
+                "name": "Google",
+                "color": "#4285F4"
+              }
+            },
+            {
+              "id": "grok-4-1-fast-reasoning",
+              "name": "Grok 4.1 Fast",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "xAI",
+              "image_inp": true,
+              "logo": "/logos/xai.svg",
+              "model_author": {
+                "name": "xAI",
+                "color": "#64748B"
+              }
+            },
+            {
+              "id": "grok-4.3",
+              "name": "Grok 4.3",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "xAI",
+              "image_inp": true,
+              "logo": "/logos/xai.svg",
+              "model_author": {
+                "name": "xAI",
+                "color": "#64748B"
+              }
+            },
+            {
+              "id": "MiniMaxAI/MiniMax-M2.7",
+              "name": "Minimax M2.7",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "MiniMax AI",
+              "image_inp": false,
+              "logo": "/logos/minimaxai.svg",
+              "model_author": {
+                "name": "MiniMax AI",
+                "color": "#F25022"
+              }
+            },
+            {
+              "id": "Qwen/Qwen3.6-Plus",
+              "name": "Qwen3.6 Plus",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "Qwen",
+              "image_inp": true,
+              "logo": "/logos/qwen.svg",
+              "model_author": {
+                "name": "Qwen",
+                "color": "#A855F7"
+              }
+            },
+            {
+              "id": "intfloat/multilingual-e5-large-instruct",
+              "name": "Multilingual E5 Large Instruct",
+              "type": "embedding",
+              "object": "model",
+              "created": -1,
+              "owned_by": "Intfloat",
+              "image_inp": false,
+              "logo": "/logos/intfloat.svg",
+              "model_author": {
+                "name": "Intfloat",
+                "color": "#E11D74"
+              }
+            },
+            {
+              "id": "gpt-5-nano",
+              "name": "GPT 5 Nano",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "OpenAI",
+              "image_inp": true,
+              "logo": "/logos/openai.svg",
+              "model_author": {
+                "name": "OpenAI",
+                "color": "#10A37F"
+              }
+            },
+            {
+              "id": "deepseek-ai/DeepSeek-V4-Flash",
+              "name": "DeepSeek V4 Flash",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "Deepseek AI",
+              "image_inp": false,
+              "logo": "/logos/deepseekai.svg",
+              "model_author": {
+                "name": "Deepseek AI",
+                "color": "#4D6BFE"
+              }
+            },
+            {
+              "id": "google/flash-image-3.1",
+              "name": "Gemini 3.1 Flash Image (Nano Banana 2)",
+              "type": "image",
+              "object": "model",
+              "created": -1,
+              "owned_by": "Google",
+              "image_inp": true,
+              "logo": "/logos/google.svg",
+              "model_author": {
+                "name": "Google",
+                "color": "#4285F4"
+              }
+            },
+            {
+              "id": "Rundiffusion/Juggernaut-Lightning-Flux",
+              "name": "Juggernaut Lightning Flux",
+              "type": "image",
+              "object": "model",
+              "created": -1,
+              "owned_by": "",
+              "image_inp": false,
+              "logo": null,
+              "model_author": {
+                "name": ""
+              }
+            },
+            {
+              "id": "gemini-3.5-flash",
+              "name": "Gemini 3.5 Flash",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "Google",
+              "image_inp": true,
+              "logo": "/logos/google.svg",
+              "model_author": {
+                "name": "Google",
+                "color": "#4285F4"
+              }
+            },
+            {
+              "id": "gpt-5.3-codex",
+              "name": "GPT 5.3 Codex",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "OpenAI",
+              "image_inp": true,
+              "logo": "/logos/openai.svg",
+              "model_author": {
+                "name": "OpenAI",
+                "color": "#10A37F"
+              }
+            },
+            {
+              "id": "moonshotai/Kimi-K2.6",
+              "name": "Kimi K2.6",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "Moonshot AI",
+              "image_inp": true,
+              "logo": "/logos/moonshotai.svg",
+              "model_author": {
+                "name": "Moonshot AI",
+                "color": "#6B5BFF"
+              }
+            },
+            {
+              "id": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8",
+              "name": "NVIDIA Nemotron 3 Super 120B",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "NVIDIA",
+              "image_inp": false,
+              "logo": "/logos/nvidia.svg",
+              "model_author": {
+                "name": "NVIDIA",
+                "color": "#76B900"
+              }
+            },
+            {
+              "id": "gpt-5.5",
+              "name": "GPT 5.5",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "OpenAI",
+              "image_inp": true,
+              "logo": "/logos/openai.svg",
+              "model_author": {
+                "name": "OpenAI",
+                "color": "#10A37F"
+              }
+            },
+            {
+              "id": "Qwen/Qwen3.5-397B-A17B",
+              "name": "Qwen3.5 397B A17b",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "Qwen",
+              "image_inp": true,
+              "logo": "/logos/qwen.svg",
+              "model_author": {
+                "name": "Qwen",
+                "color": "#A855F7"
+              }
+            },
+            {
+              "id": "claude-opus-4-7",
+              "name": "Claude Opus 4.7",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "Anthropic",
+              "image_inp": true,
+              "logo": "/logos/anthropic.svg",
+              "model_author": {
+                "name": "Anthropic",
+                "color": "#D4A27F"
+              }
+            },
+            {
+              "id": "claude-sonnet-4-6",
+              "name": "Claude Sonnet 4.6",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "Anthropic",
+              "image_inp": true,
+              "logo": "/logos/anthropic.svg",
+              "model_author": {
+                "name": "Anthropic",
+                "color": "#D4A27F"
+              }
+            },
+            {
+              "id": "claude-haiku-4-5",
+              "name": "Claude Haiku 4.5",
+              "type": "text",
+              "object": "model",
+              "created": -1,
+              "owned_by": "Anthropic",
+              "image_inp": true,
+              "logo": "/logos/anthropic.svg",
+              "model_author": {
+                "name": "Anthropic",
+                "color": "#D4A27F"
+              }
+            },
+            {
+              "id": "google/gemma-4-e4b",
+              "name": "google/gemma-4-e4b",
+              "type": "text",
+              "object": "model",
+              "owned_by": "organization_owner",
+              "image_inp": false,
+              "logo": null,
+              "model_author": {
+                "name": "Custom"
+              },
+              "is_custom": true
+            },
+            {
+              "id": "text-embedding-nomic-embed-text-v1.5",
+              "name": "text-embedding-nomic-embed-text-v1.5",
+              "type": "embedding",
+              "object": "model",
+              "owned_by": "organization_owner",
+              "image_inp": false,
+              "logo": null,
+              "model_author": {
+                "name": "Custom"
+              },
+              "is_custom": true
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
