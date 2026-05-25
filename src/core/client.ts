@@ -1,5 +1,6 @@
 import { Chat } from "../resources/chat";
 import { Embeddings } from "../resources/embeddings";
+import { Helpers } from "../resources/helpers";
 import { Images } from "../resources/images";
 import { Messages } from "../resources/messages";
 import { Models } from "../resources/models";
@@ -57,6 +58,7 @@ export class UnifiedAI extends Core {
   readonly messages: Messages = new Messages(this);
   readonly images: Images = new Images(this);
   readonly embeddings: Embeddings = new Embeddings(this);
+  readonly helpers: Helpers = new Helpers();
 
   private trustedRefreshPromise: Promise<string> | undefined;
 

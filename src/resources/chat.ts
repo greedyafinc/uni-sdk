@@ -28,6 +28,20 @@ export type ChatCompletionUserContentPart =
   | {
       type: "image_url";
       image_url: { url: string; detail?: "auto" | "low" | "high" };
+    }
+  | {
+      type: "input_audio";
+      input_audio: { data: string; format: "wav" | "mp3" };
+    }
+  | { type: "video_url"; video_url: { url: string } }
+  | {
+      type: "file";
+      file: {
+        file_data?: string;
+        file_url?: string;
+        file_id?: string;
+        filename?: string;
+      };
     };
 
 export interface ChatCompletionAssistantMessage {

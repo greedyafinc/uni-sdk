@@ -15,6 +15,9 @@ export interface Model {
   created?: number;
   owned_by: string;
   image_inp?: boolean;
+  audio_inp?: boolean;
+  video_inp?: boolean;
+  pdf_inp?: boolean;
   logo: string | null;
   model_author: ModelAuthor;
   is_custom?: boolean;
