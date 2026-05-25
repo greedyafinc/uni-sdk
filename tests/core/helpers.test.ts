@@ -368,8 +368,22 @@ describe("Data URL validation", () => {
     );
   });
 
+  test("Non-base64 data URL is rejected on chat helpers too (no asymmetric validation)", async () => {
+    await expect(toChatImagePart("data:image/png,%89PNG")).rejects.toBeInstanceOf(UnifiedError);
+    await expect(toResponsesImagePart("data:image/png,%89PNG")).rejects.toBeInstanceOf(
+      UnifiedError,
+    );
+    await expect(toChatVideoPart("data:video/mp4,raw")).rejects.toBeInstanceOf(UnifiedError);
+  });
+
   test("Base64 data URL with explicit ;base64 marker accepted", async () => {
     const part = await toMessagesImagePart("data:image/png;base64,iVBORw0K");
+    if (part.source.type !== "base64") throw new Error("expected base64 source");
+    expect(part.source.data).toBe("iVBORw0K");
+  });
+
+  test("Base64 data URL with extra parameters (charset etc.) still accepted", async () => {
+    const part = await toMessagesImagePart("data:image/png;charset=utf-8;base64,iVBORw0K");
     if (part.source.type !== "base64") throw new Error("expected base64 source");
     expect(part.source.data).toBe("iVBORw0K");
   });
@@ -400,34 +414,62 @@ describe("Ambiguous-object input rejection", () => {
 });
 
 describe("Cross-realm Blob (duck-typed)", () => {
-  test("object with only arrayBuffer() and type is accepted", async () => {
+  test("object with arrayBuffer() + size + type is accepted (Blob-shaped)", async () => {
     // Simulate a cross-realm Blob: not instanceof Blob in this realm, but
-    // exposes arrayBuffer() and type.
+    // exposes arrayBuffer() and the Blob-interface fields.
     const fakeBlob = {
       type: "image/png",
+      size: PNG.length,
       arrayBuffer: async () => PNG.buffer.slice(0) as ArrayBuffer,
     };
     const part = await toChatImagePart(fakeBlob as unknown as Blob);
     expect(part.image_url.url.startsWith("data:image/png;base64,")).toBe(true);
   });
+
+  test("fetch Response is NOT silently consumed as binary", async () => {
+    // Regression: Response exposes arrayBuffer() — earlier duck-typing took
+    // the binary path and drained the body. Now requires `size` (Blob-only),
+    // so Response is rejected at toBytes() instead.
+    const res = new Response(PNG);
+    await expect(toChatImagePart(res as unknown as Blob)).rejects.toBeInstanceOf(UnifiedError);
+    // body must still be readable by the caller — wasn't drained.
+    const remaining = new Uint8Array(await res.arrayBuffer());
+    expect(remaining).toEqual(PNG);
+  });
+
+  test("user wrapper { url, arrayBuffer } takes the URL path (not binary)", async () => {
+    const wrapper = {
+      url: "https://example.com/x.png",
+      arrayBuffer: async () => PNG.buffer.slice(0) as ArrayBuffer,
+    };
+    const part = await toChatImagePart(wrapper as unknown as { url: string });
+    expect(part.image_url.url).toBe("https://example.com/x.png");
+  });
 });
 
 describe("Large-bytes base64 (btoa fallback)", () => {
-  test("encodes 200KB without RangeError when Buffer is hidden", async () => {
-    const big = new Uint8Array(200_000);
+  test("encodes 2 MB without RangeError when Buffer is hidden", async () => {
+    // 2 MB exercises both the chunk-spread argument-count limit and the
+    // O(n) concatenation path. Must complete in well under a second.
+    const big = new Uint8Array(2_000_000);
     for (let i = 0; i < big.length; i++) big[i] = i & 0xff;
     const realBuffer = (globalThis as { Buffer?: unknown }).Buffer;
     try {
       Object.defineProperty(globalThis, "Buffer", { value: undefined, configurable: true });
+      const start = Date.now();
       const part = await toChatImagePart(big, { mimeType: "image/png" });
+      const elapsed = Date.now() - start;
+      // Restore Buffer for the round-trip decode below.
+      Object.defineProperty(globalThis, "Buffer", { value: realBuffer, configurable: true });
       const b64 = part.image_url.url.split(",")[1];
       if (!b64) throw new Error("expected base64 payload");
-      // round-trip verification (Buffer restored at this point)
-      Object.defineProperty(globalThis, "Buffer", { value: realBuffer, configurable: true });
       const decoded = Uint8Array.from(Buffer.from(b64, "base64"));
       expect(decoded.length).toBe(big.length);
       expect(decoded[0]).toBe(big[0]);
       expect(decoded[big.length - 1]).toBe(big[big.length - 1]);
+      // Per-byte concatenation would take many seconds on JSC; chunked spread
+      // keeps it well under 2s on every supported runtime.
+      expect(elapsed).toBeLessThan(2000);
     } finally {
       Object.defineProperty(globalThis, "Buffer", { value: realBuffer, configurable: true });
     }

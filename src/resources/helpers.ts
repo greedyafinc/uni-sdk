@@ -120,12 +120,24 @@ async function normaliseSource(source: MultimodalSource, opts: PartOptions): Pro
   // Plain string — treat as URL (http(s) or data URL). Raw base64 strings are
   // ambiguous, so callers must pass them as { data, mimeType }.
   if (typeof source === "string") {
-    if (isDataUrl(source) || isHttpUrl(source) || isGsUrl(source)) {
+    if (isDataUrl(source)) {
+      // Only base64-encoded data URLs are accepted. URL-encoded data URLs
+      // (data:<mime>,<payload>) would slip through to providers as malformed
+      // image_url/video_url, where they fail with opaque decode errors.
+      if (!isBase64DataUrl(source)) {
+        throw inputError(
+          "data URL must be base64-encoded (data:<mime>;base64,<payload>). " +
+            "URL-encoded data URLs are not supported.",
+        );
+      }
       return {
         url: source,
         mimeType: opts.mimeType ?? mimeFromDataUrl(source),
         filename: opts.filename,
       };
+    }
+    if (isHttpUrl(source) || isGsUrl(source)) {
+      return { url: source, mimeType: opts.mimeType, filename: opts.filename };
     }
     throw inputError(
       "string source must be an http(s) URL, data URL, or gs:// URL. " +
@@ -187,11 +199,19 @@ function isBinaryLike(s: unknown): boolean {
   if (s instanceof Uint8Array) return true;
   if (s instanceof ArrayBuffer) return true;
   if (typeof Blob !== "undefined" && s instanceof Blob) return true;
-  // Cross-realm Blob / Blob-polyfill: duck-type the arrayBuffer() method.
+  // Reject fetch Response/Request explicitly — they expose arrayBuffer() but
+  // are not what the caller meant; silently draining them would consume the
+  // body and surprise the user. They must explicitly do `await res.blob()`.
+  if (typeof Response !== "undefined" && s instanceof Response) return false;
+  if (typeof Request !== "undefined" && s instanceof Request) return false;
+  // Cross-realm Blob / Blob-polyfill: require BOTH arrayBuffer() AND a numeric
+  // `size` property (Blob interface) so arbitrary objects with an arrayBuffer
+  // method (e.g. ORM rows, mocks, fetch bodies) don't accidentally match.
   return (
     typeof s === "object" &&
     s !== null &&
-    typeof (s as { arrayBuffer?: unknown }).arrayBuffer === "function"
+    typeof (s as { arrayBuffer?: unknown }).arrayBuffer === "function" &&
+    typeof (s as { size?: unknown }).size === "number"
   );
 }
 
@@ -217,15 +237,17 @@ function isRawBase64Input(s: unknown): s is { data: string; mimeType: string } {
 async function toBytes(source: unknown): Promise<Uint8Array> {
   if (source instanceof Uint8Array) return source;
   if (source instanceof ArrayBuffer) return new Uint8Array(source);
-  // Blob/File. Use instanceof when both ends share a realm; fall back to
-  // duck-typing on arrayBuffer() for iframes/workers/polyfills.
+  // Blob/File. Use instanceof when both ends share a realm; isBinaryLike's
+  // duck-type gate already ensures any non-instanceof object has both
+  // arrayBuffer() and .size (i.e. is Blob-shaped, not a fetch Response).
   if (typeof Blob !== "undefined" && source instanceof Blob) {
     return new Uint8Array(await source.arrayBuffer());
   }
   if (
     typeof source === "object" &&
     source !== null &&
-    typeof (source as { arrayBuffer?: unknown }).arrayBuffer === "function"
+    typeof (source as { arrayBuffer?: unknown }).arrayBuffer === "function" &&
+    typeof (source as { size?: unknown }).size === "number"
   ) {
     const buf = await (source as { arrayBuffer: () => Promise<ArrayBuffer> }).arrayBuffer();
     return new Uint8Array(buf);
@@ -241,11 +263,17 @@ function bytesToBase64(bytes: Uint8Array): string {
   const g = globalThis as { Buffer?: { from(b: Uint8Array): { toString(enc: string): string } } };
   if (typeof g.Buffer !== "undefined") return g.Buffer.from(bytes).toString("base64");
   if (typeof btoa === "function") {
-    // Build the binary string one byte at a time. Spreading a typed array into
-    // String.fromCharCode is faster but blows the stack-arg limit on JSC for
-    // ≥~10k elements and on V8 around 65k — both reachable for typical images.
+    // 4 KB chunks: well under Safari/JSC's ~10K argument-count limit on
+    // String.fromCharCode, while still amortising the per-call overhead so
+    // multi-MB payloads (video/audio) encode in roughly linear time. A
+    // per-byte concatenation loop is correct but O(n²) on JSC and would
+    // stall the main thread on browser video uploads.
     let binary = "";
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i] ?? 0);
+    const CHUNK = 0x1000;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      const slice = bytes.subarray(i, i + CHUNK);
+      binary += String.fromCharCode(...(slice as unknown as number[]));
+    }
     return btoa(binary);
   }
   throw inputError("no base64 encoder available (neither Buffer nor btoa)");
@@ -274,11 +302,17 @@ const WEBP_FORM = [0x57, 0x45, 0x42, 0x50];
 const WAVE_FORM = [0x57, 0x41, 0x56, 0x45];
 
 // MP4 / M4A / MOV are all ISO-BMFF containers identified by an `ftyp` box at
-// offset 4; distinguish by the brand at offset 8 so .m4a isn't misclassified
-// as video/mp4 and .mov as video/mp4.
+// offset 4; distinguish by the brand at offset 8.
+//
+// IMPORTANT: only brands that are UNIQUELY audio-only go in M4A_BRANDS.
+// `mp42` and `isom` are shared by AAC-in-MP4 audio AND H.264 video — they
+// cannot disambiguate from magic bytes alone. A bare-bytes M4A with brand
+// mp42 will resolve to video/mp4 here; callers should pass a filename hint
+// or `{ format: "mp3" }` for those cases (still rare in browser file inputs
+// because the File API surfaces .type/.name).
 const FTYP = [0x66, 0x74, 0x79, 0x70];
-const MP4_BRANDS = new Set(["mp41", "mp42", "isom", "iso2", "avc1", "mp71", "dash"]);
-const M4A_BRANDS = new Set(["M4A ", "M4B ", "mp42", "isom"]); // mp42/isom can be either
+const MP4_BRANDS = new Set(["mp41", "mp42", "isom", "iso2", "avc1", "dash"]);
+const M4A_BRANDS = new Set(["M4A ", "M4B "]);
 const MOV_BRANDS = new Set(["qt  "]);
 
 const EXT_MIME: Record<string, string> = {
@@ -327,7 +361,7 @@ function detectMime(source: unknown, bytes: Uint8Array): string | null {
   // 5. ISO-BMFF (ftyp) — disambiguate by brand at offset 8.
   if (matchMagic(bytes, FTYP, 4) && bytes.length >= 12) {
     const brand = String.fromCharCode(bytes[8] ?? 0, bytes[9] ?? 0, bytes[10] ?? 0, bytes[11] ?? 0);
-    if (M4A_BRANDS.has(brand)) return brand.startsWith("M4A") ? "audio/mp4" : "video/mp4";
+    if (M4A_BRANDS.has(brand)) return "audio/mp4";
     if (MOV_BRANDS.has(brand)) return "video/quicktime";
     if (MP4_BRANDS.has(brand)) return "video/mp4";
     // Unknown brand — default to mp4 (most common) but only when ftyp matched.
@@ -352,6 +386,14 @@ function filenameOf(source: unknown): string | undefined {
 
 function isDataUrl(s: string): boolean {
   return s.startsWith("data:");
+}
+function isBase64DataUrl(s: string): boolean {
+  if (!isDataUrl(s)) return false;
+  const i = s.indexOf(",");
+  if (i < 0) return false;
+  // Match `;base64` anywhere in the metadata section, case-insensitive, so
+  // `data:image/png;charset=utf-8;base64,...` still resolves.
+  return /;base64(?:;|$)/i.test(s.slice(5, i));
 }
 function isHttpUrl(s: string): boolean {
   return s.startsWith("http://") || s.startsWith("https://");
@@ -551,14 +593,8 @@ export async function toMessagesDocumentPart(
 }
 
 function base64FromDataUrl(url: string | undefined): string | undefined {
-  if (!url || !isDataUrl(url)) return undefined;
-  // Only `data:<mime>;base64,<payload>` carries base64; `data:<mime>,<payload>`
-  // (URL-encoded form) would return raw bytes that the caller would then
-  // mis-label as base64. Refuse to guess.
+  if (!url || !isBase64DataUrl(url)) return undefined;
   const i = url.indexOf(",");
-  if (i < 0) return undefined;
-  const meta = url.slice(5, i); // strip "data:" prefix
-  if (!/;base64$/i.test(meta)) return undefined;
   return url.slice(i + 1);
 }
 
