@@ -1,4 +1,5 @@
 import { Chat } from "../resources/chat";
+import { Images } from "../resources/images";
 import { Messages } from "../resources/messages";
 import { Models } from "../resources/models";
 import { Responses } from "../resources/responses";
@@ -52,6 +53,7 @@ export class UnifiedAI extends Core {
   readonly chat: Chat = new Chat(this);
   readonly responses: Responses = new Responses(this);
   readonly messages: Messages = new Messages(this);
+  readonly images: Images = new Images(this);
 
   private trustedRefreshPromise: Promise<string> | undefined;
 
@@ -93,13 +95,19 @@ export class UnifiedAI extends Core {
   override async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const initialToken = await this.getInitialAccessToken();
     const url = this.buildUrl(path, options.query);
-    const bodyText = options.body !== undefined ? JSON.stringify(options.body) : undefined;
+    const isMultipart = typeof FormData !== "undefined" && options.body instanceof FormData;
+    const bodyInit: BodyInit | undefined = isMultipart
+      ? (options.body as FormData)
+      : options.body !== undefined
+        ? JSON.stringify(options.body)
+        : undefined;
     const send = (accessToken: string) => {
       const init: RequestInit = {
         method: options.method ?? "GET",
-        headers: this.buildHeaders(accessToken, bodyText !== undefined),
+        // For multipart, let fetch set the Content-Type (with boundary).
+        headers: this.buildHeaders(accessToken, bodyInit !== undefined && !isMultipart),
       };
-      if (bodyText !== undefined) init.body = bodyText;
+      if (bodyInit !== undefined) init.body = bodyInit;
       if (options.signal) init.signal = options.signal;
       return this.options.fetch(url, init);
     };
