@@ -411,6 +411,15 @@ describe("Ambiguous-object input rejection", () => {
       UnifiedError,
     );
   });
+
+  test("{ data } without mimeType throws a specific error (not generic toBytes)", async () => {
+    const promise = toChatImagePart({ data: "AAAA" } as unknown as {
+      data: string;
+      mimeType: string;
+    });
+    await expect(promise).rejects.toBeInstanceOf(UnifiedError);
+    await expect(promise).rejects.toThrow(/mimeType/);
+  });
 });
 
 describe("Cross-realm Blob (duck-typed)", () => {
@@ -426,15 +435,19 @@ describe("Cross-realm Blob (duck-typed)", () => {
     expect(part.image_url.url.startsWith("data:image/png;base64,")).toBe(true);
   });
 
-  test("fetch Response is NOT silently consumed as binary", async () => {
-    // Regression: Response exposes arrayBuffer() — earlier duck-typing took
-    // the binary path and drained the body. Now requires `size` (Blob-only),
-    // so Response is rejected at toBytes() instead.
+  test("fetch Response is rejected up front (body not consumed, URL not leaked)", async () => {
+    // Regression: Response exposes both arrayBuffer() and .url — both paths
+    // previously produced silently wrong output. Now rejected explicitly.
     const res = new Response(PNG);
     await expect(toChatImagePart(res as unknown as Blob)).rejects.toBeInstanceOf(UnifiedError);
-    // body must still be readable by the caller — wasn't drained.
+    // Body still readable — wasn't drained.
     const remaining = new Uint8Array(await res.arrayBuffer());
     expect(remaining).toEqual(PNG);
+  });
+
+  test("fetch Request is rejected up front (URL not leaked)", async () => {
+    const req = new Request("https://example.com/x.png");
+    await expect(toChatImagePart(req as unknown as Blob)).rejects.toBeInstanceOf(UnifiedError);
   });
 
   test("user wrapper { url, arrayBuffer } takes the URL path (not binary)", async () => {

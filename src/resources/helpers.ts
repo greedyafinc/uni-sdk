@@ -144,6 +144,23 @@ async function normaliseSource(source: MultimodalSource, opts: PartOptions): Pro
         "Pass raw base64 as `{ data, mimeType }` instead.",
     );
   }
+  // fetch Response/Request expose both a string `.url` and an `arrayBuffer()`
+  // method, so they'd otherwise satisfy isUrlInput (taking the URL-passthrough
+  // path with the fetched/request URL) or sneak past the duck-typed binary
+  // branch. Reject them explicitly with a useful message rather than silently
+  // emitting a URL part the caller didn't intend.
+  if (typeof Response !== "undefined" && source instanceof Response) {
+    throw inputError(
+      "fetch Response is not a supported multimodal source. Convert it first " +
+        "via `await res.blob()` or `new Uint8Array(await res.arrayBuffer())`.",
+    );
+  }
+  if (typeof Request !== "undefined" && source instanceof Request) {
+    throw inputError(
+      "fetch Request is not a supported multimodal source. Pass the underlying " +
+        "URL string or body bytes instead.",
+    );
+  }
   // Object-shape discriminators: refuse ambiguous inputs that set more than
   // one transport (e.g. { url, fileId }) so callers don't silently get a
   // different wire shape than they expected.
@@ -182,6 +199,12 @@ async function normaliseSource(source: MultimodalSource, opts: PartOptions): Pro
         mimeType: opts.mimeType ?? source.mimeType,
         filename: opts.filename,
       };
+    }
+    // hits === 1 but no discriminator matched: only realistic case is
+    // `{ data }` without `mimeType`. Give a specific message rather than
+    // letting the input fall through to the generic toBytes() error.
+    if (typeof (source as { data?: unknown }).data === "string") {
+      throw inputError("raw base64 source requires `mimeType` (got `{ data }` without `mimeType`)");
     }
   }
 
