@@ -119,6 +119,65 @@ Bootstrap tries cached keychain tokens → environment-supplied handoff port →
 discovery-file handoff → fresh browser PKCE. Refresh tokens are rotated
 transparently on 401.
 
+## Error handling
+
+The SDK throws typed errors from `@unifiedai/sdk` so consumers can branch on
+the failure mode without parsing strings. All HTTP errors subclass
+`UnifiedAIError`, which in turn subclasses `Error` — `instanceof Error` keeps
+working for catch-all handlers.
+
+| Class                  | HTTP   | Extra fields                                |
+| ---------------------- | ------ | ------------------------------------------- |
+| `BadRequestError`      | 400    | —                                           |
+| `AuthenticationError`  | 401    | —                                           |
+| `NotFoundError`        | 404    | —                                           |
+| `RateLimitError`       | 429    | `retryAfter` (seconds)                      |
+| `UsageLimitError`      | 429    | `periodCost`, `limit`, `resetAt`, `isUsageLimit` |
+| `ServerError`          | 5xx    | —                                           |
+| `UnifiedAIError`       | other  | base — has `code`, `status`, `body`, `headers`, `requestId` |
+| `UnifiedAIAuthError`   | 401    | refresh-token failures; extends `AuthenticationError` |
+
+`RateLimitError` covers transient throttling (e.g. too many requests in a
+short window — wait and retry). `UsageLimitError` signals plan-quota
+exhaustion for the billing period; retrying won't help. They are
+**siblings**, not parent/child — `UsageLimitError` does *not* pass an
+`instanceof RateLimitError` check, so a generic retry wrapper must catch
+both explicitly. Always check the more specific class first.
+
+```ts
+import {
+  UnifiedAI,
+  AuthenticationError,
+  RateLimitError,
+  UsageLimitError,
+  BadRequestError,
+  ServerError,
+  UnifiedAIError,
+} from "@unifiedai/sdk";
+
+const sdk = new UnifiedAI({ token: process.env.UNIFIEDAI_TOKEN });
+
+try {
+  await sdk.chat.completions.create({ model: "gpt-4o-mini", messages: [...] });
+} catch (err) {
+  if (err instanceof UsageLimitError) {
+    console.error(`Quota exhausted: $${err.periodCost} / $${err.limit}`);
+  } else if (err instanceof RateLimitError) {
+    console.error(`Throttled — retry in ${err.retryAfter ?? "?"}s`);
+  } else if (err instanceof AuthenticationError) {
+    console.error("API key invalid or revoked");
+  } else if (err instanceof BadRequestError) {
+    console.error("Request rejected:", err.body);
+  } else if (err instanceof ServerError) {
+    console.error("Upstream failure:", err.requestId);
+  } else if (err instanceof UnifiedAIError) {
+    console.error(`Unexpected ${err.status}:`, err.message);
+  } else {
+    throw err;
+  }
+}
+```
+
 ## Project layout
 
 ```

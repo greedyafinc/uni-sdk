@@ -16,7 +16,8 @@ import {
   UnifiedAIAuthError,
   UnifiedAIError,
   UnifiedError,
-  httpErrorCodeFromStatus,
+  buildHttpError,
+  headersToRecord,
 } from "./errors";
 import type { Identity } from "./identity";
 
@@ -133,17 +134,18 @@ export class UnifiedAI extends Core {
           `request still 401 after refresh: ${formatBody(body)}`,
           401,
           body,
+          headersToRecord(res.headers),
         );
       }
     }
     if (!res.ok) {
       const status = res.status;
       const body = await readErrorBody(res);
-      throw new UnifiedAIError(
-        httpErrorCodeFromStatus(status),
+      throw buildHttpError(
         httpErrorMessage("request", path, status, body),
         status,
         body,
+        headersToRecord(res.headers),
       );
     }
     if (res.status === 204) return undefined as T;
@@ -188,17 +190,18 @@ export class UnifiedAI extends Core {
           `stream still 401 after refresh: ${formatBody(body)}`,
           401,
           body,
+          headersToRecord(res.headers),
         );
       }
     }
     if (!res.ok) {
       const status = res.status;
       const body = await readErrorBody(res);
-      throw new UnifiedAIError(
-        httpErrorCodeFromStatus(status),
+      throw buildHttpError(
         httpErrorMessage("stream", path, status, body),
         status,
         body,
+        headersToRecord(res.headers),
       );
     }
     if (!res.body) {
@@ -207,6 +210,7 @@ export class UnifiedAI extends Core {
         `stream to ${path} returned no body`,
         res.status,
         undefined,
+        headersToRecord(res.headers),
       );
     }
     // Defence in depth: a 2xx with a non-SSE content-type (e.g. an endpoint that
@@ -220,6 +224,7 @@ export class UnifiedAI extends Core {
         `stream to ${path} expected text/event-stream, got ${ct || "<none>"}`,
         res.status,
         body,
+        headersToRecord(res.headers),
       );
     }
     return res.body;

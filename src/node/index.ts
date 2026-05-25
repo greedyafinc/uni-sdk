@@ -15,6 +15,13 @@ export {
   UnifiedError,
   UnifiedAIError,
   UnifiedAIAuthError,
+  AuthenticationError,
+  BadRequestError,
+  NotFoundError,
+  RateLimitError,
+  UsageLimitError,
+  ServerError,
+  buildHttpError,
   httpErrorCodeFromStatus,
 } from "../core/errors";
 export type {
