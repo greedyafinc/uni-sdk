@@ -269,6 +269,110 @@ describe("LLM streaming", () => {
     expect(count).toBeLessThan(50);
   });
 
+  test("responses stream exposes per-call usage on stream.usage after completion", async () => {
+    api.setFrames([
+      `event: response.created\ndata: ${JSON.stringify({ response: { id: "r1" } })}\n\n`,
+      `event: response.output_text.delta\ndata: ${JSON.stringify({
+        output_index: 0,
+        content_index: 0,
+        delta: "yo",
+      })}\n\n`,
+      `event: response.completed\ndata: ${JSON.stringify({
+        response: {
+          id: "r1",
+          object: "response",
+          created_at: 1,
+          model: "m",
+          output: [],
+          usage: { input_tokens: 7, output_tokens: 13, total_tokens: 20 },
+          status: "completed",
+        },
+      })}\n\n`,
+    ]);
+    const stream = sdk.responses.create({ model: "auto", input: "hi", stream: true });
+    expect(stream.usage).toBeNull();
+    for await (const _ of stream) {
+      // drain
+    }
+    expect(stream.usage).not.toBeNull();
+    expect(stream.usage?.input_tokens).toBe(7);
+    expect(stream.usage?.output_tokens).toBe(13);
+    expect(stream.usage?.total_tokens).toBe(20);
+    expect(stream.usage?.elapsed_ms).toBeGreaterThanOrEqual(0);
+    expect(stream.usage?.tokens_per_second).toBeGreaterThanOrEqual(0);
+  });
+
+  test("chat.completions stream exposes per-call usage from final usage chunk", async () => {
+    api.setFrames([
+      `data: ${JSON.stringify({
+        id: "x",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "m",
+        choices: [{ index: 0, delta: { content: "hi" }, finish_reason: null }],
+      })}\n\n`,
+      `data: ${JSON.stringify({
+        id: "x",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "m",
+        choices: [],
+        usage: { prompt_tokens: 4, completion_tokens: 9, total_tokens: 13 },
+      })}\n\n`,
+      "data: [DONE]\n\n",
+    ]);
+    const stream = sdk.chat.completions.create({
+      model: "auto",
+      messages: [{ role: "user", content: "hi" }],
+      stream: true,
+      stream_options: { include_usage: true },
+    });
+    for await (const _ of stream) {
+      // drain
+    }
+    expect(stream.usage?.input_tokens).toBe(4);
+    expect(stream.usage?.output_tokens).toBe(9);
+    expect(stream.usage?.total_tokens).toBe(13);
+    expect(stream.usage?.elapsed_ms).toBeGreaterThanOrEqual(0);
+  });
+
+  test("messages stream exposes per-call usage merged across message_start + message_delta", async () => {
+    api.setFrames([
+      `event: message_start\ndata: ${JSON.stringify({
+        message: {
+          id: "m1",
+          type: "message",
+          role: "assistant",
+          model: "m",
+          content: [],
+          stop_reason: null,
+          usage: { input_tokens: 11, output_tokens: 0 },
+        },
+      })}\n\n`,
+      `event: content_block_delta\ndata: ${JSON.stringify({
+        index: 0,
+        delta: { type: "text_delta", text: "hi" },
+      })}\n\n`,
+      `event: message_delta\ndata: ${JSON.stringify({
+        delta: { stop_reason: "end_turn" },
+        usage: { output_tokens: 17 },
+      })}\n\n`,
+      `event: message_stop\ndata: ${JSON.stringify({})}\n\n`,
+    ]);
+    const stream = sdk.messages.create({
+      model: "auto",
+      max_tokens: 64,
+      messages: [{ role: "user", content: "hi" }],
+      stream: true,
+    });
+    for await (const _ of stream) {
+      // drain
+    }
+    expect(stream.usage?.input_tokens).toBe(11);
+    expect(stream.usage?.output_tokens).toBe(17);
+    expect(stream.usage?.total_tokens).toBe(28);
+  });
+
   test("non-2xx surfaces UnifiedAIError before iteration", async () => {
     api.setFrames([], { status: 400 });
     let caught: unknown;

@@ -174,6 +174,27 @@ export class Messages {
         if (type === "message_stop") return;
       }
     })();
-    return new UnifiedStream(iter, controller);
+    // Anthropic splits usage across events: input_tokens land on `message_start`,
+    // final output_tokens on `message_delta`. Hold input across events and emit
+    // the combined usage once both are seen.
+    let inputTokens = 0;
+    return new UnifiedStream(iter, controller, (ev) => {
+      if (ev.type === "message_start") {
+        const u = (
+          ev as { message?: { usage?: { input_tokens?: number; output_tokens?: number } } }
+        ).message?.usage;
+        if (u) inputTokens = u.input_tokens ?? 0;
+        return null;
+      }
+      if (ev.type === "message_delta") {
+        const out = (ev as { usage?: { output_tokens?: number } }).usage?.output_tokens ?? 0;
+        return {
+          input_tokens: inputTokens,
+          output_tokens: out,
+          total_tokens: inputTokens + out,
+        };
+      }
+      return null;
+    });
   }
 }
