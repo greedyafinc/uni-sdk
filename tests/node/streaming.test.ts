@@ -336,6 +336,43 @@ describe("LLM streaming", () => {
     expect(stream.usage?.elapsed_ms).toBeGreaterThanOrEqual(0);
   });
 
+  test("messages stream exposes per-call usage merged across message_start + message_delta", async () => {
+    api.setFrames([
+      `event: message_start\ndata: ${JSON.stringify({
+        message: {
+          id: "m1",
+          type: "message",
+          role: "assistant",
+          model: "m",
+          content: [],
+          stop_reason: null,
+          usage: { input_tokens: 11, output_tokens: 0 },
+        },
+      })}\n\n`,
+      `event: content_block_delta\ndata: ${JSON.stringify({
+        index: 0,
+        delta: { type: "text_delta", text: "hi" },
+      })}\n\n`,
+      `event: message_delta\ndata: ${JSON.stringify({
+        delta: { stop_reason: "end_turn" },
+        usage: { output_tokens: 17 },
+      })}\n\n`,
+      `event: message_stop\ndata: ${JSON.stringify({})}\n\n`,
+    ]);
+    const stream = sdk.messages.create({
+      model: "auto",
+      max_tokens: 64,
+      messages: [{ role: "user", content: "hi" }],
+      stream: true,
+    });
+    for await (const _ of stream) {
+      // drain
+    }
+    expect(stream.usage?.input_tokens).toBe(11);
+    expect(stream.usage?.output_tokens).toBe(17);
+    expect(stream.usage?.total_tokens).toBe(28);
+  });
+
   test("non-2xx surfaces UnifiedAIError before iteration", async () => {
     api.setFrames([], { status: 400 });
     let caught: unknown;
