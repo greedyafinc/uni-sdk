@@ -8,11 +8,22 @@ const USER = "user_test";
 const ACCESS_TOKEN = "access_test";
 
 const SAMPLE_USAGE: UsageResponse = {
+  plan: {
+    id: 1,
+    name: "free",
+    limit: 1.0,
+    limit_period_seconds: 86400,
+    monthly_price: null,
+    annual_price: null,
+  },
   period: {
     input_tokens: 1234,
     output_tokens: 567,
     request_count: 8,
     cost: 0.0421,
+    started_at: "2026-05-22T00:00:00Z",
+    resets_at: "2026-05-23T00:00:00Z",
+    days_remaining: 0,
   },
   daily: {
     used: 0.0421,
