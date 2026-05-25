@@ -14,7 +14,17 @@ export type ResponseInputContentPart =
       detail?: "auto" | "low" | "high";
     }
   | {
+      type: "input_audio";
+      input_audio: { data: string; format: "wav" | "mp3" };
+    }
+  | {
+      type: "input_video";
+      video_url?: string;
+      file_id?: string;
+    }
+  | {
       type: "input_file";
+      file_data?: string;
       file_id?: string;
       file_url?: string;
       filename?: string;

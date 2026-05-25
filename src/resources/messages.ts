@@ -5,16 +5,22 @@ import { UnifiedAIError } from "../core/errors";
 
 // ── Content blocks (Anthropic Messages, mirrored from unified-api) ────────────
 
+export type AnthropicImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+
+export type AnthropicImageSource =
+  | { type: "base64"; media_type: AnthropicImageMediaType; data: string }
+  | { type: "url"; url: string }
+  | { type: "file"; file_id: string };
+
+export type AnthropicDocumentSource =
+  | { type: "base64"; media_type: "application/pdf"; data: string }
+  | { type: "url"; url: string }
+  | { type: "file"; file_id: string };
+
 export type AnthropicContentBlock =
   | { type: "text"; text: string }
-  | {
-      type: "image";
-      source: {
-        type: "base64";
-        media_type: "image/jpeg" | "image/png" | "image/gif" | "image/webp";
-        data: string;
-      };
-    }
+  | { type: "image"; source: AnthropicImageSource }
+  | { type: "document"; source: AnthropicDocumentSource }
   | { type: "tool_use"; id: string; name: string; input: unknown }
   | {
       type: "tool_result";
