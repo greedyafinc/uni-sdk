@@ -1,0 +1,57 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/chat/completions",
+        "body": {
+          "model": "google/gemma-4-e4b",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Say hi"
+            }
+          ],
+          "max_tokens": 16
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-length": "436",
+          "content-type": "application/json;charset=utf-8",
+          "date": "Mon, 25 May 2026 02:29:44 GMT"
+        },
+        "body": {
+          "id": "chatcmpl-170c35fe-36c4-4256-b551-78669e184744",
+          "object": "chat.completion",
+          "created": 1779676185,
+          "model": "google/gemma-4-e4b",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "Hi! 😊"
+              },
+              "finish_reason": "stop",
+              "logprobs": null
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 18,
+            "completion_tokens": 3,
+            "total_tokens": 21,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "system_fingerprint": null
+        }
+      }
+    }
+  ]
+}

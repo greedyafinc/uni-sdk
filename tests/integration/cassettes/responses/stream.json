@@ -1,0 +1,28 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/responses",
+        "body": {
+          "model": "google/gemma-4-e4b",
+          "input": "Say hi",
+          "max_output_tokens": 16,
+          "stream": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "no-cache",
+          "connection": "keep-alive",
+          "content-type": "text/event-stream",
+          "date": "Mon, 25 May 2026 02:29:43 GMT",
+          "transfer-encoding": "chunked"
+        },
+        "body": "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_12b75403-12b0-483b-add8-ffbf9fde7865\",\"object\":\"response\",\"created_at\":1779676184,\"model\":\"google/gemma-4-e4b\",\"output\":[],\"status\":\"in_progress\",\"usage\":null}}\n\nevent: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"status\":\"in_progress\"}}\n\nevent: response.content_part.added\ndata: {\"type\":\"response.content_part.added\",\"item_id\":\"resp_12b75403-12b0-483b-add8-ffbf9fde7865\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"resp_12b75403-12b0-483b-add8-ffbf9fde7865\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hi\"}\n\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"resp_12b75403-12b0-483b-add8-ffbf9fde7865\",\"output_index\":0,\"content_index\":0,\"delta\":\"!\"}\n\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"resp_12b75403-12b0-483b-add8-ffbf9fde7865\",\"output_index\":0,\"content_index\":0,\"delta\":\" 👋\"}\n\nevent: response.output_text.done\ndata: {\"type\":\"response.output_text.done\",\"item_id\":\"resp_12b75403-12b0-483b-add8-ffbf9fde7865\",\"output_index\":0,\"content_index\":0,\"text\":\"Hi! 👋\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_12b75403-12b0-483b-add8-ffbf9fde7865\",\"object\":\"response\",\"created_at\":1779676184,\"model\":\"google/gemma-4-e4b\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hi! 👋\"}],\"status\":\"completed\"}],\"status\":\"completed\",\"usage\":{\"input_tokens\":18,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens\":3,\"output_tokens_details\":{\"reasoning_tokens\":0},\"total_tokens\":21}}}\n\ndata: [DONE]\n\n",
+        "stream": true
+      }
+    }
+  ]
+}
