@@ -35,6 +35,7 @@ export { parseSSE } from "./core/_internal/sse";
 
 // Resource modules — all browser-safe.
 export * from "./resources/chat";
+export * from "./resources/images";
 export * from "./resources/messages";
 export * from "./resources/models";
 export * from "./resources/responses";
