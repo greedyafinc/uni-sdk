@@ -25,6 +25,15 @@ export interface RequestOptions {
   body?: unknown;
   query?: Record<string, string | number | boolean | undefined>;
   signal?: AbortSignal;
+  /**
+   * Allowlist of acceptable response Content-Type values for `requestBinary`.
+   * Matches by exact MIME (e.g. "video/mp4") or by `<type>/` prefix (e.g.
+   * "audio/" matches any audio/* subtype). When set, a 200 with a
+   * content-type outside this list is rejected with a `UnifiedAIError`
+   * instead of being silently returned as bytes — defense against gateway
+   * error pages and provider misconfiguration. Ignored by `request`/`stream`.
+   */
+  acceptedContentTypes?: readonly string[];
 }
 
 export class Core {
@@ -44,6 +53,17 @@ export class Core {
 
   async request<T>(_path: string, _options: RequestOptions = {}): Promise<T> {
     throw new UnifiedError("not_implemented", "Core.request is not wired up yet");
+  }
+
+  async requestBinary(
+    _path: string,
+    _options: RequestOptions = {},
+  ): Promise<{
+    bytes: ArrayBuffer;
+    contentType: string;
+    headers: Readonly<Record<string, string>>;
+  }> {
+    throw new UnifiedError("not_implemented", "Core.requestBinary is not wired up yet");
   }
 
   async stream(_path: string, _options: RequestOptions = {}): Promise<ReadableStream<Uint8Array>> {

@@ -1,5 +1,32 @@
+import { Buffer } from "node:buffer";
 import type { Cassette, CassetteInteraction } from "./cassette";
 import { saveCassette } from "./cassette";
+
+// Content types we treat as text-safe to embed in the JSON cassette. Anything
+// outside this set (audio/*, video/*, image/*, application/octet-stream, ...)
+// is captured as base64 so the bytes round-trip losslessly.
+//
+// Match by exact MIME, by `<type>/` prefix (e.g. `text/` matches text/markdown
+// and any other text/* subtype), or by structured-syntax suffix (`+json` and
+// `+xml` per RFC 6838 — covers application/problem+json, vnd.api+json, etc.).
+// The old recorder used `.includes("application/json")` which silently caught
+// `+json` variants; keep that breadth so error cassettes stay readable.
+const TEXT_EXACT = new Set<string>([
+  "application/json",
+  "application/xml",
+  "application/x-www-form-urlencoded",
+]);
+const TEXT_PREFIXES = ["text/"] as const;
+const TEXT_SUFFIXES = ["+json", "+xml"] as const;
+
+function isTextContentType(ct: string): boolean {
+  const norm = ct.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (!norm) return true; // empty content-type — treat as text (legacy)
+  if (TEXT_EXACT.has(norm)) return true;
+  if (TEXT_PREFIXES.some((p) => norm.startsWith(p))) return true;
+  if (TEXT_SUFFIXES.some((s) => norm.endsWith(s))) return true;
+  return false;
+}
 
 export interface Recorder {
   baseUrl: string;
@@ -45,18 +72,41 @@ export async function startRecorder(opts: RecorderOptions = {}): Promise<Recorde
 
       const respHeaders: Record<string, string> = {};
       upstreamRes.headers.forEach((v, k) => {
+        // Bun's fetch auto-decompresses the body before handing it to
+        // arrayBuffer(), so the upstream content-encoding (gzip/br/deflate)
+        // would lie about the bytes we record. Drop it. content-length
+        // similarly describes the *compressed* size and won't match the
+        // decoded bytes we replay.
+        const lower = k.toLowerCase();
+        if (lower === "content-encoding" || lower === "content-length") return;
         respHeaders[k] = v;
       });
-      const respText = await upstreamRes.text();
-      const isJson = respHeaders["content-type"]?.includes("application/json") ?? false;
-      const isSse = respHeaders["content-type"]?.includes("text/event-stream") ?? false;
-      let respBody: unknown = respText;
-      if (isJson && respText) {
-        try {
-          respBody = JSON.parse(respText);
-        } catch {
-          respBody = respText;
+
+      const ct = respHeaders["content-type"] ?? "";
+      const isJson = ct.includes("application/json");
+      const isSse = ct.includes("text/event-stream");
+      const isText = isTextContentType(ct);
+
+      // For binary responses (audio/video bytes) we must keep the raw bytes —
+      // arrayBuffer() once, then both record (base64) and replay (passthrough).
+      const respBuf = await upstreamRes.arrayBuffer();
+      const respBytes = new Uint8Array(respBuf);
+
+      let recordedBody: unknown;
+      let recordedBase64: string | undefined;
+      if (isText) {
+        const decoded = new TextDecoder().decode(respBytes);
+        if (isJson && decoded) {
+          try {
+            recordedBody = JSON.parse(decoded);
+          } catch {
+            recordedBody = decoded;
+          }
+        } else {
+          recordedBody = decoded;
         }
+      } else {
+        recordedBase64 = Buffer.from(respBytes).toString("base64");
       }
 
       if (activeName) {
@@ -69,13 +119,15 @@ export async function startRecorder(opts: RecorderOptions = {}): Promise<Recorde
           response: {
             status: upstreamRes.status,
             headers: respHeaders,
-            body: respBody,
+            ...(recordedBase64 !== undefined
+              ? { bodyBase64: recordedBase64 }
+              : { body: recordedBody }),
             ...(isSse ? { stream: true } : {}),
           },
         });
       }
 
-      return new Response(respText, {
+      return new Response(respBytes, {
         status: upstreamRes.status,
         headers: respHeaders,
       });

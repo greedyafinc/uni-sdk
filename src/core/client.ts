@@ -1,3 +1,4 @@
+import { Audio } from "../resources/audio";
 import { Chat } from "../resources/chat";
 import { Embeddings } from "../resources/embeddings";
 import { Helpers } from "../resources/helpers";
@@ -6,6 +7,7 @@ import { Messages } from "../resources/messages";
 import { Models } from "../resources/models";
 import { Responses } from "../resources/responses";
 import { Usage } from "../resources/usage";
+import { Videos } from "../resources/videos";
 import {
   drainResponse,
   formatBody,
@@ -57,6 +59,8 @@ export class UnifiedAI extends Core {
   readonly responses: Responses = new Responses(this);
   readonly messages: Messages = new Messages(this);
   readonly images: Images = new Images(this);
+  readonly audio: Audio = new Audio(this);
+  readonly videos: Videos = new Videos(this);
   readonly embeddings: Embeddings = new Embeddings(this);
   readonly helpers: Helpers = new Helpers();
 
@@ -152,6 +156,115 @@ export class UnifiedAI extends Core {
     }
     if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
+  }
+
+  /**
+   * Issue a request and return the raw response bytes plus selected metadata.
+   * Used for binary endpoints — audio TTS bytes, video content downloads —
+   * where the response is not JSON. Shares the same 401-refresh and typed-
+   * error mapping as {@link request}.
+   */
+  override async requestBinary(
+    path: string,
+    options: RequestOptions = {},
+  ): Promise<{
+    bytes: ArrayBuffer;
+    contentType: string;
+    headers: Readonly<Record<string, string>>;
+  }> {
+    const initialToken = await this.getInitialAccessToken();
+    const url = this.buildUrl(path, options.query);
+    const isMultipart = typeof FormData !== "undefined" && options.body instanceof FormData;
+    const bodyInit: BodyInit | undefined = isMultipart
+      ? (options.body as FormData)
+      : options.body !== undefined
+        ? JSON.stringify(options.body)
+        : undefined;
+    const send = (accessToken: string) => {
+      const init: RequestInit = {
+        method: options.method ?? "GET",
+        headers: this.buildHeaders(accessToken, bodyInit !== undefined && !isMultipart),
+      };
+      if (bodyInit !== undefined) init.body = bodyInit;
+      if (options.signal) init.signal = options.signal;
+      return this.options.fetch(url, init);
+    };
+
+    let res = await send(initialToken);
+    if (res.status === 401) {
+      await drainResponse(res);
+      let freshToken: string;
+      try {
+        freshToken = await this.refreshAccessToken();
+      } catch (err) {
+        await this.onAuthFailure();
+        throw err;
+      }
+      res = await send(freshToken);
+      if (res.status === 401) {
+        const body = await readErrorBody(res);
+        await this.onAuthFailure();
+        throw new UnifiedAIAuthError(
+          "auth_retry_still_unauthorized",
+          `request still 401 after refresh: ${formatBody(body)}`,
+          401,
+          body,
+          headersToRecord(res.headers),
+        );
+      }
+    }
+    if (!res.ok) {
+      const status = res.status;
+      const body = await readErrorBody(res);
+      throw buildHttpError(
+        httpErrorMessage("requestBinary", path, status, body),
+        status,
+        body,
+        headersToRecord(res.headers),
+      );
+    }
+    const rawCt = res.headers.get("content-type") ?? "";
+    const headers = headersToRecord(res.headers);
+    // 204 No Content has no body by definition. Mirror request()'s
+    // short-circuit so callers don't receive a 0-byte buffer that looks
+    // like a successful download. Drain first — a misbehaving gateway can
+    // attach a body to a 204 and leaving it un-read prevents keep-alive
+    // socket reuse on undici/Bun.
+    if (res.status === 204) {
+      await drainResponse(res);
+      throw new UnifiedAIError(
+        "request_failed",
+        `requestBinary to ${path} returned 204 No Content (no bytes to return)`,
+        204,
+        undefined,
+        headers,
+      );
+    }
+    // Defense against gateway error pages and provider misconfiguration: a
+    // 200 with an unexpected Content-Type (HTML error page, JSON envelope)
+    // would otherwise be silently returned as `audio` or `video` bytes.
+    // Mirrors the analogous guard in stream() at the SSE content-type check.
+    if (options.acceptedContentTypes && options.acceptedContentTypes.length > 0) {
+      const ct = (rawCt.split(";")[0] ?? "").trim().toLowerCase();
+      const ok = options.acceptedContentTypes.some((accepted) => {
+        const a = accepted.toLowerCase();
+        return a.endsWith("/") ? ct.startsWith(a) : ct === a;
+      });
+      if (!ok) {
+        // Drain the body so the connection can be reused; cap the peek to
+        // avoid swallowing megabytes of HTML into Error.message.
+        const peek = (await readErrorBody(res)) ?? "";
+        throw new UnifiedAIError(
+          "request_failed",
+          `requestBinary to ${path} expected one of [${options.acceptedContentTypes.join(", ")}], got ${rawCt || "<none>"}`,
+          res.status,
+          peek,
+          headers,
+        );
+      }
+    }
+    const bytes = await res.arrayBuffer();
+    return { bytes, contentType: rawCt, headers };
   }
 
   override async stream(

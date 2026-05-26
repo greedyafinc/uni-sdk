@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import type { Cassette, CassetteInteraction } from "./cassette";
 import { loadCassette } from "./cassette";
 
@@ -64,6 +65,13 @@ export async function startReplayServer(): Promise<ReplayServer> {
 
       const { response } = next;
       const headers = { ...response.headers };
+      // Binary cassettes carry their body as base64 — decode and replay raw
+      // bytes so the SDK can read them via `arrayBuffer()` without going
+      // through JSON.stringify (which would corrupt non-text payloads).
+      if (typeof response.bodyBase64 === "string") {
+        const bytes = Uint8Array.from(Buffer.from(response.bodyBase64, "base64"));
+        return new Response(bytes, { status: response.status, headers });
+      }
       const payload =
         typeof response.body === "string" ? response.body : JSON.stringify(response.body);
       return new Response(payload, { status: response.status, headers });

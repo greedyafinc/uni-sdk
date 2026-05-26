@@ -1,0 +1,104 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/videos",
+        "body": {
+          "prompt": "a small red square spinning",
+          "model": "veo-3.1-lite-generate-001",
+          "seconds": "4",
+          "size": "1280x720"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": "projects/test-proj/locations/us-central1/publishers/google/models/veo-3.1-lite-generate-001/operations/abc-123",
+          "object": "video",
+          "model": "veo-3.1-lite-generate-001",
+          "status": "queued",
+          "progress": 0,
+          "created_at": 1779676165,
+          "completed_at": null,
+          "expires_at": null,
+          "seconds": "4",
+          "size": "1280x720",
+          "error": null,
+          "remixed_from_video_id": null
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/videos/projects%2Ftest-proj%2Flocations%2Fus-central1%2Fpublishers%2Fgoogle%2Fmodels%2Fveo-3.1-lite-generate-001%2Foperations%2Fabc-123",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": "projects/test-proj/locations/us-central1/publishers/google/models/veo-3.1-lite-generate-001/operations/abc-123",
+          "object": "video",
+          "model": "veo-3.1-lite-generate-001",
+          "status": "in_progress",
+          "progress": 50,
+          "created_at": null,
+          "completed_at": null,
+          "expires_at": null,
+          "seconds": null,
+          "size": null,
+          "error": null,
+          "remixed_from_video_id": null
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/videos/projects%2Ftest-proj%2Flocations%2Fus-central1%2Fpublishers%2Fgoogle%2Fmodels%2Fveo-3.1-lite-generate-001%2Foperations%2Fabc-123",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": "projects/test-proj/locations/us-central1/publishers/google/models/veo-3.1-lite-generate-001/operations/abc-123",
+          "object": "video",
+          "model": "veo-3.1-lite-generate-001",
+          "status": "completed",
+          "progress": 100,
+          "created_at": null,
+          "completed_at": null,
+          "expires_at": null,
+          "seconds": null,
+          "size": null,
+          "error": null,
+          "remixed_from_video_id": null
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/videos/projects%2Ftest-proj%2Flocations%2Fus-central1%2Fpublishers%2Fgoogle%2Fmodels%2Fveo-3.1-lite-generate-001%2Foperations%2Fabc-123/content",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "video/mp4"
+        },
+        "bodyBase64": "AAAAIGZ0eXBpc29tAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      }
+    }
+  ]
+}
