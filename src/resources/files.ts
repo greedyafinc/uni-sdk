@@ -24,20 +24,60 @@ export interface FileUploadOptions {
 
 export interface FileUploadResponse {
   /**
-   * Stable id for the uploaded file. **Today, prefer `image_url`** when
-   * referencing this upload in `responses.create` / `chat.completions.create`
-   * / `images.edit`: the backend currently forwards Supabase-issued `file_id`s
-   * to upstream providers verbatim instead of resolving them to signed URLs,
-   * which causes providers to reject with "Failed to decode image data".
-   * The id is still useful as a stable handle in your own code (it survives
-   * across SDK versions and request retries), and will start working as a
-   * model input once the backend's file-resolution layer ships.
+   * Stable id for the uploaded file. Pass it as `file_id` to any multimodal
+   * content part (`input_image`, `input_audio`, `input_video`, `input_file`,
+   * or chat `file`) across `responses.create`, `chat.completions.create`,
+   * and `messages.create` — the gateway resolves it server-side to the
+   * right transport for the routed provider. Also acceptable wherever an
+   * `image_url`-shaped reference is taken (e.g. `images.edit`).
    */
   file_id: string;
   /** Time-limited signed URL (the backend currently expires it after ~1h). */
   image_url: string;
   /** Optional expiry timestamp, if the backend includes it. */
   expires_at?: string;
+}
+
+/**
+ * A file managed by the gateway. Returned by `files.create`, `files.list`,
+ * and `files.retrieve`. The `id` is usable as a `file_id` in any multimodal
+ * content part across `chat.completions.create`, `responses.create`, and
+ * `messages.create` — the gateway resolves it to the right transport for
+ * the routed provider at request time.
+ */
+export interface FileObject {
+  id: string;
+  filename: string;
+  mime_type: string;
+  bytes: number;
+  /** Free-form tag from `create({ purpose })`. Default is `"assistants"`. */
+  purpose: string;
+  /** ISO 8601 timestamp. */
+  created_at: string;
+}
+
+export interface FileListResponse {
+  data: FileObject[];
+}
+
+export interface FileDeleteResponse {
+  id: string;
+  deleted: boolean;
+}
+
+export interface FileCreateOptions extends FileUploadOptions {
+  /** Free-form tag stored on the file. Defaults to `"assistants"`. */
+  purpose?: string;
+}
+
+export interface FileContent {
+  bytes: ArrayBuffer;
+  contentType: string;
+  filename?: string;
+}
+
+export interface FileRequestOptions {
+  signal?: AbortSignal;
 }
 
 function inputError(message: string): UnifiedError {
@@ -285,16 +325,33 @@ async function normalise(
 }
 
 /**
- * Files resource. Wraps the unified-api file upload endpoint and returns a
- * stable `file_id` that can be passed to `images.edit`, `responses.create`,
- * and `chat.completions.create` in place of inline bytes.
+ * Files resource. Wraps the unified-api file endpoints.
  *
- * The upload endpoint is image-only today; non-image payloads will be rejected
- * by the backend.
+ * Two upload surfaces are available:
+ *   - `upload()` — image-only convenience that also returns a signed
+ *     `image_url`, intended for `images.edit` callers who want both a stable
+ *     handle and a URL they can pass directly back as `image_url`.
+ *   - `create()` — general-purpose upload that accepts any allowed MIME
+ *     (image, audio, video, PDF) and returns a `FileObject` with metadata.
+ *     Use this for non-image inputs to `chat.completions.create`,
+ *     `responses.create`, and `messages.create`.
+ *
+ * Files created via either path are managed through the same surface:
+ * `list()`, `retrieve(id)`, `del(id)`, and `content(id)` for raw bytes.
+ *
+ * The returned `file_id` is usable as a multimodal `file_id` reference in
+ * any content part (`input_image`, `input_audio`, `input_video`,
+ * `input_file`, or chat `file`); the gateway resolves it server-side.
  */
 export class Files {
   constructor(private readonly client: Core) {}
 
+  /**
+   * Upload a user-supplied reference image and return both a stable
+   * `file_id` and a short-lived signed `image_url` that can be passed
+   * back to `images.edit` as `image_url`. Image-only — for audio / video /
+   * PDF uploads, use `create()` instead.
+   */
   async upload(
     source: FileUploadSource,
     options: FileUploadOptions = {},
@@ -315,5 +372,89 @@ export class Files {
     const req: RequestOptions = { method: "POST", body: form };
     if (options.signal) req.signal = options.signal;
     return this.client.request<FileUploadResponse>("/api/v1/images/uploads", req);
+  }
+
+  /**
+   * Upload a file of any allowed MIME type (image, audio, video, PDF) to
+   * the gateway. Returns a `FileObject` whose `id` can be passed as
+   * `file_id` to any multimodal content part. Unlike `upload()`, this does
+   * NOT return a signed URL — use `content(id)` to fetch raw bytes back, or
+   * call `upload()` instead if you need an `image_url` for `images.edit`.
+   */
+  async create(
+    source: FileUploadSource,
+    options: FileCreateOptions = {},
+  ): Promise<FileObject> {
+    if (options.signal?.aborted) {
+      throw new UnifiedError("aborted", "files.create aborted before request was sent");
+    }
+    const { blob, filename } = await normalise(source, options);
+    if (options.signal?.aborted) {
+      throw new UnifiedError("aborted", "files.create aborted before request was sent");
+    }
+    const form = new FormData();
+    form.append("file", blob, filename || defaultFilenameFor(blob.type));
+    if (options.purpose) form.append("purpose", options.purpose);
+    const req: RequestOptions = { method: "POST", body: form };
+    if (options.signal) req.signal = options.signal;
+    return this.client.request<FileObject>("/api/v1/files", req);
+  }
+
+  /** List files owned by the authenticated user, newest first. */
+  async list(options: FileRequestOptions = {}): Promise<FileListResponse> {
+    const req: RequestOptions = { method: "GET" };
+    if (options.signal) req.signal = options.signal;
+    return this.client.request<FileListResponse>("/api/v1/files", req);
+  }
+
+  /** Fetch metadata for a single file. Throws if the file does not exist or is owned by another user. */
+  async retrieve(id: string, options: FileRequestOptions = {}): Promise<FileObject> {
+    if (!id) throw new UnifiedError("invalid_input", "files.retrieve requires a non-empty id");
+    const req: RequestOptions = { method: "GET" };
+    if (options.signal) req.signal = options.signal;
+    return this.client.request<FileObject>(`/api/v1/files/${encodeURIComponent(id)}`, req);
+  }
+
+  /**
+   * Delete a file. Removes both the metadata row and the underlying blob.
+   * Idempotent against follow-up retrieves (subsequent calls 404).
+   *
+   * Method named `del` because `delete` is a JavaScript reserved word in
+   * some legacy contexts; `del` matches the convention used by other
+   * OpenAI-compatible SDKs.
+   */
+  async del(id: string, options: FileRequestOptions = {}): Promise<FileDeleteResponse> {
+    if (!id) throw new UnifiedError("invalid_input", "files.del requires a non-empty id");
+    const req: RequestOptions = { method: "DELETE" };
+    if (options.signal) req.signal = options.signal;
+    return this.client.request<FileDeleteResponse>(
+      `/api/v1/files/${encodeURIComponent(id)}`,
+      req,
+    );
+  }
+
+  /**
+   * Download the raw bytes of a previously uploaded file. The returned
+   * `contentType` is the value stored at upload time (the same MIME echoed
+   * by `retrieve(id).mime_type`); `filename` mirrors `retrieve(id).filename`.
+   */
+  async content(id: string, options: FileRequestOptions = {}): Promise<FileContent> {
+    if (!id) throw new UnifiedError("invalid_input", "files.content requires a non-empty id");
+    const req: RequestOptions = { method: "GET" };
+    if (options.signal) req.signal = options.signal;
+    const { bytes, contentType, headers } = await this.client.requestBinary(
+      `/api/v1/files/${encodeURIComponent(id)}/content`,
+      req,
+    );
+    // Extract the original filename from Content-Disposition when present —
+    // the backend writes `attachment; filename="..."`. Tolerate single-quote
+    // and unquoted variants for robustness.
+    const cd = headers["content-disposition"];
+    let filename: string | undefined;
+    if (cd) {
+      const m = /filename\*?=(?:UTF-8'')?(?:"([^"]+)"|([^;\s]+))/i.exec(cd);
+      if (m) filename = m[1] ?? m[2];
+    }
+    return filename ? { bytes, contentType, filename } : { bytes, contentType };
   }
 }

@@ -382,3 +382,192 @@ describe("sdk.files — 401 refresh", () => {
     }
   });
 });
+
+// ── /api/v1/files endpoints (UNI-88) ──────────────────────────────────────────
+
+const SAMPLE_FILE_OBJECT = {
+  id: "01234567-89ab-cdef-0123-456789abcdef",
+  filename: "doc.pdf",
+  mime_type: "application/pdf",
+  bytes: 1234,
+  purpose: "assistants",
+  created_at: "2026-05-26T19:00:00Z",
+};
+
+describe("sdk.files — general file management (UNI-88)", () => {
+  let api: FakeApi;
+  let keychain: InMemoryKeychain;
+  let sdk: UnifiedAI;
+
+  beforeEach(async () => {
+    api = await startFakeApi();
+    keychain = new InMemoryKeychain();
+    await seedTokens(keychain);
+    sdk = makeSdk(api, keychain);
+    await sdk.bootstrap();
+  });
+
+  afterEach(async () => {
+    await api.stop();
+  });
+
+  test("create posts multipart to /api/v1/files with purpose field", async () => {
+    api.setResponse({ status: 200, body: SAMPLE_FILE_OBJECT });
+    const pdf = new Blob([Buffer.from("%PDF-1.4\nfake")], {
+      type: "application/pdf",
+    });
+    const res = await sdk.files.create(pdf, {
+      filename: "spec.pdf",
+      purpose: "user_data",
+    });
+
+    expect(res.id).toBe(SAMPLE_FILE_OBJECT.id);
+    expect(res.mime_type).toBe("application/pdf");
+    expect(res.purpose).toBe("assistants"); // echoes whatever the server sent
+
+    const r = api.lastRequest();
+    expect(r.method).toBe("POST");
+    expect(r.path).toBe("/api/v1/files");
+    expect(r.contentType).toContain("multipart/form-data");
+
+    const filePart = extractPart(r.rawBody, "file");
+    expect(filePart?.headers).toContain('filename="spec.pdf"');
+    expect(filePart?.headers.toLowerCase()).toContain(
+      "content-type: application/pdf",
+    );
+    const purposePart = extractPart(r.rawBody, "purpose");
+    expect(purposePart?.payload.toString("utf8")).toBe("user_data");
+  });
+
+  test("create omits the purpose field when not provided", async () => {
+    api.setResponse({ status: 200, body: SAMPLE_FILE_OBJECT });
+    await sdk.files.create(new Blob([PNG_1X1], { type: "image/png" }));
+    const r = api.lastRequest();
+    expect(extractPart(r.rawBody, "purpose")).toBeNull();
+  });
+
+  test("list GETs /api/v1/files and returns the data array", async () => {
+    api.setResponse({
+      status: 200,
+      body: { data: [SAMPLE_FILE_OBJECT] },
+    });
+    const res = await sdk.files.list();
+    expect(res.data).toHaveLength(1);
+    expect(res.data[0]?.id).toBe(SAMPLE_FILE_OBJECT.id);
+
+    const r = api.lastRequest();
+    expect(r.method).toBe("GET");
+    expect(r.path).toBe("/api/v1/files");
+    expect(r.auth).toBe(`Bearer ${ACCESS_TOKEN}`);
+  });
+
+  test("retrieve GETs /api/v1/files/:id with the id url-encoded", async () => {
+    api.setResponse({ status: 200, body: SAMPLE_FILE_OBJECT });
+    const res = await sdk.files.retrieve(SAMPLE_FILE_OBJECT.id);
+    expect(res.id).toBe(SAMPLE_FILE_OBJECT.id);
+
+    const r = api.lastRequest();
+    expect(r.method).toBe("GET");
+    expect(r.path).toBe(`/api/v1/files/${SAMPLE_FILE_OBJECT.id}`);
+  });
+
+  test("retrieve rejects empty id without hitting the network", async () => {
+    await expect(sdk.files.retrieve("")).rejects.toThrow(/non-empty id/);
+  });
+
+  test("del DELETEs /api/v1/files/:id and returns {id, deleted: true}", async () => {
+    api.setResponse({
+      status: 200,
+      body: { id: SAMPLE_FILE_OBJECT.id, deleted: true },
+    });
+    const res = await sdk.files.del(SAMPLE_FILE_OBJECT.id);
+    expect(res.deleted).toBe(true);
+    expect(res.id).toBe(SAMPLE_FILE_OBJECT.id);
+
+    const r = api.lastRequest();
+    expect(r.method).toBe("DELETE");
+    expect(r.path).toBe(`/api/v1/files/${SAMPLE_FILE_OBJECT.id}`);
+  });
+
+  test("del rejects empty id without hitting the network", async () => {
+    await expect(sdk.files.del("")).rejects.toThrow(/non-empty id/);
+  });
+});
+
+describe("sdk.files.content — binary download (UNI-88)", () => {
+  // content() uses requestBinary which validates the response Content-Type
+  // against an allowlist, so the standard FakeApi (which forces JSON) won't
+  // work. Stand up a dedicated server that returns image/png bytes with
+  // the same Content-Disposition the backend emits.
+  test("content downloads raw bytes and parses the filename from Content-Disposition", async () => {
+    const PDF_BYTES = Buffer.from("%PDF-1.4\n%fake-pdf-bytes");
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: () => {
+        return new Response(PDF_BYTES, {
+          status: 200,
+          headers: {
+            "content-type": "application/pdf",
+            "content-disposition": 'attachment; filename="report.pdf"',
+          },
+        });
+      },
+    });
+    try {
+      const keychain = new InMemoryKeychain();
+      await seedTokens(keychain);
+      const sdk = new UnifiedAI({
+        appId: CLIENT,
+        apiUrl: `http://127.0.0.1:${server.port}`,
+        keychain,
+        env: { read: () => ({ handoffPort: undefined, clientId: undefined }) },
+        discovery: { read: async () => null },
+        openUrl: async () => {},
+      });
+      await sdk.bootstrap();
+
+      const res = await sdk.files.content(SAMPLE_FILE_OBJECT.id);
+      expect(res.contentType).toBe("application/pdf");
+      expect(res.filename).toBe("report.pdf");
+      // Bytes round-trip exactly.
+      expect(Buffer.from(res.bytes).equals(PDF_BYTES)).toBe(true);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("content tolerates Content-Disposition without quotes", async () => {
+    const BYTES = Buffer.from([1, 2, 3, 4]);
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: () => {
+        return new Response(BYTES, {
+          status: 200,
+          headers: {
+            "content-type": "application/octet-stream",
+            "content-disposition": "attachment; filename=raw.bin",
+          },
+        });
+      },
+    });
+    try {
+      const keychain = new InMemoryKeychain();
+      await seedTokens(keychain);
+      const sdk = new UnifiedAI({
+        appId: CLIENT,
+        apiUrl: `http://127.0.0.1:${server.port}`,
+        keychain,
+        env: { read: () => ({ handoffPort: undefined, clientId: undefined }) },
+        discovery: { read: async () => null },
+        openUrl: async () => {},
+      });
+      await sdk.bootstrap();
+      const res = await sdk.files.content("any-id");
+      expect(res.filename).toBe("raw.bin");
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
