@@ -84,6 +84,22 @@ export interface ImageVariationParams {
   conversation_id?: string;
 }
 
+// ── Upload (multipart) ─────────────────────────────────────────────────────────
+
+export interface ImageUploadParams {
+  /** Source image. Browser: `File` or `Blob`. */
+  file: Blob;
+  /** Optional filename for the multipart part. Defaults to "image.png". */
+  filename?: string;
+}
+
+export interface ImageUploadResponse {
+  /** Stable ID for the uploaded file. */
+  file_id: string;
+  /** Time-limited signed URL — pass back to `images.edit` as `image_url`. */
+  image_url: string;
+}
+
 // ── Response ───────────────────────────────────────────────────────────────────
 
 export interface ImageData {
@@ -135,6 +151,20 @@ export class Images {
     const req: RequestOptions = { method: "POST", body: params };
     if (options.signal) req.signal = options.signal;
     return this.client.request<ImageResponse>("/api/v1/images/edits", req);
+  }
+
+  upload(
+    params: ImageUploadParams,
+    options: ImageRequestOptions = {},
+  ): Promise<ImageUploadResponse> {
+    const form = new FormData();
+    // `||` (not `??`) so empty-string filenames also fall back to the default —
+    // some browser File sources (clipboard paste, drag-drop synth Blobs) produce
+    // `name === ""`, which would otherwise send a multipart part with no name.
+    form.append("file", params.file, params.filename || "image.png");
+    const req: RequestOptions = { method: "POST", body: form };
+    if (options.signal) req.signal = options.signal;
+    return this.client.request<ImageUploadResponse>("/api/v1/images/uploads", req);
   }
 
   createVariation(
