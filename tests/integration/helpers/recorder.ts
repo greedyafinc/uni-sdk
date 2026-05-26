@@ -37,7 +37,10 @@ const BEARER_RE = /(Bearer\s+)([A-Za-z0-9._-]{20,})/gi;
 
 function redactString(s: string): string {
   return s
-    .replace(SUPABASE_SIGNED_URL_RE, "https://example.test/storage/v1/object/sign/REDACTED?token=REDACTED")
+    .replace(
+      SUPABASE_SIGNED_URL_RE,
+      "https://example.test/storage/v1/object/sign/REDACTED?token=REDACTED",
+    )
     .replace(BEARER_RE, "$1REDACTED");
 }
 

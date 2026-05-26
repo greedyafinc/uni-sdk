@@ -157,9 +157,9 @@ describe("sdk.files", () => {
 
     const part = extractPart(r.rawBody, "file");
     expect(part).not.toBeNull();
-    expect(part!.headers).toContain('filename="source.png"');
-    expect(part!.headers.toLowerCase()).toContain("content-type: image/png");
-    expect(part!.payload.equals(PNG_1X1)).toBe(true);
+    expect(part?.headers).toContain('filename="source.png"');
+    expect(part?.headers.toLowerCase()).toContain("content-type: image/png");
+    expect(part?.payload.equals(PNG_1X1)).toBe(true);
   });
 
   test("upload accepts a Uint8Array with explicit content-type", async () => {
@@ -169,9 +169,9 @@ describe("sdk.files", () => {
     const r = api.lastRequest();
     expect(r.contentType).toContain("multipart/form-data");
     const part = extractPart(r.rawBody, "file");
-    expect(part!.headers).toContain('filename="raw.jpg"');
-    expect(part!.headers.toLowerCase()).toContain("content-type: image/jpeg");
-    expect(part!.payload.equals(Buffer.from(bytes))).toBe(true);
+    expect(part?.headers).toContain('filename="raw.jpg"');
+    expect(part?.headers.toLowerCase()).toContain("content-type: image/jpeg");
+    expect(part?.payload.equals(Buffer.from(bytes))).toBe(true);
   });
 
   test("upload sniffs PNG magic bytes when no contentType is provided", async () => {
@@ -180,10 +180,10 @@ describe("sdk.files", () => {
     await sdk.files.upload(new Uint8Array(PNG_1X1));
     const r = api.lastRequest();
     const part = extractPart(r.rawBody, "file");
-    expect(part!.headers.toLowerCase()).toContain("content-type: image/png");
+    expect(part?.headers.toLowerCase()).toContain("content-type: image/png");
     // Default filename derived from the sniffed mime.
-    expect(part!.headers).toContain('filename="upload.png"');
-    expect(part!.payload.equals(PNG_1X1)).toBe(true);
+    expect(part?.headers).toContain('filename="upload.png"');
+    expect(part?.payload.equals(PNG_1X1)).toBe(true);
   });
 
   test("upload sniffs PNG magic bytes when Blob.type is empty", async () => {
@@ -194,8 +194,8 @@ describe("sdk.files", () => {
     await sdk.files.upload(blob);
     const r = api.lastRequest();
     const part = extractPart(r.rawBody, "file");
-    expect(part!.headers.toLowerCase()).toContain("content-type: image/png");
-    expect(part!.headers).toContain('filename="upload.png"');
+    expect(part?.headers.toLowerCase()).toContain("content-type: image/png");
+    expect(part?.headers).toContain('filename="upload.png"');
   });
 
   test("upload accepts a Node Buffer (Uint8Array subclass)", async () => {
@@ -203,11 +203,11 @@ describe("sdk.files", () => {
     await sdk.files.upload(Buffer.from(PNG_1X1), { filename: "buf.png" });
     const r = api.lastRequest();
     const part = extractPart(r.rawBody, "file");
-    expect(part!.headers).toContain('filename="buf.png"');
+    expect(part?.headers).toContain('filename="buf.png"');
     // No contentType passed and buf.png isn't used for sniffing; magic bytes
     // resolve to PNG.
-    expect(part!.headers.toLowerCase()).toContain("content-type: image/png");
-    expect(part!.payload.equals(PNG_1X1)).toBe(true);
+    expect(part?.headers.toLowerCase()).toContain("content-type: image/png");
+    expect(part?.payload.equals(PNG_1X1)).toBe(true);
   });
 
   test("upload accepts a base64 data URL and derives the mime", async () => {
@@ -216,9 +216,9 @@ describe("sdk.files", () => {
     await sdk.files.upload(`data:image/png;base64,${pngB64}`);
     const r = api.lastRequest();
     const part = extractPart(r.rawBody, "file");
-    expect(part!.headers).toContain('filename="upload.png"');
-    expect(part!.headers.toLowerCase()).toContain("content-type: image/png");
-    expect(part!.payload.equals(PNG_1X1)).toBe(true);
+    expect(part?.headers).toContain('filename="upload.png"');
+    expect(part?.headers.toLowerCase()).toContain("content-type: image/png");
+    expect(part?.payload.equals(PNG_1X1)).toBe(true);
   });
 
   test("upload tolerates whitespace in base64 data URLs (pretty-printed encoders)", async () => {
@@ -228,7 +228,7 @@ describe("sdk.files", () => {
     await sdk.files.upload(`data:image/png;base64,${wrapped}`);
     const r = api.lastRequest();
     const part = extractPart(r.rawBody, "file");
-    expect(part!.payload.equals(PNG_1X1)).toBe(true);
+    expect(part?.payload.equals(PNG_1X1)).toBe(true);
   });
 
   test("upload sniffs mime when data URL omits its mime", async () => {
@@ -238,7 +238,7 @@ describe("sdk.files", () => {
     await sdk.files.upload(`data:;base64,${pngB64}`);
     const r = api.lastRequest();
     const part = extractPart(r.rawBody, "file");
-    expect(part!.headers.toLowerCase()).toContain("content-type: image/png");
+    expect(part?.headers.toLowerCase()).toContain("content-type: image/png");
   });
 
   test("upload defaults filename to the File's name when not overridden", async () => {
@@ -247,8 +247,8 @@ describe("sdk.files", () => {
     await sdk.files.upload(file);
     const r = api.lastRequest();
     const part = extractPart(r.rawBody, "file");
-    expect(part!.headers).toContain('filename="user-picked.png"');
-    expect(part!.headers.toLowerCase()).toContain("content-type: image/png");
+    expect(part?.headers).toContain('filename="user-picked.png"');
+    expect(part?.headers.toLowerCase()).toContain("content-type: image/png");
   });
 
   test("upload rejects hosted URL strings", async () => {

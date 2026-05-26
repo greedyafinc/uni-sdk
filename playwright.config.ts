@@ -17,7 +17,5 @@ export default defineConfig({
     // engine-specific bug to chase.
     ...devices["Desktop Chrome"],
   },
-  projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-  ],
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
 });

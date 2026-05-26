@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { RECORD, type IntegrationHarness, startIntegrationHarness } from "./helpers/sdk-client";
+import { type IntegrationHarness, RECORD, startIntegrationHarness } from "./helpers/sdk-client";
 import { SupabaseCleanup } from "./helpers/supabase-cleanup";
 
 const ROUND_TRIP_CASSETTE = join(
@@ -129,86 +129,88 @@ describe("integration: files", () => {
   // project URL is public; the local-dev Supabase at 127.0.0.1:54321 is not).
   // In replay mode the cassette stands in for both calls, so CI doesn't need
   // either Supabase or a live model.
-  test.skipIf(!HAS_ROUND_TRIP_CASSETTE)("uploaded image_url is accepted by responses.create as input_image", async () => {
-    h.cassette("files/upload-then-responses");
+  test.skipIf(!HAS_ROUND_TRIP_CASSETTE)(
+    "uploaded image_url is accepted by responses.create as input_image",
+    async () => {
+      h.cassette("files/upload-then-responses");
 
-    // Only fetch real photo bytes when recording (we need bytes the upstream
-    // provider can decode). In replay mode the cassette satisfies both calls
-    // without re-uploading anything, so a tiny inline fixture keeps CI off
-    // the picsum.photos network dependency.
-    let photoBytes: Uint8Array;
-    let contentType: string;
-    if (RECORD) {
-      const fetched = await fetch("https://picsum.photos/seed/uni-sdk-files/256.jpg");
-      if (!fetched.ok) {
+      // Only fetch real photo bytes when recording (we need bytes the upstream
+      // provider can decode). In replay mode the cassette satisfies both calls
+      // without re-uploading anything, so a tiny inline fixture keeps CI off
+      // the picsum.photos network dependency.
+      let photoBytes: Uint8Array;
+      let contentType: string;
+      if (RECORD) {
+        const fetched = await fetch("https://picsum.photos/seed/uni-sdk-files/256.jpg");
+        if (!fetched.ok) {
+          throw new Error(
+            `picsum.photos returned ${fetched.status} — cannot record round-trip cassette.`,
+          );
+        }
+        const fetchedCt = (fetched.headers.get("content-type") ?? "").toLowerCase();
+        if (!fetchedCt.startsWith("image/")) {
+          throw new Error(`picsum.photos returned content-type "${fetchedCt}" — expected image/*.`);
+        }
+        photoBytes = new Uint8Array(await fetched.arrayBuffer());
+        contentType = fetchedCt.split(";")[0]?.trim() ?? "image/jpeg";
+      } else {
+        // Replay: bytes don't reach a real provider; any image-shaped payload
+        // works. PNG_1X1 keeps the request structurally similar to the recorded
+        // one (multipart with image/png Content-Type, small body).
+        photoBytes = PNG_1X1;
+        contentType = "image/png";
+      }
+      // Mirror unified-api's MIME_EXT mapping (imageUpload.ts:9-13). The
+      // backend stores files at `${userId}/uploads/${fileId}.${ext}` based on
+      // file.type — using the same map here keeps cleanup() targeting the
+      // exact path the server wrote.
+      const MIME_EXT: Record<string, string> = {
+        "image/png": "png",
+        "image/jpeg": "jpg",
+        "image/webp": "webp",
+      };
+      const ext = MIME_EXT[contentType];
+      if (!ext) {
         throw new Error(
-          `picsum.photos returned ${fetched.status} — cannot record round-trip cassette.`,
+          `unsupported content-type: "${contentType}". ` +
+            `Backend only accepts ${Object.keys(MIME_EXT).join(", ")}.`,
         );
       }
-      const fetchedCt = (fetched.headers.get("content-type") ?? "").toLowerCase();
-      if (!fetchedCt.startsWith("image/")) {
-        throw new Error(
-          `picsum.photos returned content-type "${fetchedCt}" — expected image/*.`,
-        );
-      }
-      photoBytes = new Uint8Array(await fetched.arrayBuffer());
-      contentType = fetchedCt.split(";")[0]?.trim() ?? "image/jpeg";
-    } else {
-      // Replay: bytes don't reach a real provider; any image-shaped payload
-      // works. PNG_1X1 keeps the request structurally similar to the recorded
-      // one (multipart with image/png Content-Type, small body).
-      photoBytes = PNG_1X1;
-      contentType = "image/png";
-    }
-    // Mirror unified-api's MIME_EXT mapping (imageUpload.ts:9-13). The
-    // backend stores files at `${userId}/uploads/${fileId}.${ext}` based on
-    // file.type — using the same map here keeps cleanup() targeting the
-    // exact path the server wrote.
-    const MIME_EXT: Record<string, string> = {
-      "image/png": "png",
-      "image/jpeg": "jpg",
-      "image/webp": "webp",
-    };
-    const ext = MIME_EXT[contentType];
-    if (!ext) {
-      throw new Error(
-        `unsupported content-type: "${contentType}". ` +
-          `Backend only accepts ${Object.keys(MIME_EXT).join(", ")}.`,
-      );
-    }
 
-    const uploaded = await h.sdk.files.upload(photoBytes, {
-      filename: `photo.${ext}`,
-      contentType,
-    });
-    cleanup.track(uploaded.file_id, ext, uploaded.image_url);
-    expect(typeof uploaded.file_id).toBe("string");
+      const uploaded = await h.sdk.files.upload(photoBytes, {
+        filename: `photo.${ext}`,
+        contentType,
+      });
+      cleanup.track(uploaded.file_id, ext, uploaded.image_url);
+      expect(typeof uploaded.file_id).toBe("string");
 
-    // KNOWN BACKEND GAP — unified-api/src/lib/multimodal.ts:437-440 passes
-    // `file_id` through to the provider verbatim, assuming OpenAI's
-    // `file-...` format. The Supabase-issued UUID we return from upload
-    // isn't recognised by Gemini/VertexAI/Anthropic and causes 500 "Failed
-    // to decode image data". Until the backend adds a Supabase file_id →
-    // signed URL resolution step, the canonical reference downstream is
-    // `image_url`, not `file_id`. This still proves the round-trip:
-    //   bytes uploaded → publicly-reachable signed URL → provider fetches → decodes
-    // which is the whole user-visible contract.
-    const res = await h.sdk.responses.create({
-      model: VISION_MODEL,
-      input: [
-        {
-          role: "user",
-          content: [
-            { type: "input_text", text: "Describe this image in one word." },
-            { type: "input_image", image_url: uploaded.image_url },
-          ],
-        },
-      ],
-    });
+      // KNOWN BACKEND GAP — unified-api/src/lib/multimodal.ts:437-440 passes
+      // `file_id` through to the provider verbatim, assuming OpenAI's
+      // `file-...` format. The Supabase-issued UUID we return from upload
+      // isn't recognised by Gemini/VertexAI/Anthropic and causes 500 "Failed
+      // to decode image data". Until the backend adds a Supabase file_id →
+      // signed URL resolution step, the canonical reference downstream is
+      // `image_url`, not `file_id`. This still proves the round-trip:
+      //   bytes uploaded → publicly-reachable signed URL → provider fetches → decodes
+      // which is the whole user-visible contract.
+      const res = await h.sdk.responses.create({
+        model: VISION_MODEL,
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Describe this image in one word." },
+              { type: "input_image", image_url: uploaded.image_url },
+            ],
+          },
+        ],
+      });
 
-    expect(res).toBeDefined();
-    expect((res as { id?: string }).id ?? (res as { output?: unknown[] }).output).toBeDefined();
-  }, 120_000);
+      expect(res).toBeDefined();
+      expect((res as { id?: string }).id ?? (res as { output?: unknown[] }).output).toBeDefined();
+    },
+    120_000,
+  );
 
   // Companion to the test above: explicitly exercise the (currently broken)
   // file_id path so the backend gap stays visible in CI and we get a clear

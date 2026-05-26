@@ -13,13 +13,13 @@
 // The bundle must be built first (`bun run build`); the test skips with a
 // clear message otherwise.
 
-import { test, expect } from "@playwright/test";
 import { Buffer } from "node:buffer";
 import { existsSync, readFileSync } from "node:fs";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { expect, test } from "@playwright/test";
 
 // import.meta.dir is Bun-only; Playwright runs this spec under Node so use
 // the portable fileURLToPath dance instead.
@@ -176,9 +176,10 @@ test.describe("sdk.files.upload — real browser (Chromium)", () => {
 
     const res = await page.evaluate(
       async ([bytes, opts]) => {
-        const fn = (window as Window & { __uploadBytes?: (b: number[], o: unknown) => Promise<unknown> })
-          .__uploadBytes;
-        return await fn!(bytes as number[], opts);
+        const fn = (
+          window as Window & { __uploadBytes?: (b: number[], o: unknown) => Promise<unknown> }
+        ).__uploadBytes;
+        return await fn?.(bytes as number[], opts);
       },
       [Array.from(PNG_1X1), { filename: "browser.png", contentType: "image/png" }] as const,
     );
@@ -186,8 +187,9 @@ test.describe("sdk.files.upload — real browser (Chromium)", () => {
     expect((res as { file_id: string }).file_id).toBe("file_browser_test");
     const body = h.capturedBody();
     expect(body).not.toBeNull();
-    expect(body!.includes(Buffer.from(PNG_1X1))).toBe(true);
-    const text = body!.toString("binary");
+    if (!body) throw new Error("expected captured body");
+    expect(body.includes(Buffer.from(PNG_1X1))).toBe(true);
+    const text = body.toString("binary");
     expect(text).toContain('name="file"');
     expect(text).toContain("browser.png");
     expect(text.toLowerCase()).toContain("content-type: image/png");
@@ -199,16 +201,21 @@ test.describe("sdk.files.upload — real browser (Chromium)", () => {
 
     const res = await page.evaluate(
       async ([bytes]) => {
-        const fn = (window as Window & { __uploadBlob?: (b: number[], t?: string, n?: string) => Promise<unknown> })
-          .__uploadBlob;
+        const fn = (
+          window as Window & {
+            __uploadBlob?: (b: number[], t?: string, n?: string) => Promise<unknown>;
+          }
+        ).__uploadBlob;
         // No type, no name — exercises the empty-Blob.type sniff path.
-        return await fn!(bytes as number[]);
+        return await fn?.(bytes as number[]);
       },
       [Array.from(PNG_1X1)] as const,
     );
 
     expect((res as { file_id: string }).file_id).toBe("file_browser_test");
-    const text = h.capturedBody()!.toString("binary");
+    const body = h.capturedBody();
+    if (!body) throw new Error("expected captured body");
+    const text = body.toString("binary");
     expect(text.toLowerCase()).toContain("content-type: image/png");
     expect(text).toContain('filename="upload.png"');
   });
@@ -220,13 +227,16 @@ test.describe("sdk.files.upload — real browser (Chromium)", () => {
     // Wrap base64 every 16 chars — Chrome's atob would throw on this without
     // the SDK's whitespace-stripping decoder. This is THE bug the unit test
     // can only cover by proxy (Bun's Buffer.from tolerates whitespace).
-    const b64 = Buffer.from(PNG_1X1).toString("base64").replace(/(.{16})/g, "$1\n");
+    const b64 = Buffer.from(PNG_1X1)
+      .toString("base64")
+      .replace(/(.{16})/g, "$1\n");
 
     const res = await page.evaluate(
       async ([wrapped]) => {
-        const fn = (window as Window & { __uploadDataUrl?: (b: string, m?: string) => Promise<unknown> })
-          .__uploadDataUrl;
-        return await fn!(wrapped as string, "image/png");
+        const fn = (
+          window as Window & { __uploadDataUrl?: (b: string, m?: string) => Promise<unknown> }
+        ).__uploadDataUrl;
+        return await fn?.(wrapped as string, "image/png");
       },
       [b64] as const,
     );
@@ -242,14 +252,19 @@ test.describe("sdk.files.upload — real browser (Chromium)", () => {
 
     await page.evaluate(
       async ([bytes, type, name]) => {
-        const fn = (window as Window & { __uploadBlob?: (b: number[], t?: string, n?: string) => Promise<unknown> })
-          .__uploadBlob;
-        return await fn!(bytes as number[], type as string, name as string);
+        const fn = (
+          window as Window & {
+            __uploadBlob?: (b: number[], t?: string, n?: string) => Promise<unknown>;
+          }
+        ).__uploadBlob;
+        return await fn?.(bytes as number[], type as string, name as string);
       },
       [Array.from(PNG_1X1), "image/png", "user-picked.png"] as const,
     );
 
-    const text = h.capturedBody()!.toString("binary");
+    const body = h.capturedBody();
+    if (!body) throw new Error("expected captured body");
+    const text = body.toString("binary");
     expect(text).toContain('filename="user-picked.png"');
     expect(text.toLowerCase()).toContain("content-type: image/png");
   });

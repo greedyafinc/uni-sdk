@@ -44,3 +44,6 @@ src/resources/logos.generated.ts
 test-results/
 playwright-report/
 playwright/.cache/
+
+# Claude Code per-developer local settings
+.claude/
