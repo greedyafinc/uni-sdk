@@ -23,7 +23,16 @@ export interface FileUploadOptions {
 }
 
 export interface FileUploadResponse {
-  /** Stable id. Pass as `file_id` to images.edit, responses.create, chat.completions.create. */
+  /**
+   * Stable id for the uploaded file. **Today, prefer `image_url`** when
+   * referencing this upload in `responses.create` / `chat.completions.create`
+   * / `images.edit`: the backend currently forwards Supabase-issued `file_id`s
+   * to upstream providers verbatim instead of resolving them to signed URLs,
+   * which causes providers to reject with "Failed to decode image data".
+   * The id is still useful as a stable handle in your own code (it survives
+   * across SDK versions and request retries), and will start working as a
+   * model input once the backend's file-resolution layer ships.
+   */
   file_id: string;
   /** Time-limited signed URL (the backend currently expires it after ~1h). */
   image_url: string;
