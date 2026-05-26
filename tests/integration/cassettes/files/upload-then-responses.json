@@ -1,0 +1,81 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/images/uploads",
+        "body": {
+          "_binary": 10040,
+          "contentType": "multipart/form-data; boundary=----webkitformboundaryb38f1a137e03447482184db892f2fafb"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json;charset=utf-8",
+          "date": "Tue, 26 May 2026 20:59:25 GMT"
+        },
+        "body": {
+          "file_id": "08e160ab-ebde-4004-a9c3-eae7e2afb1a1",
+          "image_url": "https://example.test/storage/v1/object/sign/REDACTED?token=REDACTED"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/responses",
+        "body": {
+          "model": "gemini-3.1-flash-lite-preview",
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Describe this image in one word."
+                },
+                {
+                  "type": "input_image",
+                  "image_url": "https://example.test/storage/v1/object/sign/REDACTED?token=REDACTED"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json;charset=utf-8",
+          "date": "Tue, 26 May 2026 20:59:29 GMT"
+        },
+        "body": {
+          "id": "resp_990a67c6-d440-4190-ade9-a5548f061754",
+          "object": "response",
+          "created_at": 1779829170,
+          "model": "gemini-3.1-flash-lite-preview",
+          "output": [
+            {
+              "type": "message",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Shoreline"
+                }
+              ],
+              "status": "completed"
+            }
+          ],
+          "usage": {
+            "input_tokens": 1096,
+            "output_tokens": 2,
+            "total_tokens": 1098
+          },
+          "status": "completed"
+        }
+      }
+    }
+  ]
+}

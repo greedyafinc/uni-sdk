@@ -52,6 +52,7 @@
     "test": "bun run logos && bun test tests/core tests/node tests/bundle",
     "test:integration": "bun test tests/integration",
     "test:integration:record": "RECORD=true bun test tests/integration",
+    "test:browser": "bun run build:browser && playwright test",
     "lint": "biome check .",
     "format": "biome format --write .",
     "docs": "typedoc",
@@ -62,6 +63,7 @@
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
     "@changesets/cli": "^2.27.0",
+    "@playwright/test": "^1.60.0",
     "@types/bun": "latest",
     "@types/node": "^20",
     "typedoc": "^0.26.0",

@@ -39,3 +39,11 @@ examples/demo-app/.data
 
 # generated logo data-URIs (built from src/assets/logos/)
 src/resources/logos.generated.ts
+
+# Playwright (real-browser tests) — screenshots, videos, traces, html reports
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Claude Code per-developer local settings
+.claude/

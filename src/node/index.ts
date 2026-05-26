@@ -49,6 +49,7 @@ export {
 export * from "../resources/audio";
 export * from "../resources/chat";
 export * from "../resources/embeddings";
+export * from "../resources/files";
 export * from "../resources/helpers";
 export * from "../resources/images";
 export * from "../resources/messages";

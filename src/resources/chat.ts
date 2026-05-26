@@ -39,6 +39,14 @@ export type ChatCompletionUserContentPart =
       file: {
         file_data?: string;
         file_url?: string;
+        /**
+         * Provider-issued file id (OpenAI `file-...`). **Not currently
+         * compatible** with `file_id` values returned by `sdk.files.upload()`
+         * — the backend forwards them to the upstream model verbatim instead
+         * of resolving the Supabase UUID to a signed URL, which causes a 500
+         * "Failed to decode image data". Pass `file_url` with the
+         * `image_url` from the upload response instead.
+         */
         file_id?: string;
         filename?: string;
       };

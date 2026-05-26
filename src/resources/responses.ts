@@ -10,6 +10,14 @@ export type ResponseInputContentPart =
   | {
       type: "input_image";
       image_url?: string;
+      /**
+       * Provider-issued file id (OpenAI `file-...`). **Not currently
+       * compatible** with `file_id` values returned by `sdk.files.upload()`
+       * — the backend forwards them to the upstream model verbatim instead
+       * of resolving the Supabase UUID to a signed URL, which causes a 500
+       * "Failed to decode image data". Pass `image_url` from the upload
+       * response instead.
+       */
       file_id?: string;
       detail?: "auto" | "low" | "high";
     }
@@ -21,11 +29,13 @@ export type ResponseInputContentPart =
       type: "input_video";
       video_url?: string;
       file_data?: string;
+      /** See note on {@link ResponseInputContentPart} `input_image.file_id`. */
       file_id?: string;
     }
   | {
       type: "input_file";
       file_data?: string;
+      /** See note on {@link ResponseInputContentPart} `input_image.file_id`. */
       file_id?: string;
       file_url?: string;
       filename?: string;
