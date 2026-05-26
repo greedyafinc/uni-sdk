@@ -1,0 +1,23 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/audio/speech",
+        "body": {
+          "model": "hexgrad/Kokoro-82M",
+          "input": "Hello, world.",
+          "voice": "af_bella",
+          "response_format": "mp3"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "audio/mpeg"
+        },
+        "bodyBase64": "//uQAAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ow=="
+      }
+    }
+  ]
+}

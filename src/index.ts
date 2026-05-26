@@ -41,6 +41,7 @@ export type { StreamUsage, StreamUsageExtractor } from "./core/_internal/stream"
 export { parseSSE } from "./core/_internal/sse";
 
 // Resource modules — all browser-safe.
+export * from "./resources/audio";
 export * from "./resources/chat";
 export * from "./resources/embeddings";
 export * from "./resources/helpers";
@@ -49,4 +50,5 @@ export * from "./resources/messages";
 export * from "./resources/models";
 export * from "./resources/responses";
 export * from "./resources/usage";
+export * from "./resources/videos";
 export * from "./resources/logos";

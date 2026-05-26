@@ -46,6 +46,7 @@ export {
 } from "../core/_internal/http-errors";
 
 // Resources.
+export * from "../resources/audio";
 export * from "../resources/chat";
 export * from "../resources/embeddings";
 export * from "../resources/helpers";
@@ -54,6 +55,7 @@ export * from "../resources/messages";
 export * from "../resources/models";
 export * from "../resources/responses";
 export * from "../resources/usage";
+export * from "../resources/videos";
 export * from "../resources/logos";
 
 // The node-capable UnifiedAI — supersedes the browser entry's class. Consumers

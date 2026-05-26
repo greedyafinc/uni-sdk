@@ -10,8 +10,13 @@ export interface CassetteRequest {
 export interface CassetteResponse {
   status: number;
   headers: Record<string, string>;
-  /** JSON-serializable body, or a raw string for SSE / non-JSON payloads. */
-  body: unknown;
+  /** JSON-serializable body, or a raw string for SSE / non-JSON payloads.
+   * Mutually exclusive with `bodyBase64`. */
+  body?: unknown;
+  /** Base64-encoded body for binary payloads (audio bytes, video mp4). When
+   * present, the replay server decodes and replays the raw bytes verbatim;
+   * `body` is ignored. */
+  bodyBase64?: string;
   /** Marks the body as a raw byte stream (SSE) that should be replayed verbatim. */
   stream?: boolean;
 }
