@@ -1,0 +1,25 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/images/uploads",
+        "body": {
+          "_binary": 282,
+          "contentType": "multipart/form-data; boundary=----webkitformboundary731b540399854b9da5f72f6568b32b41"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json;charset=utf-8",
+          "date": "Tue, 26 May 2026 20:16:56 GMT"
+        },
+        "body": {
+          "file_id": "1287c968-abd1-49a7-ba36-37604b59053a",
+          "image_url": "https://example.test/storage/v1/object/sign/REDACTED?token=REDACTED"
+        }
+      }
+    }
+  ]
+}

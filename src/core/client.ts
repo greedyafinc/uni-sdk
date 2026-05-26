@@ -1,6 +1,7 @@
 import { Audio } from "../resources/audio";
 import { Chat } from "../resources/chat";
 import { Embeddings } from "../resources/embeddings";
+import { Files } from "../resources/files";
 import { Helpers } from "../resources/helpers";
 import { Images } from "../resources/images";
 import { Messages } from "../resources/messages";
@@ -59,6 +60,7 @@ export class UnifiedAI extends Core {
   readonly responses: Responses = new Responses(this);
   readonly messages: Messages = new Messages(this);
   readonly images: Images = new Images(this);
+  readonly files: Files = new Files(this);
   readonly audio: Audio = new Audio(this);
   readonly videos: Videos = new Videos(this);
   readonly embeddings: Embeddings = new Embeddings(this);

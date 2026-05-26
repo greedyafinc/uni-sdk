@@ -73,6 +73,53 @@ for (const item of res.data) {
 response mirrors the OpenAI Embeddings shape:
 `{ object, data: [{ object, embedding, index }], model, usage }`.
 
+#### Files (upload + reference by `file_id`)
+
+```ts
+// 1. User picks a file (browser File picker, drag-drop, fs.readFile, …).
+const file: File = pickedByUser;
+
+// 2. Upload it. Returns a stable `file_id` plus a short-lived signed URL.
+const { file_id, image_url } = await sdk.files.upload(file);
+
+// 3. Reference the uploaded image by URL in any chat / responses / images call.
+//    The signed URL is publicly reachable and expires in ~1 hour, which is
+//    long enough for typical request chains; for longer-lived references,
+//    keep the bytes locally or re-upload.
+const res = await sdk.responses.create({
+  model: "gpt-4o",
+  input: [
+    {
+      role: "user",
+      content: [
+        { type: "input_text", text: "What's in this image?" },
+        { type: "input_image", image_url },
+      ],
+    },
+  ],
+});
+
+await sdk.images.edit({
+  model: "gpt-image-1",
+  images: [{ image_url }],
+  prompt: "make it sepia",
+});
+```
+
+`sdk.files.upload(source, { filename?, contentType?, signal? })` accepts a
+`Blob`, `File`, `Buffer`, `Uint8Array`, `ArrayBuffer`, or a base64 `data:` URL.
+Filename and content-type are auto-detected from `File`/`Blob` metadata when
+present and can be overridden via the options object. The upload endpoint is
+image-only today (PNG/JPEG/WEBP up to 25 MB).
+
+> **Why `image_url` and not `file_id`?** The SDK's typed surfaces (`images.edit`,
+> `responses.create`, `chat.completions.create`) all accept a `file_id` field,
+> and `sdk.files.upload()` returns one — but the backend currently forwards
+> the id to upstream providers verbatim instead of resolving it to a signed
+> URL first, so providers reject it with "Failed to decode image data". Use
+> `image_url` from the upload response everywhere downstream until that
+> backend resolution layer ships (tracked as a backend-side issue).
+
 #### Messages (Anthropic) streaming
 
 ```ts
