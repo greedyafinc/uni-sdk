@@ -212,6 +212,113 @@ describe("integration: files", () => {
     120_000,
   );
 
+  // ── /api/v1/files endpoints (UNI-88) ─────────────────────────────────────
+
+  test("create posts multipart to /api/v1/files and returns a FileObject", async () => {
+    h.cassette("files/create");
+    const res = await h.sdk.files.create(PNG_1X1, {
+      filename: "doc.pdf",
+      contentType: "application/pdf",
+      purpose: "user_data",
+    });
+    // NOTE: SupabaseCleanup was written for the old imageUpload path layout
+    // (`${userId}/uploads/...` in the `generated-images` bucket). Files
+    // created via `files.create()` live in the `user-files` bucket at
+    // `${userId}/${id}.${ext}`, so the helper isn't reused here. In RECORD
+    // mode, manually clean test files with `sdk.files.del(id)` after the
+    // recording session or extend SupabaseCleanup with a `user-files`-aware
+    // path resolver.
+
+    expect(res.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(res.filename).toBe("doc.pdf");
+    expect(res.mime_type).toBe("application/pdf");
+    expect(res.bytes).toBeGreaterThan(0);
+    expect(res.purpose).toBe("user_data");
+    expect(res.created_at).toBeDefined();
+
+    if (!RECORD) {
+      const seen = h.requests();
+      expect(seen[0]?.method).toBe("POST");
+      expect(seen[0]?.path).toBe("/api/v1/files");
+    }
+  }, 60_000);
+
+  test("list returns the user's files newest-first", async () => {
+    h.cassette("files/list");
+    const res = await h.sdk.files.list();
+    expect(Array.isArray(res.data)).toBe(true);
+    if (!RECORD) {
+      expect(h.requests()[0]?.method).toBe("GET");
+      expect(h.requests()[0]?.path).toBe("/api/v1/files");
+    }
+  }, 60_000);
+
+  test("retrieve returns metadata for a known id", async () => {
+    h.cassette("files/retrieve");
+    const res = await h.sdk.files.retrieve(
+      "01234567-89ab-cdef-0123-456789abcdef",
+    );
+    expect(res.id).toBe("01234567-89ab-cdef-0123-456789abcdef");
+    expect(res.filename).toBeDefined();
+    expect(res.mime_type).toBeDefined();
+    if (!RECORD) {
+      expect(h.requests()[0]?.method).toBe("GET");
+      expect(h.requests()[0]?.path).toBe(
+        "/api/v1/files/01234567-89ab-cdef-0123-456789abcdef",
+      );
+    }
+  }, 60_000);
+
+  test("del returns {id, deleted: true} and uses DELETE", async () => {
+    h.cassette("files/delete");
+    const res = await h.sdk.files.del(
+      "01234567-89ab-cdef-0123-456789abcdef",
+    );
+    expect(res.id).toBe("01234567-89ab-cdef-0123-456789abcdef");
+    expect(res.deleted).toBe(true);
+    if (!RECORD) {
+      expect(h.requests()[0]?.method).toBe("DELETE");
+      expect(h.requests()[0]?.path).toBe(
+        "/api/v1/files/01234567-89ab-cdef-0123-456789abcdef",
+      );
+    }
+  }, 60_000);
+
+  test("content downloads bytes and parses filename from Content-Disposition", async () => {
+    h.cassette("files/content");
+    const res = await h.sdk.files.content(
+      "01234567-89ab-cdef-0123-456789abcdef",
+    );
+    expect(res.contentType).toBe("application/pdf");
+    expect(res.filename).toBe("report.pdf");
+    expect(res.bytes.byteLength).toBeGreaterThan(0);
+    if (!RECORD) {
+      expect(h.requests()[0]?.method).toBe("GET");
+      expect(h.requests()[0]?.path).toBe(
+        "/api/v1/files/01234567-89ab-cdef-0123-456789abcdef/content",
+      );
+    }
+  }, 60_000);
+
+  test("retrieve throws when id is missing without hitting the network", async () => {
+    h.cassette("files/retrieve-empty");
+    await expect(h.sdk.files.retrieve("")).rejects.toThrow(/non-empty id/);
+    if (!RECORD) {
+      // No request should have been made.
+      expect(h.requests()).toHaveLength(0);
+    }
+  });
+
+  test("del throws when id is missing without hitting the network", async () => {
+    h.cassette("files/delete-empty");
+    await expect(h.sdk.files.del("")).rejects.toThrow(/non-empty id/);
+    if (!RECORD) {
+      expect(h.requests()).toHaveLength(0);
+    }
+  });
+
   // Companion to the test above: explicitly exercise the (currently broken)
   // file_id path so the backend gap stays visible in CI and we get a clear
   // signal when it closes. This test will START FAILING when the backend

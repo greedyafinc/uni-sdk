@@ -1,0 +1,28 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/files",
+        "body": {
+          "_binary": 281,
+          "contentType": "multipart/form-data; boundary=----webkitformboundary"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json;charset=utf-8"
+        },
+        "body": {
+          "id": "f30d4c5e-a907-4f60-a903-13fbbfcd4ed5",
+          "filename": "doc.pdf",
+          "mime_type": "application/pdf",
+          "bytes": 67,
+          "purpose": "user_data",
+          "created_at": "2026-05-26T20:00:00Z"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/files/01234567-89ab-cdef-0123-456789abcdef/content",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/pdf",
+          "content-disposition": "attachment; filename=\"report.pdf\""
+        },
+        "bodyBase64": "JVBERi0xLjQKJWZha2UtcGRmLWNvbnRlbnQtZm9yLXRlc3Rpbmc="
+      }
+    }
+  ]
+}

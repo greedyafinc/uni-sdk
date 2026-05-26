@@ -1,0 +1,21 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "DELETE",
+        "path": "/api/v1/files/01234567-89ab-cdef-0123-456789abcdef",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json;charset=utf-8"
+        },
+        "body": {
+          "id": "01234567-89ab-cdef-0123-456789abcdef",
+          "deleted": true
+        }
+      }
+    }
+  ]
+}

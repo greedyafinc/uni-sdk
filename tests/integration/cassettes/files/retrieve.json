@@ -1,0 +1,25 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/files/01234567-89ab-cdef-0123-456789abcdef",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json;charset=utf-8"
+        },
+        "body": {
+          "id": "01234567-89ab-cdef-0123-456789abcdef",
+          "filename": "photo.png",
+          "mime_type": "image/png",
+          "bytes": 67,
+          "purpose": "assistants",
+          "created_at": "2026-05-26T19:00:00Z"
+        }
+      }
+    }
+  ]
+}
