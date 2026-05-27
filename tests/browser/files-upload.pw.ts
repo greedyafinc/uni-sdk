@@ -242,8 +242,9 @@ test.describe("sdk.files.upload — real browser (Chromium)", () => {
     );
 
     expect((res as { file_id: string }).file_id).toBe("file_browser_test");
-    const body = h.capturedBody()!;
-    expect(body.includes(Buffer.from(PNG_1X1))).toBe(true);
+    const body = h.capturedBody();
+    expect(body).not.toBeNull();
+    expect(body?.includes(Buffer.from(PNG_1X1))).toBe(true);
   });
 
   test("preserves a File's .name as the multipart filename", async ({ page }) => {
