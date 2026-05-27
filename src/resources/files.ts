@@ -325,6 +325,55 @@ async function normalise(
 }
 
 /**
+ * Parse the filename out of a Content-Disposition header per RFC 6266 / 5987.
+ *
+ * Preference order matches RFC 6266 §4.3: when both `filename*` (RFC 5987,
+ * percent-encoded UTF-8) and `filename` (legacy ASCII) are present, the
+ * `filename*` value wins. Returns the decoded UTF-8 string, or `undefined`
+ * if no filename parameter is present or decoding fails.
+ *
+ * Exported for unit-test introspection; not part of the public SDK surface.
+ */
+export function parseContentDispositionFilename(
+  header: string | undefined,
+): string | undefined {
+  if (!header) return undefined;
+
+  // Try RFC 5987 `filename*=charset'lang'percent-encoded-value` first.
+  // The `*` marker is the canonical signal that the value is UTF-8 encoded.
+  const extended = /filename\*\s*=\s*([^']+)'([^']*)'([^;]+)/i.exec(header);
+  if (extended) {
+    const charset = extended[1]?.toLowerCase();
+    const value = extended[3]?.trim();
+    if (value) {
+      try {
+        const decoded = decodeURIComponent(value);
+        // Only utf-8 / us-ascii are required by RFC 5987; fall through to the
+        // raw decoded bytes for anything else (best-effort, matches what
+        // browsers do).
+        if (!charset || charset === "utf-8" || charset === "us-ascii") {
+          return decoded;
+        }
+        return decoded;
+      } catch {
+        // Malformed percent-encoding — fall through to legacy form.
+      }
+    }
+  }
+
+  // Fall back to legacy `filename="..."` or `filename=bare-token`. Anchor on
+  // a word boundary so this doesn't match the tail of `filename*=`.
+  const legacy = /(?:^|;)\s*filename\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;\s]+))/i.exec(
+    header,
+  );
+  if (legacy) {
+    const raw = legacy[1] ?? legacy[2];
+    if (raw) return raw.replace(/\\(.)/g, "$1"); // unescape backslashes inside quotes
+  }
+  return undefined;
+}
+
+/**
  * Files resource. Wraps the unified-api file endpoints.
  *
  * Two upload surfaces are available:
@@ -446,15 +495,8 @@ export class Files {
       `/api/v1/files/${encodeURIComponent(id)}/content`,
       req,
     );
-    // Extract the original filename from Content-Disposition when present —
-    // the backend writes `attachment; filename="..."`. Tolerate single-quote
-    // and unquoted variants for robustness.
     const cd = headers["content-disposition"];
-    let filename: string | undefined;
-    if (cd) {
-      const m = /filename\*?=(?:UTF-8'')?(?:"([^"]+)"|([^;\s]+))/i.exec(cd);
-      if (m) filename = m[1] ?? m[2];
-    }
+    const filename = parseContentDispositionFilename(cd);
     return filename ? { bytes, contentType, filename } : { bytes, contentType };
   }
 }

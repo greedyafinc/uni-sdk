@@ -494,6 +494,79 @@ describe("sdk.files — general file management (UNI-88)", () => {
   });
 });
 
+describe("parseContentDispositionFilename (RFC 6266 / 5987)", () => {
+  // Import lazily to avoid touching the SDK barrel for a single helper.
+  // The function is exported from src/resources/files.ts.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { parseContentDispositionFilename } = require("../../src/resources/files");
+
+  test("returns undefined for missing header", () => {
+    expect(parseContentDispositionFilename(undefined)).toBeUndefined();
+    expect(parseContentDispositionFilename("")).toBeUndefined();
+    expect(parseContentDispositionFilename("attachment")).toBeUndefined();
+  });
+
+  test("parses legacy filename= with quotes", () => {
+    expect(
+      parseContentDispositionFilename('attachment; filename="report.pdf"'),
+    ).toBe("report.pdf");
+  });
+
+  test("parses legacy filename= without quotes", () => {
+    expect(
+      parseContentDispositionFilename("attachment; filename=raw.bin"),
+    ).toBe("raw.bin");
+  });
+
+  test("prefers filename* over filename per RFC 6266 §4.3", () => {
+    // Browsers and curl pick filename* when both are present — the legacy
+    // form is the ASCII-compatibility fallback.
+    expect(
+      parseContentDispositionFilename(
+        "attachment; filename=\"fallback.bin\"; filename*=UTF-8''real.pdf",
+      ),
+    ).toBe("real.pdf");
+  });
+
+  test("percent-decodes UTF-8 values per RFC 5987", () => {
+    expect(
+      parseContentDispositionFilename(
+        "attachment; filename*=UTF-8''r%C3%A9sum%C3%A9.pdf",
+      ),
+    ).toBe("résumé.pdf");
+    expect(
+      parseContentDispositionFilename(
+        "attachment; filename*=UTF-8''caf%C3%A9.pdf",
+      ),
+    ).toBe("café.pdf");
+  });
+
+  test("handles backslash-escaped quotes in legacy form", () => {
+    expect(
+      parseContentDispositionFilename(
+        'attachment; filename="quote\\"inside.txt"',
+      ),
+    ).toBe('quote"inside.txt');
+  });
+
+  test("falls back to legacy when filename* has malformed encoding", () => {
+    // %ZZ is not valid percent-encoding — decodeURIComponent throws.
+    expect(
+      parseContentDispositionFilename(
+        "attachment; filename=\"good.pdf\"; filename*=UTF-8''bad%ZZname",
+      ),
+    ).toBe("good.pdf");
+  });
+
+  test("does not match the tail of filename* when looking for legacy", () => {
+    // The non-extended branch must anchor on a word boundary so it doesn't
+    // greedily eat `filename*=` and produce a garbage value.
+    expect(
+      parseContentDispositionFilename("attachment; filename*=UTF-8''ok.pdf"),
+    ).toBe("ok.pdf");
+  });
+});
+
 describe("sdk.files.content — binary download (UNI-88)", () => {
   // content() uses requestBinary which validates the response Content-Type
   // against an allowlist, so the standard FakeApi (which forces JSON) won't
