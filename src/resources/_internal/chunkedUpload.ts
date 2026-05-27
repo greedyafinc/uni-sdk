@@ -155,96 +155,125 @@ export async function performChunkedUpload(
   let uploadId: string;
   let chunkSize: number;
   let receivedChunks = new Set<number>();
+  // True once the persisted upload id is "live" (either init's persist hook
+  // succeeded OR the caller passed resumeFrom — implying a previous call's
+  // persist is still in host storage). The catch path uses this to decide
+  // whether an `onPersistUploadId(null)` call is meaningful: if no id is
+  // live, clearing would either be a no-op or wrongly trample a different
+  // upload's persisted id that the host happens to share the slot with.
+  let needsClearOnAbort = false;
 
-  if (opts.resumeFrom) {
-    // Resume path: ask the server what it already has so we don't re-send
-    // acknowledged chunks. The chunk_size MUST match what the original init
-    // returned — if the server has changed its mind, we surface that as an
-    // error (the session is unusable; the host should abort and start over).
-    const state = await client.request<SessionStateResponse>(
-      `/api/v1/files/uploads/${encodeURIComponent(opts.resumeFrom)}`,
-      { method: "GET", ...(opts.signal && { signal: opts.signal }) },
-    );
-    uploadId = state.upload_id;
-    chunkSize = state.chunk_size;
-    receivedChunks = new Set(state.received_chunks);
-    if (state.total_bytes !== totalBytes) {
-      throw new UnifiedError(
-        "invalid_input",
-        `resume session expected ${state.total_bytes} bytes; current payload is ${totalBytes}`,
+  // Wrap init/resume AND the upload loop in one try so an abort anywhere
+  // (including the GET state / init POST themselves) goes through the
+  // persist-clear path.
+  try {
+    if (opts.resumeFrom) {
+      // Caller passed resumeFrom: by construction the host has the id in
+      // storage from a prior call. Mark clearable BEFORE the network call,
+      // so an abort during the GET state below still triggers the clear.
+      needsClearOnAbort = true;
+      // Resume path: ask the server what it already has so we don't re-send
+      // acknowledged chunks. Three things have to match between the original
+      // init and the resume:
+      //
+      //   - total_bytes: a different size means a different payload, period.
+      //   - mime_type: same length but different content (e.g. video_a.mp4 vs
+      //     video_b.mp4 both 10 MB) would otherwise stitch a Frankenstein
+      //     file under video_a's stored metadata. Cheap surrogate for "is
+      //     this the same logical file" — short of a content hash, which
+      //     would force an extra full-payload read on every resume.
+      //   - chunk_size: if the server's chunk_size changed between init and
+      //     resume, the already-acknowledged indices in `received_chunks`
+      //     refer to byte ranges under the OLD size, and slicing/skipping
+      //     under the NEW size produces a corrupt upload. We detect this
+      //     by validating every received index is in `[0, totalChunks)`
+      //     for the size we're about to use — a chunk_size change makes
+      //     stale indices fall out of range.
+      const state = await client.request<SessionStateResponse>(
+        `/api/v1/files/uploads/${encodeURIComponent(opts.resumeFrom)}`,
+        { method: "GET", ...(opts.signal && { signal: opts.signal }) },
       );
+      if (state.total_bytes !== totalBytes) {
+        throw new UnifiedError(
+          "invalid_input",
+          `resume session expected ${state.total_bytes} bytes; current payload is ${totalBytes}`,
+        );
+      }
+      if (state.mime_type !== opts.mimeType) {
+        throw new UnifiedError(
+          "invalid_input",
+          `resume session has mime_type ${state.mime_type}; current payload is ${opts.mimeType} (different file?)`,
+        );
+      }
+      uploadId = state.upload_id;
+      chunkSize = state.chunk_size;
+      const expectedTotalChunks = totalBytes === 0 ? 0 : Math.ceil(totalBytes / chunkSize);
+      // Zero-byte uploads have no chunks to validate; the upload loop below
+      // skips for the same reason. Skipping here avoids a misleading
+      // "chunk_size drift" error for the (unusual but legal) empty-file case.
+      if (totalBytes > 0) {
+        for (const idx of state.received_chunks) {
+          if (!Number.isInteger(idx) || idx < 0 || idx >= expectedTotalChunks) {
+            throw new UnifiedError(
+              "invalid_input",
+              `resume session has chunk index ${idx} out of range [0, ${expectedTotalChunks}) — server may have changed chunk_size between init and resume`,
+            );
+          }
+        }
+      }
+      receivedChunks = new Set(state.received_chunks);
+    } else {
+      const init = await client.request<InitResponse>("/api/v1/files/uploads", {
+        method: "POST",
+        body: {
+          filename: opts.filename,
+          mime_type: opts.mimeType,
+          total_bytes: totalBytes,
+          ...(opts.purpose ? { purpose: opts.purpose } : {}),
+        },
+        ...(opts.signal && { signal: opts.signal }),
+      });
+      uploadId = init.upload_id;
+      chunkSize = init.chunk_size;
+      // Tell the host so it can persist across crashes. Errors in the hook are
+      // intentional non-fatal — losing resume-on-crash is acceptable; failing
+      // an otherwise-good upload because the host's storage flaked is not.
+      if (opts.onPersistUploadId) {
+        try {
+          await opts.onPersistUploadId(uploadId);
+          needsClearOnAbort = true;
+        } catch {
+          // Persist hook failure is non-fatal. We still need to attempt the
+          // upload — the host loses resume-on-crash for this session but
+          // keeps a working upload. Leave needsClearOnAbort false: if the
+          // host's storage is broken, we don't try to clear via the same
+          // broken hook on abort either.
+        }
+      }
     }
-  } else {
-    const init = await client.request<InitResponse>("/api/v1/files/uploads", {
-      method: "POST",
-      body: {
-        filename: opts.filename,
-        mime_type: opts.mimeType,
-        total_bytes: totalBytes,
-        ...(opts.purpose ? { purpose: opts.purpose } : {}),
-      },
-      ...(opts.signal && { signal: opts.signal }),
-    });
-    uploadId = init.upload_id;
-    chunkSize = init.chunk_size;
-    // Tell the host so it can persist across crashes. Errors in the hook are
-    // intentional non-fatal — losing resume-on-crash is acceptable; failing
-    // an otherwise-good upload because the host's storage flaked is not.
-    if (opts.onPersistUploadId) {
+
+    const totalChunks = totalBytes === 0 ? 0 : Math.ceil(totalBytes / chunkSize);
+
+    // Emit a synthetic 0/total before any bytes flow. On resume we still start
+    // from 0 — the host sees acknowledged-chunks progress jump to whatever's
+    // already done on the first emit after the first PUT.
+    if (opts.onProgress) {
       try {
-        await opts.onPersistUploadId(uploadId);
+        opts.onProgress({ loaded: 0, total: totalBytes, percent: 0 });
       } catch {
         // swallow
       }
     }
-  }
 
-  const totalChunks = totalBytes === 0 ? 0 : Math.ceil(totalBytes / chunkSize);
-
-  // Emit a synthetic 0/total before any bytes flow. On resume we still start
-  // from 0 — the host sees acknowledged-chunks progress jump to whatever's
-  // already done on the first emit after the first PUT.
-  if (opts.onProgress) {
-    try {
-      opts.onProgress({ loaded: 0, total: totalBytes, percent: 0 });
-    } catch {
-      // swallow
+    // Account for bytes already on the server (resume case). Counted toward
+    // progress immediately so the listener doesn't first report 0 % then jump
+    // when the next acknowledged chunk lands.
+    let loaded = 0;
+    for (const idx of receivedChunks) {
+      const isLast = idx === totalChunks - 1;
+      loaded += isLast ? totalBytes - chunkSize * idx : chunkSize;
     }
-  }
-
-  // Account for bytes already on the server (resume case). Counted toward
-  // progress immediately so the listener doesn't first report 0 % then jump
-  // when the next acknowledged chunk lands.
-  let loaded = 0;
-  for (const idx of receivedChunks) {
-    const isLast = idx === totalChunks - 1;
-    loaded += isLast ? totalBytes - chunkSize * idx : chunkSize;
-  }
-  if (opts.onProgress && loaded > 0) {
-    try {
-      opts.onProgress({
-        loaded,
-        total: totalBytes,
-        percent: totalBytes > 0 ? Math.floor((loaded / totalBytes) * 100) : 0,
-      });
-    } catch {
-      // swallow
-    }
-  }
-
-  for (let i = 0; i < totalChunks; i++) {
-    if (receivedChunks.has(i)) continue;
-    if (opts.signal?.aborted) {
-      throw new UnifiedError("aborted", "files.create aborted between chunks");
-    }
-    const start = i * chunkSize;
-    const end = Math.min(start + chunkSize, totalBytes);
-    // .slice() on a Blob is cheap — view, not copy. arrayBuffer() materializes
-    // just this slice's bytes.
-    const chunkBytes = new Uint8Array(await opts.blob.slice(start, end).arrayBuffer());
-    await putChunkWithRetry(client, uploadId, i, chunkBytes, opts.signal);
-    loaded += chunkBytes.byteLength;
-    if (opts.onProgress) {
+    if (opts.onProgress && loaded > 0) {
       try {
         opts.onProgress({
           loaded,
@@ -255,22 +284,73 @@ export async function performChunkedUpload(
         // swallow
       }
     }
-  }
 
-  const file = await client.request<FileObject>(
-    `/api/v1/files/uploads/${encodeURIComponent(uploadId)}/complete`,
-    { method: "POST", ...(opts.signal && { signal: opts.signal }) },
-  );
-
-  // Successful completion: clear the persisted session id so a future load
-  // of the same host doesn't try to resume a finished upload.
-  if (opts.onPersistUploadId) {
-    try {
-      await opts.onPersistUploadId(null);
-    } catch {
-      // swallow
+    // The outer try (opened at line ~165) wraps init/resume + the upload loop
+    // + complete in one scope so an abort anywhere takes the persist-clear
+    // path. Non-abort failures intentionally leave the persisted id alone —
+    // the whole point of persistence is so the host can call again with
+    // resumeFrom and pick up where we left off.
+    for (let i = 0; i < totalChunks; i++) {
+      if (receivedChunks.has(i)) continue;
+      if (opts.signal?.aborted) {
+        throw new UnifiedError("aborted", "files.create aborted between chunks");
+      }
+      const start = i * chunkSize;
+      const end = Math.min(start + chunkSize, totalBytes);
+      // .slice() on a Blob is cheap — view, not copy. arrayBuffer() materializes
+      // just this slice's bytes.
+      const chunkBytes = new Uint8Array(await opts.blob.slice(start, end).arrayBuffer());
+      await putChunkWithRetry(client, uploadId, i, chunkBytes, opts.signal);
+      loaded += chunkBytes.byteLength;
+      if (opts.onProgress) {
+        try {
+          opts.onProgress({
+            loaded,
+            total: totalBytes,
+            percent: totalBytes > 0 ? Math.floor((loaded / totalBytes) * 100) : 0,
+          });
+        } catch {
+          // swallow
+        }
+      }
     }
-  }
 
-  return file;
+    const file = await client.request<FileObject>(
+      `/api/v1/files/uploads/${encodeURIComponent(uploadId)}/complete`,
+      { method: "POST", ...(opts.signal && { signal: opts.signal }) },
+    );
+
+    // Successful completion: clear the persisted session id so a future load
+    // of the same host doesn't try to resume a finished upload.
+    if (opts.onPersistUploadId) {
+      try {
+        await opts.onPersistUploadId(null);
+      } catch {
+        // swallow
+      }
+    }
+
+    return file;
+  } catch (err) {
+    // Aborted uploads explicitly clear — the user said cancel; resuming
+    // would defeat that. The abort can surface three ways:
+    //   - UnifiedError code "aborted" from our own abort checks
+    //   - raw DOMException("AbortError") from a fetch we never wrapped
+    //     (init POST, GET state, /complete POST — the request layer
+    //     surfaces the AbortError unchanged)
+    //   - any other error class while the signal is in aborted state
+    // We treat all three as abort to honor the contract robustly.
+    const isAborted =
+      (err instanceof UnifiedError && err.code === "aborted") ||
+      (err instanceof Error && err.name === "AbortError") ||
+      opts.signal?.aborted === true;
+    if (isAborted && needsClearOnAbort && opts.onPersistUploadId) {
+      try {
+        await opts.onPersistUploadId(null);
+      } catch {
+        // swallow
+      }
+    }
+    throw err;
+  }
 }

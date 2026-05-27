@@ -37,6 +37,8 @@ interface FakeBackend {
   setPutDelayMs: (ms: number) => void;
   /** Number of upcoming PUT chunk requests to 401 (decremented per request). */
   setNext401PutCount: (n: number) => void;
+  /** Delay applied to the /complete POST response — for aborting during finalize. */
+  setCompleteDelayMs: (ms: number) => void;
 }
 
 async function startFakeBackend(): Promise<FakeBackend> {
@@ -46,6 +48,7 @@ async function startFakeBackend(): Promise<FakeBackend> {
   let staleToken: string | null = null;
   let putDelayMs = 0;
   let putRequests401 = 0;
+  let completeDelayMs = 0;
 
   const server = Bun.serve({
     port: 0,
@@ -173,6 +176,9 @@ async function startFakeBackend(): Promise<FakeBackend> {
             { status: 409 },
           );
         }
+        if (completeDelayMs > 0) {
+          await new Promise((r) => setTimeout(r, completeDelayMs));
+        }
         // Mimic a real completion: concatenate and return a FileObject.
         const ordered: Buffer[] = [];
         for (let i = 0; i < totalChunks; i++) {
@@ -223,6 +229,9 @@ async function startFakeBackend(): Promise<FakeBackend> {
     },
     setNext401PutCount(n: number) {
       putRequests401 = n;
+    },
+    setCompleteDelayMs(ms: number) {
+      completeDelayMs = ms;
     },
   };
 }
@@ -595,6 +604,195 @@ describe("sdk.files — chunked upload", () => {
     // + chunk-1 + complete). The exact count depends on whether init also
     // hit the auth refresh path, so we only assert the lower bound.
     expect(tokenCalls).toBeGreaterThanOrEqual(3);
+  });
+
+  // ── Resume validation (review fixes A1, A2, B6) ──────────────────────────
+
+  test("resume rejects when server reports a different mime_type", async () => {
+    const total = CHUNK_SIZE + 4;
+    const uploadId = "upl_mime_mismatch";
+    backend.sessions.set(uploadId, {
+      upload_id: uploadId,
+      filename: "v.mp4",
+      mime_type: "video/mp4", // session was inited for mp4
+      total_bytes: total,
+      chunk_size: CHUNK_SIZE,
+      received_chunks: new Set(),
+      chunks: new Map(),
+      expires_at: new Date(Date.now() + 3600_000).toISOString(),
+    });
+
+    // Caller tries to resume with the SAME byte count but a different MIME —
+    // the cheap "is this the same logical file?" surrogate.
+    const blob = new Blob([Buffer.alloc(total, 0xaa)], { type: "video/webm" });
+    await expect(
+      sdk.files.create(blob, { filename: "v.mp4", resumeFrom: uploadId }),
+    ).rejects.toThrow(/mime_type|different file/);
+    // No chunks were PUT.
+    expect(backend.putCalls.length).toBe(0);
+  });
+
+  test("resume rejects when server returns chunk indices out of range (chunk_size drift)", async () => {
+    const total = CHUNK_SIZE * 2;
+    const uploadId = "upl_idx_oor";
+    // Simulate the server's chunk_size having changed between init and
+    // resume: session reports chunk_size=5MB and total_chunks would be 2,
+    // but received_chunks claims index 3 was acknowledged — impossible
+    // under the SDK's recomputed totalChunks.
+    backend.sessions.set(uploadId, {
+      upload_id: uploadId,
+      filename: "v.mp4",
+      mime_type: "video/mp4",
+      total_bytes: total,
+      chunk_size: CHUNK_SIZE,
+      received_chunks: new Set([3]),
+      chunks: new Map(),
+      expires_at: new Date(Date.now() + 3600_000).toISOString(),
+    });
+
+    const blob = new Blob([Buffer.alloc(total, 0xbb)], { type: "video/mp4" });
+    await expect(
+      sdk.files.create(blob, { filename: "v.mp4", resumeFrom: uploadId }),
+    ).rejects.toThrow(/out of range|chunk_size/);
+    expect(backend.putCalls.length).toBe(0);
+  });
+
+  // ── Persistence-clearing on abort (review fix B1) ────────────────────────
+
+  test("aborting a chunked upload clears the persisted upload id", async () => {
+    backend.setPutDelayMs(150);
+    const total = CHUNK_SIZE + 8;
+    const blob = new Blob([Buffer.alloc(total, 0xee)], { type: "video/mp4" });
+
+    const persistCalls: Array<string | null> = [];
+    const ctrl = new AbortController();
+    const promise = sdk.files.create(blob, {
+      filename: "v.mp4",
+      onPersistUploadId: (id) => {
+        persistCalls.push(id);
+      },
+      signal: ctrl.signal,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    ctrl.abort();
+    await expect(promise).rejects.toBeDefined();
+
+    // The first persist call set the upload_id; abort must trigger a
+    // follow-up null to clear it (per the contract in files.ts).
+    expect(persistCalls.length).toBe(2);
+    expect(typeof persistCalls[0]).toBe("string");
+    expect(persistCalls[1]).toBeNull();
+  });
+
+  test("aborting during the resume GET also clears the persisted upload id", async () => {
+    // Locks in the second recheck fix: abort during the resume's GET state
+    // request (which happens BEFORE the chunk loop) used to escape the
+    // persist-clear path because the try/catch only wrapped the chunks.
+    // We now wrap init/resume too, so abort here propagates to the catch
+    // and clears via the host-supplied hook.
+    const total = CHUNK_SIZE + 4;
+    const uploadId = "upl_resume_abort";
+    backend.sessions.set(uploadId, {
+      upload_id: uploadId,
+      filename: "v.mp4",
+      mime_type: "video/mp4",
+      total_bytes: total,
+      chunk_size: CHUNK_SIZE,
+      received_chunks: new Set([0]),
+      chunks: new Map([[0, Buffer.alloc(CHUNK_SIZE, 0x55)]]),
+      expires_at: new Date(Date.now() + 3600_000).toISOString(),
+    });
+
+    // Inject latency on every response — including the GET state request —
+    // so we have a window to abort while it's in flight. The fake's
+    // putDelayMs only affects PUTs, so we wrap the SDK's fetch directly.
+    const baseFetch = globalThis.fetch.bind(globalThis);
+    sdk = new UnifiedAI({
+      apiUrl: backend.baseUrl,
+      token: "test-token",
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : (input as Request).url;
+        if (url.includes("/uploads/") && !url.includes("/chunks/") && !url.includes("/complete")) {
+          // Add 300ms to the GET-state path only.
+          await new Promise((r) => setTimeout(r, 300));
+        }
+        return baseFetch(input, init);
+      }) as typeof globalThis.fetch,
+    });
+
+    const blob = new Blob([Buffer.alloc(total, 0x55)], { type: "video/mp4" });
+    const persistCalls: Array<string | null> = [];
+    const ctrl = new AbortController();
+    const promise = sdk.files.create(blob, {
+      filename: "v.mp4",
+      resumeFrom: uploadId,
+      onPersistUploadId: (id) => {
+        persistCalls.push(id);
+      },
+      signal: ctrl.signal,
+    });
+    // Abort while the GET state is still pending its 300ms delay.
+    await new Promise((r) => setTimeout(r, 50));
+    ctrl.abort();
+    await expect(promise).rejects.toBeDefined();
+
+    // resumeFrom paths don't fire onPersistUploadId(id) — the host already
+    // has it persisted. On abort we should fire just onPersistUploadId(null)
+    // to clear it.
+    expect(persistCalls.length).toBe(1);
+    expect(persistCalls[0]).toBeNull();
+  });
+
+  test("aborting during the /complete POST also clears the persisted upload id", async () => {
+    // Locks in the recheck fix: abort during a raw client.request() (no
+    // putChunkWithRetry wrapping) surfaces as a DOMException AbortError,
+    // not a UnifiedError. The catch needs to detect that too, otherwise
+    // the persist-clear silently breaks for abort-after-last-chunk.
+    backend.setCompleteDelayMs(800);
+    const total = CHUNK_SIZE + 4;
+    const blob = new Blob([Buffer.alloc(total, 0x77)], { type: "video/mp4" });
+
+    const persistCalls: Array<string | null> = [];
+    const ctrl = new AbortController();
+    const promise = sdk.files.create(blob, {
+      filename: "v.mp4",
+      onPersistUploadId: (id) => {
+        persistCalls.push(id);
+      },
+      signal: ctrl.signal,
+    });
+    // Let init + both chunks succeed, then abort while /complete is in-flight.
+    // PUTs have no delay so they fly through in <100ms; complete has 800ms of
+    // delay; waiting 300ms reliably lands inside the complete window.
+    await new Promise((r) => setTimeout(r, 300));
+    ctrl.abort();
+    await expect(promise).rejects.toBeDefined();
+
+    expect(persistCalls.length).toBe(2);
+    expect(typeof persistCalls[0]).toBe("string");
+    expect(persistCalls[1]).toBeNull();
+  });
+
+  test("non-abort failures do NOT clear the persisted upload id (so the host can resume)", async () => {
+    const total = CHUNK_SIZE + 1;
+    const blob = new Blob([Buffer.alloc(total, 0xff)], { type: "video/mp4" });
+
+    backend.setNextChunkFailure({ index: 0, status: 400 });
+
+    const persistCalls: Array<string | null> = [];
+    await expect(
+      sdk.files.create(blob, {
+        filename: "v.mp4",
+        onPersistUploadId: (id) => {
+          persistCalls.push(id);
+        },
+      }),
+    ).rejects.toBeDefined();
+
+    // Persist was called with the id; NOT cleared on the non-abort failure.
+    // The host needs the id to call resumeFrom on the next attempt.
+    expect(persistCalls.length).toBe(1);
+    expect(typeof persistCalls[0]).toBe("string");
   });
 
   test("401 mid-stream does not cause acknowledged chunks to be re-uploaded", async () => {

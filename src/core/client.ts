@@ -44,6 +44,37 @@ function envVar(name: string): string | undefined {
  * throws, the error is swallowed — a buggy host callback must not corrupt the
  * upload mid-flight.
  */
+/**
+ * Estimate the byte size of a FormData after multipart encoding, WITHOUT
+ * materializing it. Walks parts and sums `value.size` (Blob/File) or the
+ * UTF-8 encoded length (string parts), plus a generous per-part overhead
+ * for boundaries and headers. Pessimistic by design — we use this only
+ * to decide whether the actual encoding is safe to do, so over-estimating
+ * is fine (we skip wrapping and the host gets coarser progress) but
+ * under-estimating would defeat the cap.
+ */
+function estimateFormDataBytes(form: FormData): number {
+  let total = 0;
+  let partCount = 0;
+  const encoder = typeof TextEncoder !== "undefined" ? new TextEncoder() : undefined;
+  for (const [name, value] of form.entries()) {
+    partCount += 1;
+    // Field name shows up in the encoded part header verbatim.
+    total += encoder ? encoder.encode(name).length : name.length;
+    if (typeof value === "string") {
+      total += encoder ? encoder.encode(value).length : value.length;
+    } else {
+      // FormDataEntryValue = string | File; the else branch is a File but
+      // tsc's `for...of` narrowing loses that without an explicit cast.
+      total += (value as Blob).size;
+    }
+  }
+  // ~200 bytes per part covers boundary + Content-Disposition + Content-Type
+  // headers with room to spare. The trailing boundary adds another ~50.
+  total += partCount * 200 + 50;
+  return total;
+}
+
 function progressStream(
   blob: Blob,
   onProgress: UploadProgressListener,
@@ -159,15 +190,28 @@ export class UnifiedAI extends Core {
     // the 401-retry path). Encoding the FormData to a Blob up front gives us
     // both — the encoded multipart payload (including boundaries) and the
     // exact Content-Type with that boundary.
-    const progressBlob: Blob | undefined =
-      isMultipart && typeof onUploadProgress === "function"
-        ? await new Response(options.body as FormData).blob()
-        : undefined;
-    if (progressBlob && onUploadProgress) {
-      try {
-        onUploadProgress({ loaded: 0, total: progressBlob.size, percent: 0 });
-      } catch {
-        // Host listener errors must not block the upload.
+    // Wrapping a multipart body for byte-level progress requires encoding
+    // the whole FormData to a single in-memory Blob (so we know its exact
+    // size and Content-Type with boundary). For a multi-hundred-MB upload
+    // that's an O(payload) memory spike. We avoid it by ESTIMATING the
+    // encoded size first — walking FormData parts and summing their .size
+    // / encoded string length — and only wrap below PROGRESS_BLOB_MAX_BYTES.
+    // Above the cap we ship the original FormData (lazily streamable by
+    // fetch) and emit only coarse synthetic bookends, since the alternative
+    // is a likely-OOM.
+    //
+    // For files.create() this only matters as a backstop — its chunked
+    // path kicks in at 5 MB and emits per-chunk progress separately. The
+    // cap here protects files.upload() and any future single-shot caller
+    // that opts into progress for a huge payload.
+    const PROGRESS_BLOB_MAX_BYTES = 100 * 1024 * 1024;
+    const wantsProgressBlob = isMultipart && typeof onUploadProgress === "function";
+    let progressBlob: Blob | undefined;
+    let estimatedFormBytes = 0;
+    if (wantsProgressBlob) {
+      estimatedFormBytes = estimateFormDataBytes(options.body as FormData);
+      if (estimatedFormBytes <= PROGRESS_BLOB_MAX_BYTES) {
+        progressBlob = await new Response(options.body as FormData).blob();
       }
     }
     const bodyInit: BodyInit | undefined = isMultipart
@@ -178,6 +222,26 @@ export class UnifiedAI extends Core {
           ? JSON.stringify(options.body)
           : undefined;
     const send = (accessToken: string) => {
+      // Emit the 0/total bookend per send so a 401 → refresh → retry shows
+      // hosts a clean "we're restarting from byte 0" marker, instead of
+      // silently resetting `loaded` partway through the listener's stream.
+      // Without this, listeners that assume monotonic `loaded` would see
+      // it climb on attempt 1, drop on attempt 2, climb again — the test
+      // `tests/node/files.test.ts` documents the per-attempt-monotonic
+      // shape, and consumers may rely on the 0-bookend to know when a
+      // restart happened.
+      if (wantsProgressBlob && onUploadProgress) {
+        // Above the wrap cap we use the pre-encode estimate so listeners
+        // still get a meaningful `total` (otherwise a 200 MB upload would
+        // report total=0 on its bookend, which divides-by-zero in any
+        // percent-driven UI).
+        const total = progressBlob?.size ?? estimatedFormBytes;
+        try {
+          onUploadProgress({ loaded: 0, total, percent: 0 });
+        } catch {
+          // Host listener errors must not block the upload.
+        }
+      }
       const init: RequestInit & { duplex?: "half" } = {
         method: options.method ?? "GET",
         // For multipart, let fetch set the Content-Type (with boundary). For
@@ -230,6 +294,22 @@ export class UnifiedAI extends Core {
           body,
           headersToRecord(res.headers),
         );
+      }
+    }
+    // Final bookend for the above-cap progress path. The wrapping branch
+    // already emits total/total naturally as the last chunk drains, so
+    // this only fires when we sent the FormData as-is. The `total` here
+    // is the pre-encode estimate — a few hundred bytes off from the wire
+    // truth, but stable enough for "upload finished" UI.
+    if (res.ok && wantsProgressBlob && !progressBlob && onUploadProgress) {
+      try {
+        onUploadProgress({
+          loaded: estimatedFormBytes,
+          total: estimatedFormBytes,
+          percent: estimatedFormBytes > 0 ? 100 : 0,
+        });
+      } catch {
+        // swallow
       }
     }
     if (!res.ok) {
