@@ -59,7 +59,11 @@ function estimateFormDataBytes(form: FormData): number {
   const encoder = typeof TextEncoder !== "undefined" ? new TextEncoder() : undefined;
   for (const [name, value] of form.entries()) {
     partCount += 1;
-    // Field name shows up in the encoded part header verbatim.
+    // RFC 7578 encodes the field name into the Content-Disposition header;
+    // we approximate its contribution by its UTF-8 byte length. The
+    // per-part overhead added below covers the surrounding header bytes
+    // (`Content-Disposition: form-data; name="..."` + CRLFs) — the goal is
+    // an over-estimate, not an exact match.
     total += encoder ? encoder.encode(name).length : name.length;
     if (typeof value === "string") {
       total += encoder ? encoder.encode(value).length : value.length;
@@ -73,6 +77,27 @@ function estimateFormDataBytes(form: FormData): number {
   // headers with room to spare. The trailing boundary adds another ~50.
   total += partCount * 200 + 50;
   return total;
+}
+
+/**
+ * Emit a progress event without letting a throwing listener tear down the
+ * upload. Host UI bugs must not abort an otherwise-healthy request.
+ */
+function safeEmit(
+  listener: UploadProgressListener | undefined,
+  loaded: number,
+  total: number,
+): void {
+  if (!listener) return;
+  try {
+    listener({
+      loaded,
+      total,
+      percent: total > 0 ? Math.floor((loaded / total) * 100) : 0,
+    });
+  } catch {
+    // Host listener errors must not abort the upload.
+  }
 }
 
 function progressStream(
@@ -91,15 +116,7 @@ function progressStream(
       }
       loaded += value.byteLength;
       controller.enqueue(value);
-      try {
-        onProgress({
-          loaded,
-          total,
-          percent: total > 0 ? Math.floor((loaded / total) * 100) : 0,
-        });
-      } catch {
-        // Host listener errors must not abort the upload.
-      }
+      safeEmit(onProgress, loaded, total);
     },
     async cancel(reason) {
       await reader.cancel(reason);
@@ -172,6 +189,12 @@ export class UnifiedAI extends Core {
     );
   }
 
+  /**
+   * No-op in trusted-token mode — the host owns the token lifecycle, so there
+   * is no SDK-side session to clear. Subclasses that own session state (the
+   * node OAuth subclass) override this to revoke and wipe the keychain.
+   * Resolves successfully so callers can wire it into UI flows uniformly.
+   */
   async signOut(): Promise<void> {
     // Trusted-token mode has no SDK-owned session to clear.
   }
@@ -236,11 +259,7 @@ export class UnifiedAI extends Core {
         // report total=0 on its bookend, which divides-by-zero in any
         // percent-driven UI).
         const total = progressBlob?.size ?? estimatedFormBytes;
-        try {
-          onUploadProgress({ loaded: 0, total, percent: 0 });
-        } catch {
-          // Host listener errors must not block the upload.
-        }
+        safeEmit(onUploadProgress, 0, total);
       }
       const init: RequestInit & { duplex?: "half" } = {
         method: options.method ?? "GET",
@@ -302,15 +321,7 @@ export class UnifiedAI extends Core {
     // is the pre-encode estimate — a few hundred bytes off from the wire
     // truth, but stable enough for "upload finished" UI.
     if (res.ok && wantsProgressBlob && !progressBlob && onUploadProgress) {
-      try {
-        onUploadProgress({
-          loaded: estimatedFormBytes,
-          total: estimatedFormBytes,
-          percent: estimatedFormBytes > 0 ? 100 : 0,
-        });
-      } catch {
-        // swallow
-      }
+      safeEmit(onUploadProgress, estimatedFormBytes, estimatedFormBytes);
     }
     if (!res.ok) {
       const status = res.status;

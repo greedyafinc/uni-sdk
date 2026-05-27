@@ -540,10 +540,12 @@ describe("sdk.files — general file management (UNI-88)", () => {
 });
 
 describe("parseContentDispositionFilename (RFC 6266 / 5987)", () => {
-  // Import lazily to avoid touching the SDK barrel for a single helper.
-  // The function is exported from src/resources/files.ts.
+  // Internal helper — import directly from its _internal module so it stays
+  // off the public SDK barrel.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { parseContentDispositionFilename } = require("../../src/resources/files");
+  const {
+    parseContentDispositionFilename,
+  } = require("../../src/resources/_internal/contentDisposition");
 
   test("returns undefined for missing header", () => {
     expect(parseContentDispositionFilename(undefined)).toBeUndefined();

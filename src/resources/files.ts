@@ -5,6 +5,7 @@ import {
   type ChunkedUploadPersist,
   performChunkedUpload,
 } from "./_internal/chunkedUpload";
+import { parseContentDispositionFilename } from "./_internal/contentDisposition";
 
 export type { UploadProgressEvent, UploadProgressListener } from "../core/core";
 export type { ChunkedUploadPersist } from "./_internal/chunkedUpload";
@@ -22,12 +23,15 @@ export type { ChunkedUploadPersist } from "./_internal/chunkedUpload";
  */
 export type FileUploadSource = Blob | ArrayBuffer | Uint8Array | string;
 
-export interface FileUploadOptions {
+export interface FileRequestOptions {
+  signal?: AbortSignal;
+}
+
+export interface FileUploadOptions extends FileRequestOptions {
   /** Override the multipart filename. Defaults to the source's name (if any), else a mime-based default. */
   filename?: string;
   /** Override the multipart content type. Defaults to the source's type, magic-byte sniff, or `application/octet-stream`. */
   contentType?: string;
-  signal?: AbortSignal;
   /**
    * Byte-level upload progress. Fires once with `loaded: 0` before any bytes
    * are sent, then again each time a chunk reaches the network, ending with
@@ -114,10 +118,6 @@ export interface FileContent {
   bytes: ArrayBuffer;
   contentType: string;
   filename?: string;
-}
-
-export interface FileRequestOptions {
-  signal?: AbortSignal;
 }
 
 function inputError(message: string): UnifiedError {
@@ -332,11 +332,15 @@ async function normalise(
     return { blob, filename };
   }
 
-  // Cross-realm Blob — duck-type the Blob shape (arrayBuffer + numeric size).
+  // Cross-realm Blob — duck-type the Blob shape (arrayBuffer + slice + numeric
+  // size). The `slice` requirement is what distinguishes a real Blob from a
+  // discriminated-object source that happens to expose `arrayBuffer` and
+  // `size` (e.g. `{ fileId, arrayBuffer, size: 0 }`).
   if (
     typeof source === "object" &&
     source !== null &&
     typeof (source as { arrayBuffer?: unknown }).arrayBuffer === "function" &&
+    typeof (source as { slice?: unknown }).slice === "function" &&
     typeof (source as { size?: unknown }).size === "number"
   ) {
     const s = source as {
@@ -362,51 +366,6 @@ async function normalise(
   throw inputError(
     "unsupported file source; expected Blob/File/Buffer/Uint8Array/ArrayBuffer or a base64 data URL",
   );
-}
-
-/**
- * Parse the filename out of a Content-Disposition header per RFC 6266 / 5987.
- *
- * Preference order matches RFC 6266 §4.3: when both `filename*` (RFC 5987,
- * percent-encoded UTF-8) and `filename` (legacy ASCII) are present, the
- * `filename*` value wins. Returns the decoded UTF-8 string, or `undefined`
- * if no filename parameter is present or decoding fails.
- *
- * Exported for unit-test introspection; not part of the public SDK surface.
- */
-export function parseContentDispositionFilename(header: string | undefined): string | undefined {
-  if (!header) return undefined;
-
-  // Try RFC 5987 `filename*=charset'lang'percent-encoded-value` first.
-  // The `*` marker is the canonical signal that the value is UTF-8 encoded.
-  const extended = /filename\*\s*=\s*([^']+)'([^']*)'([^;]+)/i.exec(header);
-  if (extended) {
-    const charset = extended[1]?.toLowerCase();
-    const value = extended[3]?.trim();
-    if (value) {
-      try {
-        const decoded = decodeURIComponent(value);
-        // Only utf-8 / us-ascii are required by RFC 5987; fall through to the
-        // raw decoded bytes for anything else (best-effort, matches what
-        // browsers do).
-        if (!charset || charset === "utf-8" || charset === "us-ascii") {
-          return decoded;
-        }
-        return decoded;
-      } catch {
-        // Malformed percent-encoding — fall through to legacy form.
-      }
-    }
-  }
-
-  // Fall back to legacy `filename="..."` or `filename=bare-token`. Anchor on
-  // a word boundary so this doesn't match the tail of `filename*=`.
-  const legacy = /(?:^|;)\s*filename\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;\s]+))/i.exec(header);
-  if (legacy) {
-    const raw = legacy[1] ?? legacy[2];
-    if (raw) return raw.replace(/\\(.)/g, "$1"); // unescape backslashes inside quotes
-  }
-  return undefined;
 }
 
 /**

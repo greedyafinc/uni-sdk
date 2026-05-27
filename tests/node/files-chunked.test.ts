@@ -632,6 +632,29 @@ describe("sdk.files — chunked upload", () => {
     expect(backend.putCalls.length).toBe(0);
   });
 
+  test("resume rejects when server reports a different filename", async () => {
+    const total = CHUNK_SIZE + 4;
+    const uploadId = "upl_name_mismatch";
+    backend.sessions.set(uploadId, {
+      upload_id: uploadId,
+      filename: "scan-001.pdf", // session was inited for scan-001
+      mime_type: "application/pdf",
+      total_bytes: total,
+      chunk_size: CHUNK_SIZE,
+      received_chunks: new Set(),
+      chunks: new Map(),
+      expires_at: new Date(Date.now() + 3600_000).toISOString(),
+    });
+
+    // Same size and mime but a different filename — a host with two scans
+    // of the same size would otherwise stitch the wrong session.
+    const blob = new Blob([Buffer.alloc(total, 0x11)], { type: "application/pdf" });
+    await expect(
+      sdk.files.create(blob, { filename: "scan-002.pdf", resumeFrom: uploadId }),
+    ).rejects.toThrow(/filename|different file/);
+    expect(backend.putCalls.length).toBe(0);
+  });
+
   test("resume rejects when server returns chunk indices out of range (chunk_size drift)", async () => {
     const total = CHUNK_SIZE * 2;
     const uploadId = "upl_idx_oor";
