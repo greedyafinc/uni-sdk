@@ -101,6 +101,13 @@ export interface FileCreateOptions extends FileUploadOptions {
    * persisted (via `onPersistUploadId`) from a prior call that failed
    * mid-flight. The SDK queries the server for which chunks made it through
    * and only re-sends the missing ones.
+   *
+   * The resumed call must pass the same payload identity as the original
+   * init — same `filename` (or none, so the same default applies), same
+   * mime type, and same total byte count. The SDK enforces this by
+   * comparing against the server's recorded session and throwing
+   * `invalid_input` on mismatch, to prevent silently stitching a different
+   * file onto the original session's metadata.
    */
   resumeFrom?: string;
   /**
@@ -332,15 +339,25 @@ async function normalise(
     return { blob, filename };
   }
 
-  // Cross-realm Blob — duck-type the Blob shape (arrayBuffer + slice + numeric
-  // size). The `slice` requirement is what distinguishes a real Blob from a
-  // discriminated-object source that happens to expose `arrayBuffer` and
-  // `size` (e.g. `{ fileId, arrayBuffer, size: 0 }`).
+  // Discriminated-object sources first: a multimodal-helper-shaped object
+  // (`{ fileId }`, `{ url }`, `{ data, mimeType }`) gets a targeted error
+  // before the loose cross-realm duck-type below could mistake it for a
+  // Blob-like (e.g. `{ fileId, arrayBuffer, size: 0 }`).
+  if (typeof source === "object" && source !== null) {
+    const s = source as { fileId?: unknown; url?: unknown; data?: unknown };
+    if (typeof s.fileId === "string" || typeof s.url === "string" || typeof s.data === "string") {
+      rejectDiscriminatedObject(source);
+    }
+  }
+
+  // Cross-realm Blob — duck-type the Blob shape (arrayBuffer + numeric size).
+  // Loose by design so minimal Blob-likes from streaming polyfills (which may
+  // omit `slice`) still upload; the discriminator above is what guards against
+  // the multimodal-helper shapes.
   if (
     typeof source === "object" &&
     source !== null &&
     typeof (source as { arrayBuffer?: unknown }).arrayBuffer === "function" &&
-    typeof (source as { slice?: unknown }).slice === "function" &&
     typeof (source as { size?: unknown }).size === "number"
   ) {
     const s = source as {
