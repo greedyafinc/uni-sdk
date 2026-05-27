@@ -149,6 +149,10 @@ export class UnifiedAI extends Core {
     const initialToken = await this.getInitialAccessToken();
     const url = this.buildUrl(path, options.query);
     const isMultipart = typeof FormData !== "undefined" && options.body instanceof FormData;
+    const isBinaryBody =
+      options.body instanceof ArrayBuffer ||
+      options.body instanceof Uint8Array ||
+      (typeof Blob !== "undefined" && options.body instanceof Blob);
     const onUploadProgress = options.onUploadProgress;
     // For progress-tracked multipart uploads we need to know the total byte
     // count and to be able to wrap each send in a fresh counting stream (for
@@ -168,14 +172,22 @@ export class UnifiedAI extends Core {
     }
     const bodyInit: BodyInit | undefined = isMultipart
       ? (options.body as FormData)
-      : options.body !== undefined
-        ? JSON.stringify(options.body)
-        : undefined;
+      : isBinaryBody
+        ? (options.body as BodyInit)
+        : options.body !== undefined
+          ? JSON.stringify(options.body)
+          : undefined;
     const send = (accessToken: string) => {
       const init: RequestInit & { duplex?: "half" } = {
         method: options.method ?? "GET",
-        // For multipart, let fetch set the Content-Type (with boundary).
-        headers: this.buildHeaders(accessToken, bodyInit !== undefined && !isMultipart),
+        // For multipart, let fetch set the Content-Type (with boundary). For
+        // binary bodies the caller supplies `contentType` (or we default to
+        // application/octet-stream below). Only JSON gets the auto-applied
+        // application/json header from buildHeaders.
+        headers: this.buildHeaders(
+          accessToken,
+          bodyInit !== undefined && !isMultipart && !isBinaryBody,
+        ),
       };
       if (progressBlob && onUploadProgress) {
         init.body = progressStream(progressBlob, onUploadProgress);
@@ -188,6 +200,10 @@ export class UnifiedAI extends Core {
         (init.headers as Record<string, string>)["content-type"] = progressBlob.type;
       } else if (bodyInit !== undefined) {
         init.body = bodyInit;
+        if (isBinaryBody) {
+          (init.headers as Record<string, string>)["content-type"] =
+            options.contentType ?? "application/octet-stream";
+        }
       }
       if (options.signal) init.signal = options.signal;
       return this.options.fetch(url, init);

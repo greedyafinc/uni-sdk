@@ -57,6 +57,14 @@ export interface RequestOptions {
    * events are emitted.
    */
   onUploadProgress?: UploadProgressListener;
+  /**
+   * Explicit Content-Type override. Used when `body` is a raw byte container
+   * (`ArrayBuffer` / `Uint8Array` / `Blob`) and the default JSON encoding is
+   * not what's wanted — e.g. chunk PUTs in the resumable-upload protocol
+   * send `application/octet-stream`. Ignored for `FormData` (fetch picks the
+   * boundary-tagged multipart type itself) and JSON bodies.
+   */
+  contentType?: string;
 }
 
 export class Core {
