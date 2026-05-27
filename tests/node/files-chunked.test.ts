@@ -25,16 +25,27 @@ interface FakeBackend {
   baseUrl: string;
   stop: () => Promise<void>;
   sessions: Map<string, Session>;
-  putCalls: Array<{ uploadId: string; index: number; size: number; status: number }>;
+  putCalls: Array<{ uploadId: string; index: number; size: number; status: number; auth: string }>;
   /** If set, the next PUT to this index returns the given status without recording. */
   nextChunkFailure: { index: number; status: number } | null;
   setNextChunkFailure: (f: { index: number; status: number } | null) => void;
+  /** When set, every request whose auth header matches `staleToken` is 401'd. */
+  staleToken: string | null;
+  setStaleToken: (t: string | null) => void;
+  /** When > 0, every PUT response is delayed by this many ms — used for abort mid-flight. */
+  putDelayMs: number;
+  setPutDelayMs: (ms: number) => void;
+  /** Number of upcoming PUT chunk requests to 401 (decremented per request). */
+  setNext401PutCount: (n: number) => void;
 }
 
 async function startFakeBackend(): Promise<FakeBackend> {
   const sessions = new Map<string, Session>();
   const putCalls: FakeBackend["putCalls"] = [];
   let nextChunkFailure: { index: number; status: number } | null = null;
+  let staleToken: string | null = null;
+  let putDelayMs = 0;
+  let putRequests401 = 0;
 
   const server = Bun.serve({
     port: 0,
@@ -43,6 +54,27 @@ async function startFakeBackend(): Promise<FakeBackend> {
       const url = new URL(req.url);
       const path = url.pathname;
       const method = req.method;
+      const auth = req.headers.get("authorization") ?? "";
+
+      // Stale-token gate: every request carrying the stale bearer is 401'd
+      // before any business logic runs. The SDK's refresh path should swap
+      // the token and retry transparently. We record chunk PUTs so the test
+      // can see both the failed and refreshed attempts.
+      if (staleToken && auth === `Bearer ${staleToken}`) {
+        const cm = path.match(/^\/api\/v1\/files\/uploads\/([^/]+)\/chunks\/(\d+)$/);
+        if (method === "PUT" && cm && cm[1] && cm[2]) {
+          // Drain so the connection can be reused for the retry.
+          const bytes = Buffer.from(await req.arrayBuffer());
+          putCalls.push({
+            uploadId: cm[1],
+            index: Number(cm[2]),
+            size: bytes.length,
+            status: 401,
+            auth,
+          });
+        }
+        return new Response("unauthorized", { status: 401 });
+      }
 
       // POST /api/v1/files/uploads — init
       if (method === "POST" && path === "/api/v1/files/uploads") {
@@ -76,16 +108,28 @@ async function startFakeBackend(): Promise<FakeBackend> {
         const idx = Number(chunkMatch[2]);
         const session = sessions.get(uploadId);
         if (!session) return new Response("not found", { status: 404 });
+        // Drain the body even when we're going to fail — otherwise the
+        // server-side stream stays open and the SDK side can deadlock on
+        // half-uploaded bodies waiting for a response.
         const bytes = Buffer.from(await req.arrayBuffer());
+        if (putRequests401 > 0) {
+          putRequests401 -= 1;
+          putCalls.push({ uploadId, index: idx, size: bytes.length, status: 401, auth });
+          return new Response("unauthorized", { status: 401 });
+        }
         if (nextChunkFailure && nextChunkFailure.index === idx) {
           const status = nextChunkFailure.status;
           nextChunkFailure = null;
-          putCalls.push({ uploadId, index: idx, size: bytes.length, status });
+          putCalls.push({ uploadId, index: idx, size: bytes.length, status, auth });
           return new Response("simulated failure", { status });
+        }
+        // Optional artificial latency lets a test abort mid-PUT.
+        if (putDelayMs > 0) {
+          await new Promise((r) => setTimeout(r, putDelayMs));
         }
         session.received_chunks.add(idx);
         session.chunks.set(idx, bytes);
-        putCalls.push({ uploadId, index: idx, size: bytes.length, status: 200 });
+        putCalls.push({ uploadId, index: idx, size: bytes.length, status: 200, auth });
         const received = Array.from(session.chunks.values()).reduce((s, b) => s + b.length, 0);
         return Response.json({
           upload_id: uploadId,
@@ -164,6 +208,21 @@ async function startFakeBackend(): Promise<FakeBackend> {
     },
     setNextChunkFailure(f) {
       nextChunkFailure = f;
+    },
+    get staleToken() {
+      return staleToken;
+    },
+    setStaleToken(t) {
+      staleToken = t;
+    },
+    get putDelayMs() {
+      return putDelayMs;
+    },
+    setPutDelayMs(ms) {
+      putDelayMs = ms;
+    },
+    setNext401PutCount(n: number) {
+      putRequests401 = n;
     },
   };
 }
@@ -434,5 +493,166 @@ describe("sdk.files — chunked upload", () => {
     } finally {
       await server.stop(true);
     }
+  });
+
+  // ── Abort + 401 stress paths ─────────────────────────────────────────────
+  //
+  // The chunked path issues many requests against the auth and abort
+  // mechanisms; both deserve their own tests separate from the happy path.
+
+  test("abort during an active chunk PUT throws and skips remaining chunks", async () => {
+    // 2 chunks. Add latency to chunk PUTs so we have a window to abort.
+    backend.setPutDelayMs(200);
+    const total = CHUNK_SIZE + 16;
+    const payload = Buffer.alloc(total, 0xaa);
+    const blob = new Blob([payload], { type: "video/mp4" });
+
+    const ctrl = new AbortController();
+    const promise = sdk.files.create(blob, {
+      filename: "v.mp4",
+      signal: ctrl.signal,
+    });
+    // Wait long enough for the first PUT to be in-flight on the server, then
+    // abort. Bun's setTimeout resolution is fine-grained enough that 50ms
+    // reliably lands inside the 200ms server delay.
+    await new Promise((r) => setTimeout(r, 50));
+    ctrl.abort();
+
+    await expect(promise).rejects.toBeDefined();
+    // At least one PUT was issued (the one we aborted); chunk 1 must NOT
+    // have been issued — the loop checks signal.aborted between chunks.
+    const chunk1Calls = backend.putCalls.filter((c) => c.index === 1);
+    expect(chunk1Calls.length).toBe(0);
+  });
+
+  test("abort during retry backoff throws without further attempts", async () => {
+    // Force one 503 to trigger the retry sleep, then abort during the sleep.
+    // Retry base is 250ms — abort after ~50ms reliably lands inside it.
+    const total = CHUNK_SIZE + 1;
+    const payload = Buffer.alloc(total, 0xbb);
+    const blob = new Blob([payload], { type: "video/mp4" });
+
+    backend.setNextChunkFailure({ index: 0, status: 503 });
+
+    const ctrl = new AbortController();
+    const promise = sdk.files.create(blob, {
+      filename: "v.mp4",
+      signal: ctrl.signal,
+    });
+    // Let the first PUT complete (failing 503) and the SDK enter the
+    // backoff sleep, then abort.
+    await new Promise((r) => setTimeout(r, 50));
+    ctrl.abort();
+
+    await expect(promise).rejects.toBeDefined();
+    // Exactly one PUT attempt — the failing one. The retry was aborted
+    // before it fired.
+    expect(backend.putCalls.length).toBe(1);
+    expect(backend.putCalls[0]).toMatchObject({ index: 0, status: 503 });
+  });
+
+  test("401 on a chunk PUT triggers token refresh and the upload completes", async () => {
+    // The first chunk PUT is 401'd by the server (simulates a mid-upload
+    // token expiry — the SDK can't predict when an upstream will reject).
+    // The SDK's 401-retry path must re-invoke the token provider and
+    // re-send the body; both the retry and the subsequent chunk must
+    // succeed.
+    let tokenCalls = 0;
+    const sdkLocal = new UnifiedAI({
+      apiUrl: backend.baseUrl,
+      token: async () => {
+        tokenCalls += 1;
+        return `token-${tokenCalls}`;
+      },
+    });
+
+    // 401 only the next PUT chunk request, regardless of token contents.
+    // The init POST and the chunk-0 retry are NOT affected.
+    backend.setNext401PutCount(1);
+
+    const total = CHUNK_SIZE + 4;
+    const payload = Buffer.alloc(total, 0xcc);
+    const blob = new Blob([payload], { type: "video/mp4" });
+
+    const file = await sdkLocal.files.create(blob, { filename: "v.mp4" });
+    expect(file.bytes).toBe(total);
+
+    // Chunk 0: one 401 followed by one 200 (the SDK's auth-retry).
+    const chunk0 = backend.putCalls.filter((c) => c.index === 0);
+    expect(chunk0.length).toBe(2);
+    expect(chunk0[0]?.status).toBe(401);
+    expect(chunk0[1]?.status).toBe(200);
+    // The retry MUST use a freshly-resolved token — different value than
+    // the one that 401'd. This is the load-bearing assertion: without the
+    // refresh path the retry would carry the same token and 401 again.
+    expect(chunk0[1]?.auth).not.toBe(chunk0[0]?.auth);
+
+    // Chunk 1: single successful PUT (no further refresh needed).
+    const chunk1 = backend.putCalls.filter((c) => c.index === 1);
+    expect(chunk1.length).toBe(1);
+    expect(chunk1[0]?.status).toBe(200);
+    // At least 3 token calls happened (init + chunk-0-stale + chunk-0-refresh
+    // + chunk-1 + complete). The exact count depends on whether init also
+    // hit the auth refresh path, so we only assert the lower bound.
+    expect(tokenCalls).toBeGreaterThanOrEqual(3);
+  });
+
+  test("401 mid-stream does not cause acknowledged chunks to be re-uploaded", async () => {
+    // Regression guard: a 401 on chunk N must not cause the SDK to restart
+    // the whole upload from chunk 0. The session row on the server still
+    // remembers what's been acknowledged; the SDK should refresh the token
+    // and continue from where it was.
+    //
+    // Setup: pre-seed a session with chunks 0 and 1 already received, then
+    // resume into it. The very next chunk PUT (index 2) is 401'd once. The
+    // SDK refreshes, retries chunk 2, and finishes. Chunks 0 and 1 must
+    // never be touched.
+    const total = CHUNK_SIZE * 2 + 8;
+    const payload = Buffer.alloc(total, 0xdd);
+    const blob = new Blob([payload], { type: "video/mp4" });
+
+    const sdkLocal = new UnifiedAI({
+      apiUrl: backend.baseUrl,
+      token: (() => {
+        let n = 0;
+        return async () => {
+          n += 1;
+          return `token-${n}`;
+        };
+      })(),
+    });
+
+    const seededUploadId = "upl_partial";
+    backend.sessions.set(seededUploadId, {
+      upload_id: seededUploadId,
+      filename: "v.mp4",
+      mime_type: "video/mp4",
+      total_bytes: total,
+      chunk_size: CHUNK_SIZE,
+      received_chunks: new Set([0, 1]),
+      chunks: new Map([
+        [0, Buffer.alloc(CHUNK_SIZE, 0xdd)],
+        [1, Buffer.alloc(CHUNK_SIZE, 0xdd)],
+      ]),
+      expires_at: new Date(Date.now() + 3600_000).toISOString(),
+    });
+
+    // 401 the next chunk PUT — which will be chunk index 2.
+    backend.setNext401PutCount(1);
+
+    const file = await sdkLocal.files.create(blob, {
+      filename: "v.mp4",
+      resumeFrom: seededUploadId,
+    });
+
+    expect(file.bytes).toBe(total);
+    // Chunk 2 was uploaded twice: the 401 attempt and the refreshed retry.
+    const chunk2 = backend.putCalls.filter((c) => c.index === 2);
+    expect(chunk2.length).toBe(2);
+    expect(chunk2[0]?.status).toBe(401);
+    expect(chunk2[1]?.status).toBe(200);
+    // Chunks 0 and 1 were NEVER touched — the load-bearing assertion.
+    const chunk0or1 = backend.putCalls.filter((c) => c.index === 0 || c.index === 1);
+    expect(chunk0or1.length).toBe(0);
   });
 });
