@@ -1,7 +1,13 @@
 import type { Core, RequestOptions, UploadProgressListener } from "../core/core";
 import { UnifiedError } from "../core/errors";
+import {
+  CHUNKED_UPLOAD_THRESHOLD,
+  type ChunkedUploadPersist,
+  performChunkedUpload,
+} from "./_internal/chunkedUpload";
 
 export type { UploadProgressEvent, UploadProgressListener } from "../core/core";
+export type { ChunkedUploadPersist } from "./_internal/chunkedUpload";
 
 /**
  * Source for `files.upload`. Anything that resolves to raw bytes:
@@ -77,6 +83,31 @@ export interface FileDeleteResponse {
 export interface FileCreateOptions extends FileUploadOptions {
   /** Free-form tag stored on the file. Defaults to `"assistants"`. */
   purpose?: string;
+  /**
+   * Size in bytes above which `create()` switches from single-shot multipart
+   * to the resumable chunked-upload protocol. Defaults to 5 MB — matches the
+   * server-side chunk size, so anything smaller is one chunk anyway and the
+   * chunked-path overhead is wasted.
+   *
+   * Set to `Infinity` to disable chunked uploads entirely (legacy behavior).
+   */
+  chunkedUploadThreshold?: number;
+  /**
+   * Resume an interrupted chunked upload. Pass the `upload_id` that was
+   * persisted (via `onPersistUploadId`) from a prior call that failed
+   * mid-flight. The SDK queries the server for which chunks made it through
+   * and only re-sends the missing ones.
+   */
+  resumeFrom?: string;
+  /**
+   * Persistence hook for the active chunked-upload session id. Called with
+   * the id immediately after session init, and with `null` once the upload
+   * completes (or aborts). The SDK does NOT pick a storage location — the
+   * host writes it to `localStorage`, `IndexedDB`, or whatever else matches
+   * the runtime. Hook errors are swallowed; losing resume-on-crash must not
+   * break an otherwise-good upload.
+   */
+  onPersistUploadId?: ChunkedUploadPersist;
 }
 
 export interface FileContent {
@@ -444,6 +475,28 @@ export class Files {
     if (options.signal?.aborted) {
       throw new UnifiedError("aborted", "files.create aborted before request was sent");
     }
+
+    // Resumable path. Triggered above the threshold OR when the caller is
+    // explicitly resuming a prior session. Mime type is required by the
+    // chunked endpoint, so we use the normalized blob type (which has
+    // already been resolved through opts.contentType → source.type →
+    // magic-byte sniff → application/octet-stream).
+    const threshold = options.chunkedUploadThreshold ?? CHUNKED_UPLOAD_THRESHOLD;
+    if (options.resumeFrom || blob.size > threshold) {
+      return performChunkedUpload(this.client, {
+        blob,
+        filename: filename || defaultFilenameFor(blob.type),
+        mimeType: blob.type || "application/octet-stream",
+        ...(options.purpose !== undefined && { purpose: options.purpose }),
+        ...(options.resumeFrom !== undefined && { resumeFrom: options.resumeFrom }),
+        ...(options.onProgress !== undefined && { onProgress: options.onProgress }),
+        ...(options.onPersistUploadId !== undefined && {
+          onPersistUploadId: options.onPersistUploadId,
+        }),
+        ...(options.signal !== undefined && { signal: options.signal }),
+      });
+    }
+
     const form = new FormData();
     form.append("file", blob, filename || defaultFilenameFor(blob.type));
     if (options.purpose) form.append("purpose", options.purpose);
