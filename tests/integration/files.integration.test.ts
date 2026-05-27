@@ -339,51 +339,57 @@ describe("integration: files", () => {
     }
   });
 
-  // Companion to the test above: explicitly exercise the (currently broken)
-  // file_id path so the backend gap stays visible in CI and we get a clear
-  // signal when it closes. This test will START FAILING when the backend
-  // adds the Supabase file_id → signed URL resolution layer — at which point
-  // remove the `.toThrow(...)` wrapper and assert success instead.
+  // Companion to the round-trip test above, but routes the upload via
+  // `file_id` (the gateway-managed id) instead of `image_url`. UNI-88 shipped
+  // server-side resolution: the gateway looks up the UUID in `user_files`,
+  // creates a signed URL, and substitutes it into the AI SDK message parts
+  // before any provider call. This test pins that contract end-to-end:
+  //   bytes uploaded → file_id returned → file_id passed in input_image
+  //   → backend resolves it → provider decodes the bytes → 200 response.
   //
-  // Gated on its own cassette presence; recording requires the same
-  // RECORD=true + cloud-Supabase workflow as the happy-path test above.
+  // Gated on its own cassette presence so CI doesn't need cloud Supabase
+  // or a live provider. Recording requires the same RECORD=true +
+  // publicly-reachable Supabase workflow as the image_url round-trip test
+  // above.
   const FILE_ID_CASSETTE = join(
     import.meta.dir,
     "cassettes",
     "files",
-    "upload-then-responses-file-id-xfail.json",
+    "upload-then-responses-file-id.json",
   );
   const HAS_FILE_ID_CASSETTE = RECORD || existsSync(FILE_ID_CASSETTE);
   test.skipIf(!HAS_FILE_ID_CASSETTE)(
-    "[xfail until backend fix] passing file_id to responses.create surfaces the resolution gap",
+    "passing file_id to responses.create resolves server-side to a signed URL",
     async () => {
-      h.cassette("files/upload-then-responses-file-id-xfail");
+      h.cassette("files/upload-then-responses-file-id");
       const bytes = RECORD
         ? new Uint8Array(
-            await (await fetch("https://picsum.photos/seed/uni-sdk-files/256.jpg")).arrayBuffer(),
+            await (await fetch("https://picsum.photos/seed/uni-sdk-files-fid/256.jpg")).arrayBuffer(),
           )
         : PNG_1X1;
       const ct = RECORD ? "image/jpeg" : "image/png";
       const uploaded = await h.sdk.files.upload(bytes, {
-        filename: `xfail.${ct === "image/png" ? "png" : "jpg"}`,
+        filename: `fid.${ct === "image/png" ? "png" : "jpg"}`,
         contentType: ct,
       });
       cleanup.track(uploaded.file_id, ct === "image/png" ? "png" : "jpg", uploaded.image_url);
 
-      await expect(
-        h.sdk.responses.create({
-          model: VISION_MODEL,
-          input: [
-            {
-              role: "user",
-              content: [
-                { type: "input_text", text: "Describe this image." },
-                { type: "input_image", file_id: uploaded.file_id },
-              ],
-            },
-          ],
-        }),
-      ).rejects.toThrow(/Failed to decode image data|image|invalid/i);
+      const res = await h.sdk.responses.create({
+        model: VISION_MODEL,
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Describe this image in one word." },
+              { type: "input_image", file_id: uploaded.file_id },
+            ],
+          },
+        ],
+      });
+      expect(res).toBeDefined();
+      expect(
+        (res as { id?: string }).id ?? (res as { output?: unknown[] }).output,
+      ).toBeDefined();
     },
     120_000,
   );

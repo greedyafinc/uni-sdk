@@ -5,18 +5,18 @@
         "method": "POST",
         "path": "/api/v1/images/uploads",
         "body": {
-          "_binary": 10040,
-          "contentType": "multipart/form-data; boundary=----webkitformboundaryc68ff9b949354e9fbb4e66201497e42d"
+          "_binary": 8080,
+          "contentType": "multipart/form-data; boundary=----webkitformboundaryaebaeffab04d4f278f925bf5ecbaa293"
         }
       },
       "response": {
         "status": 200,
         "headers": {
           "content-type": "application/json;charset=utf-8",
-          "date": "Wed, 27 May 2026 04:14:29 GMT"
+          "date": "Wed, 27 May 2026 04:14:39 GMT"
         },
         "body": {
-          "file_id": "ebef8ea7-c040-4d44-aa4b-66472c603676",
+          "file_id": "03b69429-95a5-4571-b43f-4726af266d72",
           "image_url": "https://example.test/storage/v1/object/sign/REDACTED?token=REDACTED"
         }
       }
@@ -37,7 +37,7 @@
                 },
                 {
                   "type": "input_image",
-                  "image_url": "https://example.test/storage/v1/object/sign/REDACTED?token=REDACTED"
+                  "file_id": "03b69429-95a5-4571-b43f-4726af266d72"
                 }
               ]
             }
@@ -48,12 +48,12 @@
         "status": 200,
         "headers": {
           "content-type": "application/json;charset=utf-8",
-          "date": "Wed, 27 May 2026 04:14:32 GMT"
+          "date": "Wed, 27 May 2026 04:14:42 GMT"
         },
         "body": {
-          "id": "resp_e0304e4b-9d91-4539-992a-2249aa13639d",
+          "id": "resp_185a4c7a-3980-4f6d-84a2-377f80fba58e",
           "object": "response",
-          "created_at": 1779855272,
+          "created_at": 1779855282,
           "model": "gemini-3.1-flash-lite-preview",
           "output": [
             {
@@ -62,7 +62,7 @@
               "content": [
                 {
                   "type": "output_text",
-                  "text": "Shoreline"
+                  "text": "Serene"
                 }
               ],
               "status": "completed"
