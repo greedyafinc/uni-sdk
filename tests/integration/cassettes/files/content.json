@@ -2,17 +2,61 @@
   "interactions": [
     {
       "request": {
+        "method": "POST",
+        "path": "/api/v1/files",
+        "body": {
+          "_binary": 283,
+          "contentType": "multipart/form-data; boundary=----webkitformboundary703f3fd33c0847d8a807077e9d78b730"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json;charset=utf-8",
+          "date": "Wed, 27 May 2026 04:10:36 GMT"
+        },
+        "body": {
+          "id": "a9b64b7c-af91-4cef-a094-53b6805f50f6",
+          "filename": "content.png",
+          "mime_type": "image/png",
+          "bytes": 67,
+          "purpose": "assistants",
+          "created_at": "2026-05-27T04:10:36.874Z"
+        }
+      }
+    },
+    {
+      "request": {
         "method": "GET",
-        "path": "/api/v1/files/01234567-89ab-cdef-0123-456789abcdef/content",
+        "path": "/api/v1/files/a9b64b7c-af91-4cef-a094-53b6805f50f6/content",
         "body": null
       },
       "response": {
         "status": 200,
         "headers": {
-          "content-type": "application/pdf",
-          "content-disposition": "attachment; filename=\"report.pdf\""
+          "content-disposition": "attachment; filename=\"content.png\"",
+          "content-type": "image/png",
+          "date": "Wed, 27 May 2026 04:10:37 GMT"
         },
-        "bodyBase64": "JVBERi0xLjQKJWZha2UtcGRmLWNvbnRlbnQtZm9yLXRlc3Rpbmc="
+        "bodyBase64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
+      }
+    },
+    {
+      "request": {
+        "method": "DELETE",
+        "path": "/api/v1/files/a9b64b7c-af91-4cef-a094-53b6805f50f6",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json;charset=utf-8",
+          "date": "Wed, 27 May 2026 04:10:37 GMT"
+        },
+        "body": {
+          "id": "a9b64b7c-af91-4cef-a094-53b6805f50f6",
+          "deleted": true
+        }
       }
     }
   ]

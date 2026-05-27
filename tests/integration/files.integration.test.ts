@@ -255,50 +255,70 @@ describe("integration: files", () => {
     }
   }, 60_000);
 
-  test("retrieve returns metadata for a known id", async () => {
+  // For retrieve / del / content, the test must first upload so the cassette
+  // captures the real Supabase-issued UUID. Replay-mode then re-uses the same
+  // id end-to-end (the replay server matches method+path and serves
+  // interactions in cassette order, so the chained ids align).
+
+  test("retrieve returns metadata for a freshly-created file", async () => {
     h.cassette("files/retrieve");
-    const res = await h.sdk.files.retrieve(
-      "01234567-89ab-cdef-0123-456789abcdef",
-    );
-    expect(res.id).toBe("01234567-89ab-cdef-0123-456789abcdef");
-    expect(res.filename).toBeDefined();
-    expect(res.mime_type).toBeDefined();
+    const created = await h.sdk.files.create(PNG_1X1, {
+      filename: "retrieve.png",
+      contentType: "image/png",
+    });
+    const res = await h.sdk.files.retrieve(created.id);
+    expect(res.id).toBe(created.id);
+    expect(res.filename).toBe("retrieve.png");
+    expect(res.mime_type).toBe("image/png");
+    expect(res.bytes).toBe(PNG_1X1.length);
+    // Tidy up and extend the cassette with the DELETE interaction so future
+    // replays stay consistent.
+    await h.sdk.files.del(created.id);
     if (!RECORD) {
-      expect(h.requests()[0]?.method).toBe("GET");
-      expect(h.requests()[0]?.path).toBe(
-        "/api/v1/files/01234567-89ab-cdef-0123-456789abcdef",
-      );
+      const seen = h.requests();
+      expect(seen[0]?.method).toBe("POST");
+      expect(seen[0]?.path).toBe("/api/v1/files");
+      expect(seen[1]?.method).toBe("GET");
+      expect(seen[1]?.path).toBe(`/api/v1/files/${created.id}`);
     }
   }, 60_000);
 
   test("del returns {id, deleted: true} and uses DELETE", async () => {
     h.cassette("files/delete");
-    const res = await h.sdk.files.del(
-      "01234567-89ab-cdef-0123-456789abcdef",
-    );
-    expect(res.id).toBe("01234567-89ab-cdef-0123-456789abcdef");
+    const created = await h.sdk.files.create(PNG_1X1, {
+      filename: "delete.png",
+      contentType: "image/png",
+    });
+    const res = await h.sdk.files.del(created.id);
+    expect(res.id).toBe(created.id);
     expect(res.deleted).toBe(true);
     if (!RECORD) {
-      expect(h.requests()[0]?.method).toBe("DELETE");
-      expect(h.requests()[0]?.path).toBe(
-        "/api/v1/files/01234567-89ab-cdef-0123-456789abcdef",
-      );
+      const seen = h.requests();
+      expect(seen[1]?.method).toBe("DELETE");
+      expect(seen[1]?.path).toBe(`/api/v1/files/${created.id}`);
     }
   }, 60_000);
 
   test("content downloads bytes and parses filename from Content-Disposition", async () => {
     h.cassette("files/content");
-    const res = await h.sdk.files.content(
-      "01234567-89ab-cdef-0123-456789abcdef",
-    );
-    expect(res.contentType).toBe("application/pdf");
-    expect(res.filename).toBe("report.pdf");
-    expect(res.bytes.byteLength).toBeGreaterThan(0);
+    const created = await h.sdk.files.create(PNG_1X1, {
+      filename: "content.png",
+      contentType: "image/png",
+    });
+    const res = await h.sdk.files.content(created.id);
+    expect(res.contentType).toBe("image/png");
+    expect(res.filename).toBe("content.png");
+    expect(res.bytes.byteLength).toBe(PNG_1X1.length);
+    // Bytes round-trip exactly.
+    const roundTripped = new Uint8Array(res.bytes);
+    for (let i = 0; i < PNG_1X1.length; i++) {
+      expect(roundTripped[i]).toBe(PNG_1X1[i]!);
+    }
+    await h.sdk.files.del(created.id);
     if (!RECORD) {
-      expect(h.requests()[0]?.method).toBe("GET");
-      expect(h.requests()[0]?.path).toBe(
-        "/api/v1/files/01234567-89ab-cdef-0123-456789abcdef/content",
-      );
+      const seen = h.requests();
+      expect(seen[1]?.method).toBe("GET");
+      expect(seen[1]?.path).toBe(`/api/v1/files/${created.id}/content`);
     }
   }, 60_000);
 

@@ -9,25 +9,18 @@
       "response": {
         "status": 200,
         "headers": {
-          "content-type": "application/json;charset=utf-8"
+          "content-type": "application/json;charset=utf-8",
+          "date": "Wed, 27 May 2026 04:10:35 GMT"
         },
         "body": {
           "data": [
             {
-              "id": "f30d4c5e-a907-4f60-a903-13fbbfcd4ed5",
+              "id": "711c3880-37f8-4ec6-b2c7-f204dae897e0",
               "filename": "doc.pdf",
               "mime_type": "application/pdf",
               "bytes": 67,
               "purpose": "user_data",
-              "created_at": "2026-05-26T20:00:00Z"
-            },
-            {
-              "id": "01234567-89ab-cdef-0123-456789abcdef",
-              "filename": "photo.png",
-              "mime_type": "image/png",
-              "bytes": 67,
-              "purpose": "assistants",
-              "created_at": "2026-05-26T19:00:00Z"
+              "created_at": "2026-05-27T04:10:28.068257+00:00"
             }
           ]
         }

@@ -5,22 +5,23 @@
         "method": "POST",
         "path": "/api/v1/files",
         "body": {
-          "_binary": 281,
-          "contentType": "multipart/form-data; boundary=----webkitformboundary"
+          "_binary": 404,
+          "contentType": "multipart/form-data; boundary=----webkitformboundaryfe94613b5f8546be8ad3a6e7ebf07ccb"
         }
       },
       "response": {
         "status": 200,
         "headers": {
-          "content-type": "application/json;charset=utf-8"
+          "content-type": "application/json;charset=utf-8",
+          "date": "Wed, 27 May 2026 04:10:27 GMT"
         },
         "body": {
-          "id": "f30d4c5e-a907-4f60-a903-13fbbfcd4ed5",
+          "id": "711c3880-37f8-4ec6-b2c7-f204dae897e0",
           "filename": "doc.pdf",
           "mime_type": "application/pdf",
           "bytes": 67,
           "purpose": "user_data",
-          "created_at": "2026-05-26T20:00:00Z"
+          "created_at": "2026-05-27T04:10:28.066Z"
         }
       }
     }
