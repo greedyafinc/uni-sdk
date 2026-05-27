@@ -212,51 +212,180 @@ describe("integration: files", () => {
     120_000,
   );
 
-  // Companion to the test above: explicitly exercise the (currently broken)
-  // file_id path so the backend gap stays visible in CI and we get a clear
-  // signal when it closes. This test will START FAILING when the backend
-  // adds the Supabase file_id → signed URL resolution layer — at which point
-  // remove the `.toThrow(...)` wrapper and assert success instead.
+  // ── /api/v1/files endpoints (UNI-88) ─────────────────────────────────────
+
+  test("create posts multipart to /api/v1/files and returns a FileObject", async () => {
+    h.cassette("files/create");
+    const res = await h.sdk.files.create(PNG_1X1, {
+      filename: "doc.pdf",
+      contentType: "application/pdf",
+      purpose: "user_data",
+    });
+    // NOTE: SupabaseCleanup was written for the old imageUpload path layout
+    // (`${userId}/uploads/...` in the `generated-images` bucket). Files
+    // created via `files.create()` live in the `user-files` bucket at
+    // `${userId}/${id}.${ext}`, so the helper isn't reused here. In RECORD
+    // mode, manually clean test files with `sdk.files.del(id)` after the
+    // recording session or extend SupabaseCleanup with a `user-files`-aware
+    // path resolver.
+
+    expect(res.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(res.filename).toBe("doc.pdf");
+    expect(res.mime_type).toBe("application/pdf");
+    expect(res.bytes).toBeGreaterThan(0);
+    expect(res.purpose).toBe("user_data");
+    expect(res.created_at).toBeDefined();
+
+    if (!RECORD) {
+      const seen = h.requests();
+      expect(seen[0]?.method).toBe("POST");
+      expect(seen[0]?.path).toBe("/api/v1/files");
+    }
+  }, 60_000);
+
+  test("list returns the user's files newest-first", async () => {
+    h.cassette("files/list");
+    const res = await h.sdk.files.list();
+    expect(Array.isArray(res.data)).toBe(true);
+    if (!RECORD) {
+      expect(h.requests()[0]?.method).toBe("GET");
+      expect(h.requests()[0]?.path).toBe("/api/v1/files");
+    }
+  }, 60_000);
+
+  // For retrieve / del / content, the test must first upload so the cassette
+  // captures the real Supabase-issued UUID. Replay-mode then re-uses the same
+  // id end-to-end (the replay server matches method+path and serves
+  // interactions in cassette order, so the chained ids align).
+
+  test("retrieve returns metadata for a freshly-created file", async () => {
+    h.cassette("files/retrieve");
+    const created = await h.sdk.files.create(PNG_1X1, {
+      filename: "retrieve.png",
+      contentType: "image/png",
+    });
+    const res = await h.sdk.files.retrieve(created.id);
+    expect(res.id).toBe(created.id);
+    expect(res.filename).toBe("retrieve.png");
+    expect(res.mime_type).toBe("image/png");
+    expect(res.bytes).toBe(PNG_1X1.length);
+    // Tidy up and extend the cassette with the DELETE interaction so future
+    // replays stay consistent.
+    await h.sdk.files.del(created.id);
+    if (!RECORD) {
+      const seen = h.requests();
+      expect(seen[0]?.method).toBe("POST");
+      expect(seen[0]?.path).toBe("/api/v1/files");
+      expect(seen[1]?.method).toBe("GET");
+      expect(seen[1]?.path).toBe(`/api/v1/files/${created.id}`);
+    }
+  }, 60_000);
+
+  test("del returns {id, deleted: true} and uses DELETE", async () => {
+    h.cassette("files/delete");
+    const created = await h.sdk.files.create(PNG_1X1, {
+      filename: "delete.png",
+      contentType: "image/png",
+    });
+    const res = await h.sdk.files.del(created.id);
+    expect(res.id).toBe(created.id);
+    expect(res.deleted).toBe(true);
+    if (!RECORD) {
+      const seen = h.requests();
+      expect(seen[1]?.method).toBe("DELETE");
+      expect(seen[1]?.path).toBe(`/api/v1/files/${created.id}`);
+    }
+  }, 60_000);
+
+  test("content downloads bytes and parses filename from Content-Disposition", async () => {
+    h.cassette("files/content");
+    const created = await h.sdk.files.create(PNG_1X1, {
+      filename: "content.png",
+      contentType: "image/png",
+    });
+    const res = await h.sdk.files.content(created.id);
+    expect(res.contentType).toBe("image/png");
+    expect(res.filename).toBe("content.png");
+    expect(res.bytes.byteLength).toBe(PNG_1X1.length);
+    // Bytes round-trip exactly. Compare via Buffer.equals so we don't need
+    // a forbidden non-null assertion on indexed access.
+    expect(Buffer.from(res.bytes).equals(Buffer.from(PNG_1X1))).toBe(true);
+    await h.sdk.files.del(created.id);
+    if (!RECORD) {
+      const seen = h.requests();
+      expect(seen[1]?.method).toBe("GET");
+      expect(seen[1]?.path).toBe(`/api/v1/files/${created.id}/content`);
+    }
+  }, 60_000);
+
+  test("retrieve throws when id is missing without hitting the network", async () => {
+    h.cassette("files/retrieve-empty");
+    await expect(h.sdk.files.retrieve("")).rejects.toThrow(/non-empty id/);
+    if (!RECORD) {
+      // No request should have been made.
+      expect(h.requests()).toHaveLength(0);
+    }
+  });
+
+  test("del throws when id is missing without hitting the network", async () => {
+    h.cassette("files/delete-empty");
+    await expect(h.sdk.files.del("")).rejects.toThrow(/non-empty id/);
+    if (!RECORD) {
+      expect(h.requests()).toHaveLength(0);
+    }
+  });
+
+  // Companion to the round-trip test above, but routes the upload via
+  // `file_id` (the gateway-managed id) instead of `image_url`. UNI-88 shipped
+  // server-side resolution: the gateway looks up the UUID in `user_files`,
+  // creates a signed URL, and substitutes it into the AI SDK message parts
+  // before any provider call. This test pins that contract end-to-end:
+  //   bytes uploaded → file_id returned → file_id passed in input_image
+  //   → backend resolves it → provider decodes the bytes → 200 response.
   //
-  // Gated on its own cassette presence; recording requires the same
-  // RECORD=true + cloud-Supabase workflow as the happy-path test above.
+  // Gated on its own cassette presence so CI doesn't need cloud Supabase
+  // or a live provider. Recording requires the same RECORD=true +
+  // publicly-reachable Supabase workflow as the image_url round-trip test
+  // above.
   const FILE_ID_CASSETTE = join(
     import.meta.dir,
     "cassettes",
     "files",
-    "upload-then-responses-file-id-xfail.json",
+    "upload-then-responses-file-id.json",
   );
   const HAS_FILE_ID_CASSETTE = RECORD || existsSync(FILE_ID_CASSETTE);
   test.skipIf(!HAS_FILE_ID_CASSETTE)(
-    "[xfail until backend fix] passing file_id to responses.create surfaces the resolution gap",
+    "passing file_id to responses.create resolves server-side to a signed URL",
     async () => {
-      h.cassette("files/upload-then-responses-file-id-xfail");
+      h.cassette("files/upload-then-responses-file-id");
       const bytes = RECORD
         ? new Uint8Array(
-            await (await fetch("https://picsum.photos/seed/uni-sdk-files/256.jpg")).arrayBuffer(),
+            await (
+              await fetch("https://picsum.photos/seed/uni-sdk-files-fid/256.jpg")
+            ).arrayBuffer(),
           )
         : PNG_1X1;
       const ct = RECORD ? "image/jpeg" : "image/png";
       const uploaded = await h.sdk.files.upload(bytes, {
-        filename: `xfail.${ct === "image/png" ? "png" : "jpg"}`,
+        filename: `fid.${ct === "image/png" ? "png" : "jpg"}`,
         contentType: ct,
       });
       cleanup.track(uploaded.file_id, ct === "image/png" ? "png" : "jpg", uploaded.image_url);
 
-      await expect(
-        h.sdk.responses.create({
-          model: VISION_MODEL,
-          input: [
-            {
-              role: "user",
-              content: [
-                { type: "input_text", text: "Describe this image." },
-                { type: "input_image", file_id: uploaded.file_id },
-              ],
-            },
-          ],
-        }),
-      ).rejects.toThrow(/Failed to decode image data|image|invalid/i);
+      const res = await h.sdk.responses.create({
+        model: VISION_MODEL,
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Describe this image in one word." },
+              { type: "input_image", file_id: uploaded.file_id },
+            ],
+          },
+        ],
+      });
+      expect(res).toBeDefined();
+      expect((res as { id?: string }).id ?? (res as { output?: unknown[] }).output).toBeDefined();
     },
     120_000,
   );

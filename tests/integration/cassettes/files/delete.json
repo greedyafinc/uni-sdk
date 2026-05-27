@@ -1,0 +1,47 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/files",
+        "body": {
+          "_binary": 282,
+          "contentType": "multipart/form-data; boundary=----webkitformboundarycddba24ed9e24fd09c249c0acd3a1923"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json;charset=utf-8",
+          "date": "Wed, 27 May 2026 04:10:36 GMT"
+        },
+        "body": {
+          "id": "13678aa2-71c2-41c2-99ce-49128191b1f2",
+          "filename": "delete.png",
+          "mime_type": "image/png",
+          "bytes": 67,
+          "purpose": "assistants",
+          "created_at": "2026-05-27T04:10:36.352Z"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "DELETE",
+        "path": "/api/v1/files/13678aa2-71c2-41c2-99ce-49128191b1f2",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json;charset=utf-8",
+          "date": "Wed, 27 May 2026 04:10:36 GMT"
+        },
+        "body": {
+          "id": "13678aa2-71c2-41c2-99ce-49128191b1f2",
+          "deleted": true
+        }
+      }
+    }
+  ]
+}

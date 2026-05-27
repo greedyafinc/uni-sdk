@@ -1,0 +1,30 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/files",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json;charset=utf-8",
+          "date": "Wed, 27 May 2026 04:10:35 GMT"
+        },
+        "body": {
+          "data": [
+            {
+              "id": "711c3880-37f8-4ec6-b2c7-f204dae897e0",
+              "filename": "doc.pdf",
+              "mime_type": "application/pdf",
+              "bytes": 67,
+              "purpose": "user_data",
+              "created_at": "2026-05-27T04:10:28.068257+00:00"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

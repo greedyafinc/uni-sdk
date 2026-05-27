@@ -24,16 +24,16 @@ export type ImageModeration = "low" | "auto";
  * Reference to a previously-uploaded image. Used by `images.edit` for the
  * `images` and `mask` fields. Provide exactly one of `file_id` or `image_url`.
  *
- * **Prefer `image_url`** today: `file_id` values returned by
- * `sdk.files.upload()` are not yet resolved server-side and will be rejected
- * by upstream providers with "Failed to decode image data". `image_url`
- * (the signed URL from the same upload response) works on every provider.
+ * Either form works — `file_id` values returned by `sdk.files.upload()` and
+ * `sdk.files.create()` are resolved to signed URLs server-side at request
+ * time, and `image_url` from the `upload()` response is the same signed URL
+ * passed through directly.
  */
 export interface ImageReference {
   /**
-   * Provider-issued file id (OpenAI `file-...`). **Not currently compatible**
-   * with `file_id` values returned by `sdk.files.upload()` — see note on
-   * {@link ImageReference}. Pass `image_url` instead.
+   * Gateway file id from `sdk.files.upload()` / `sdk.files.create()`, or a
+   * provider-issued id (e.g. OpenAI `file-...`). Mutually exclusive with
+   * `image_url`.
    */
   file_id?: string;
   image_url?: string;

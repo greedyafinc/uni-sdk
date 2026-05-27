@@ -109,16 +109,32 @@ await sdk.images.edit({
 `sdk.files.upload(source, { filename?, contentType?, signal? })` accepts a
 `Blob`, `File`, `Buffer`, `Uint8Array`, `ArrayBuffer`, or a base64 `data:` URL.
 Filename and content-type are auto-detected from `File`/`Blob` metadata when
-present and can be overridden via the options object. The upload endpoint is
-image-only today (PNG/JPEG/WEBP up to 25 MB).
+present and can be overridden via the options object. `files.upload()` is the
+image-only convenience that also returns a signed `image_url` for
+`images.edit` (PNG/JPEG/WEBP up to 25 MB). For audio, video, and PDF inputs
+use `files.create()` instead — same source types, returns a `FileObject` with
+metadata only.
 
-> **Why `image_url` and not `file_id`?** The SDK's typed surfaces (`images.edit`,
-> `responses.create`, `chat.completions.create`) all accept a `file_id` field,
-> and `sdk.files.upload()` returns one — but the backend currently forwards
-> the id to upstream providers verbatim instead of resolving it to a signed
-> URL first, so providers reject it with "Failed to decode image data". Use
-> `image_url` from the upload response everywhere downstream until that
-> backend resolution layer ships (tracked as a backend-side issue).
+> **`file_id` and `image_url` both work downstream.** The id returned by
+> `files.upload()` / `files.create()` is usable as `file_id` on any multimodal
+> content part (`input_image`, `input_audio`, `input_video`, `input_file`, or
+> chat `file`) across `chat.completions.create`, `responses.create`, and
+> `messages.create` — the gateway resolves it server-side to a signed URL for
+> the routed provider. `image_url` (returned by `files.upload()`) is the same
+> signed URL passed through verbatim; pick whichever your call site reads
+> more naturally.
+
+### Managing uploaded files
+
+```ts
+const file = await sdk.files.create(audioBytes, { filename: "clip.mp3" });
+// `file.id` → "uni_…", `file.mime_type`, `file.bytes`, `file.purpose`
+
+const { data } = await sdk.files.list();
+const meta = await sdk.files.retrieve(file.id);
+const { bytes, contentType, filename } = await sdk.files.content(file.id);
+await sdk.files.del(file.id);
+```
 
 #### Messages (Anthropic) streaming
 

@@ -6,17 +6,17 @@
         "path": "/api/v1/images/uploads",
         "body": {
           "_binary": 282,
-          "contentType": "multipart/form-data; boundary=----webkitformboundary731b540399854b9da5f72f6568b32b41"
+          "contentType": "multipart/form-data; boundary=----webkitformboundary4a9d6f91e33c4501b47f9aede896a06a"
         }
       },
       "response": {
         "status": 200,
         "headers": {
           "content-type": "application/json;charset=utf-8",
-          "date": "Tue, 26 May 2026 20:16:56 GMT"
+          "date": "Wed, 27 May 2026 04:12:58 GMT"
         },
         "body": {
-          "file_id": "1287c968-abd1-49a7-ba36-37604b59053a",
+          "file_id": "3fb0162f-6e7c-4a08-ae9c-039432a4be70",
           "image_url": "https://example.test/storage/v1/object/sign/REDACTED?token=REDACTED"
         }
       }

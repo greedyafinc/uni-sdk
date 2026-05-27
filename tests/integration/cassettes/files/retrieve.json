@@ -1,0 +1,69 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/files",
+        "body": {
+          "_binary": 284,
+          "contentType": "multipart/form-data; boundary=----webkitformboundaryac4146ad7be846198886ae1ef807b417"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json;charset=utf-8",
+          "date": "Wed, 27 May 2026 04:10:35 GMT"
+        },
+        "body": {
+          "id": "5805f1e6-32c9-40cd-84ba-328408301e95",
+          "filename": "retrieve.png",
+          "mime_type": "image/png",
+          "bytes": 67,
+          "purpose": "assistants",
+          "created_at": "2026-05-27T04:10:35.663Z"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/v1/files/5805f1e6-32c9-40cd-84ba-328408301e95",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json;charset=utf-8",
+          "date": "Wed, 27 May 2026 04:10:35 GMT"
+        },
+        "body": {
+          "id": "5805f1e6-32c9-40cd-84ba-328408301e95",
+          "filename": "retrieve.png",
+          "mime_type": "image/png",
+          "bytes": 67,
+          "purpose": "assistants",
+          "created_at": "2026-05-27T04:10:35.667736+00:00"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "DELETE",
+        "path": "/api/v1/files/5805f1e6-32c9-40cd-84ba-328408301e95",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json;charset=utf-8",
+          "date": "Wed, 27 May 2026 04:10:35 GMT"
+        },
+        "body": {
+          "id": "5805f1e6-32c9-40cd-84ba-328408301e95",
+          "deleted": true
+        }
+      }
+    }
+  ]
+}
