@@ -15,7 +15,7 @@ import {
   httpErrorMessage,
   readErrorBody,
 } from "./_internal/http-errors";
-import { Core, type CoreOptions, type RequestOptions } from "./core";
+import { Core, type CoreOptions, type RequestOptions, type UploadProgressListener } from "./core";
 import {
   UnifiedAIAuthError,
   UnifiedAIError,
@@ -32,6 +32,48 @@ const DEFAULT_API_URL = "https://api.unifiedai.app";
 function envVar(name: string): string | undefined {
   if (typeof process === "undefined" || !process.env) return undefined;
   return process.env[name];
+}
+
+/**
+ * Wrap a Blob's stream so each pulled chunk fires a progress event before it
+ * reaches the network. Returns a fresh stream every call so the body can be
+ * re-sent on a 401 retry — `Blob.stream()` is one-shot per ReadableStream,
+ * but the underlying Blob can be re-streamed indefinitely.
+ *
+ * The listener is invoked from a microtask after `controller.enqueue`; if it
+ * throws, the error is swallowed — a buggy host callback must not corrupt the
+ * upload mid-flight.
+ */
+function progressStream(
+  blob: Blob,
+  onProgress: UploadProgressListener,
+): ReadableStream<Uint8Array> {
+  const total = blob.size;
+  const reader = blob.stream().getReader();
+  let loaded = 0;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        controller.close();
+        return;
+      }
+      loaded += value.byteLength;
+      controller.enqueue(value);
+      try {
+        onProgress({
+          loaded,
+          total,
+          percent: total > 0 ? Math.floor((loaded / total) * 100) : 0,
+        });
+      } catch {
+        // Host listener errors must not abort the upload.
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason);
+    },
+  });
 }
 
 /**
@@ -107,18 +149,46 @@ export class UnifiedAI extends Core {
     const initialToken = await this.getInitialAccessToken();
     const url = this.buildUrl(path, options.query);
     const isMultipart = typeof FormData !== "undefined" && options.body instanceof FormData;
+    const onUploadProgress = options.onUploadProgress;
+    // For progress-tracked multipart uploads we need to know the total byte
+    // count and to be able to wrap each send in a fresh counting stream (for
+    // the 401-retry path). Encoding the FormData to a Blob up front gives us
+    // both — the encoded multipart payload (including boundaries) and the
+    // exact Content-Type with that boundary.
+    const progressBlob: Blob | undefined =
+      isMultipart && typeof onUploadProgress === "function"
+        ? await new Response(options.body as FormData).blob()
+        : undefined;
+    if (progressBlob && onUploadProgress) {
+      try {
+        onUploadProgress({ loaded: 0, total: progressBlob.size, percent: 0 });
+      } catch {
+        // Host listener errors must not block the upload.
+      }
+    }
     const bodyInit: BodyInit | undefined = isMultipart
       ? (options.body as FormData)
       : options.body !== undefined
         ? JSON.stringify(options.body)
         : undefined;
     const send = (accessToken: string) => {
-      const init: RequestInit = {
+      const init: RequestInit & { duplex?: "half" } = {
         method: options.method ?? "GET",
         // For multipart, let fetch set the Content-Type (with boundary).
         headers: this.buildHeaders(accessToken, bodyInit !== undefined && !isMultipart),
       };
-      if (bodyInit !== undefined) init.body = bodyInit;
+      if (progressBlob && onUploadProgress) {
+        init.body = progressStream(progressBlob, onUploadProgress);
+        // Required by the WHATWG fetch spec when body is a stream; Node 20+
+        // and Bun reject the call without it.
+        init.duplex = "half";
+        // We're sending the pre-encoded multipart bytes ourselves, so we have
+        // to set the Content-Type (including boundary) — fetch only does that
+        // automatically when body is a real FormData instance.
+        (init.headers as Record<string, string>)["content-type"] = progressBlob.type;
+      } else if (bodyInit !== undefined) {
+        init.body = bodyInit;
+      }
       if (options.signal) init.signal = options.signal;
       return this.options.fetch(url, init);
     };
