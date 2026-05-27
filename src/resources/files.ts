@@ -1,5 +1,7 @@
-import type { Core, RequestOptions } from "../core/core";
+import type { Core, RequestOptions, UploadProgressListener } from "../core/core";
 import { UnifiedError } from "../core/errors";
+
+export type { UploadProgressEvent, UploadProgressListener } from "../core/core";
 
 /**
  * Source for `files.upload`. Anything that resolves to raw bytes:
@@ -20,6 +22,13 @@ export interface FileUploadOptions {
   /** Override the multipart content type. Defaults to the source's type, magic-byte sniff, or `application/octet-stream`. */
   contentType?: string;
   signal?: AbortSignal;
+  /**
+   * Byte-level upload progress. Fires once with `loaded: 0` before any bytes
+   * are sent, then again each time a chunk reaches the network, ending with
+   * `loaded === total`. On a 401-refresh retry the sequence is restarted from
+   * 0 because the body has to be re-sent.
+   */
+  onProgress?: UploadProgressListener;
 }
 
 export interface FileUploadResponse {
@@ -416,6 +425,7 @@ export class Files {
     form.append("file", blob, filename || defaultFilenameFor(blob.type));
     const req: RequestOptions = { method: "POST", body: form };
     if (options.signal) req.signal = options.signal;
+    if (options.onProgress) req.onUploadProgress = options.onProgress;
     return this.client.request<FileUploadResponse>("/api/v1/images/uploads", req);
   }
 
@@ -439,6 +449,7 @@ export class Files {
     if (options.purpose) form.append("purpose", options.purpose);
     const req: RequestOptions = { method: "POST", body: form };
     if (options.signal) req.signal = options.signal;
+    if (options.onProgress) req.onUploadProgress = options.onProgress;
     return this.client.request<FileObject>("/api/v1/files", req);
   }
 

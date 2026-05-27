@@ -292,6 +292,53 @@ describe("sdk.files", () => {
     );
   });
 
+  test("upload fires onProgress events with a final loaded === total", async () => {
+    api.setResponse({ status: 200, body: SAMPLE_UPLOAD_RESPONSE });
+    const events: Array<{ loaded: number; total: number; percent: number }> = [];
+    // Use a payload large enough that the underlying Blob stream is pulled in
+    // more than one chunk — exercises the in-flight events, not just the
+    // synthetic 0/total bookend.
+    const big = Buffer.alloc(96 * 1024, 0xaa);
+    await sdk.files.upload(big, {
+      filename: "big.bin",
+      contentType: "application/octet-stream",
+      onProgress: (e) => events.push(e),
+    });
+
+    expect(events.length).toBeGreaterThanOrEqual(2);
+    const first = events[0];
+    const last = events[events.length - 1];
+    expect(first?.loaded).toBe(0);
+    expect(first?.total).toBeGreaterThanOrEqual(big.length);
+    expect(last?.loaded).toBe(last?.total);
+    expect(last?.percent).toBe(100);
+    // Monotonic, never overshoot.
+    for (let i = 1; i < events.length; i++) {
+      const prev = events[i - 1];
+      const curr = events[i];
+      expect(curr?.loaded).toBeGreaterThanOrEqual(prev?.loaded ?? 0);
+      expect(curr?.loaded).toBeLessThanOrEqual(curr?.total ?? 0);
+    }
+
+    // The body still reached the server correctly.
+    const r = api.lastRequest();
+    expect(r.contentType).toMatch(/^multipart\/form-data; boundary=/);
+    const part = extractPart(r.rawBody, "file");
+    expect(part?.payload.length).toBe(big.length);
+  });
+
+  test("upload onProgress listener errors do not abort the upload", async () => {
+    api.setResponse({ status: 200, body: SAMPLE_UPLOAD_RESPONSE });
+    const res = await sdk.files.upload(PNG_1X1, {
+      filename: "x.png",
+      contentType: "image/png",
+      onProgress: () => {
+        throw new Error("boom");
+      },
+    });
+    expect(res.file_id).toBe("file_abc123");
+  });
+
   test("upload honors a pre-aborted signal without making a request", async () => {
     api.setResponse({ status: 200, body: SAMPLE_UPLOAD_RESPONSE });
     const ctrl = new AbortController();

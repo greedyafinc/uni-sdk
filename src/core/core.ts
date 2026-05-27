@@ -2,6 +2,19 @@ import { UnifiedError } from "./errors";
 
 export type TokenProvider = string | (() => string | Promise<string>);
 
+/**
+ * Progress event fired during a multipart upload. `loaded` and `total` are
+ * byte counts; `percent` is `0..100` (integer, rounded down). When the body
+ * size is unknown ahead of time `total` is `0` and `percent` stays at `0`.
+ */
+export interface UploadProgressEvent {
+  loaded: number;
+  total: number;
+  percent: number;
+}
+
+export type UploadProgressListener = (event: UploadProgressEvent) => void;
+
 export interface CoreOptions {
   /**
    * Trusted-token mode. When set, the SDK bypasses OAuth/PKCE/handoff/keychain
@@ -34,6 +47,16 @@ export interface RequestOptions {
    * error pages and provider misconfiguration. Ignored by `request`/`stream`.
    */
   acceptedContentTypes?: readonly string[];
+  /**
+   * Fires byte-level progress while the request body is being uploaded. Only
+   * honored when `body` is a `FormData` instance — JSON requests are too small
+   * to be worth instrumenting. The listener receives a synthetic 0/total event
+   * before bytes flow and a final total/total event once the body is fully
+   * sent. On runtimes without streaming-upload support (no `duplex: "half"`
+   * or no `ReadableStream` body), only the synthetic 0/total and total/total
+   * events are emitted.
+   */
+  onUploadProgress?: UploadProgressListener;
 }
 
 export class Core {
