@@ -334,9 +334,7 @@ async function normalise(
  *
  * Exported for unit-test introspection; not part of the public SDK surface.
  */
-export function parseContentDispositionFilename(
-  header: string | undefined,
-): string | undefined {
+export function parseContentDispositionFilename(header: string | undefined): string | undefined {
   if (!header) return undefined;
 
   // Try RFC 5987 `filename*=charset'lang'percent-encoded-value` first.
@@ -363,9 +361,7 @@ export function parseContentDispositionFilename(
 
   // Fall back to legacy `filename="..."` or `filename=bare-token`. Anchor on
   // a word boundary so this doesn't match the tail of `filename*=`.
-  const legacy = /(?:^|;)\s*filename\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;\s]+))/i.exec(
-    header,
-  );
+  const legacy = /(?:^|;)\s*filename\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;\s]+))/i.exec(header);
   if (legacy) {
     const raw = legacy[1] ?? legacy[2];
     if (raw) return raw.replace(/\\(.)/g, "$1"); // unescape backslashes inside quotes
@@ -430,10 +426,7 @@ export class Files {
    * NOT return a signed URL — use `content(id)` to fetch raw bytes back, or
    * call `upload()` instead if you need an `image_url` for `images.edit`.
    */
-  async create(
-    source: FileUploadSource,
-    options: FileCreateOptions = {},
-  ): Promise<FileObject> {
+  async create(source: FileUploadSource, options: FileCreateOptions = {}): Promise<FileObject> {
     if (options.signal?.aborted) {
       throw new UnifiedError("aborted", "files.create aborted before request was sent");
     }
@@ -476,10 +469,7 @@ export class Files {
     if (!id) throw new UnifiedError("invalid_input", "files.del requires a non-empty id");
     const req: RequestOptions = { method: "DELETE" };
     if (options.signal) req.signal = options.signal;
-    return this.client.request<FileDeleteResponse>(
-      `/api/v1/files/${encodeURIComponent(id)}`,
-      req,
-    );
+    return this.client.request<FileDeleteResponse>(`/api/v1/files/${encodeURIComponent(id)}`, req);
   }
 
   /**

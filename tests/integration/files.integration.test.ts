@@ -229,9 +229,7 @@ describe("integration: files", () => {
     // recording session or extend SupabaseCleanup with a `user-files`-aware
     // path resolver.
 
-    expect(res.id).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
-    );
+    expect(res.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     expect(res.filename).toBe("doc.pdf");
     expect(res.mime_type).toBe("application/pdf");
     expect(res.bytes).toBeGreaterThan(0);
@@ -309,11 +307,9 @@ describe("integration: files", () => {
     expect(res.contentType).toBe("image/png");
     expect(res.filename).toBe("content.png");
     expect(res.bytes.byteLength).toBe(PNG_1X1.length);
-    // Bytes round-trip exactly.
-    const roundTripped = new Uint8Array(res.bytes);
-    for (let i = 0; i < PNG_1X1.length; i++) {
-      expect(roundTripped[i]).toBe(PNG_1X1[i]!);
-    }
+    // Bytes round-trip exactly. Compare via Buffer.equals so we don't need
+    // a forbidden non-null assertion on indexed access.
+    expect(Buffer.from(res.bytes).equals(Buffer.from(PNG_1X1))).toBe(true);
     await h.sdk.files.del(created.id);
     if (!RECORD) {
       const seen = h.requests();
@@ -364,7 +360,9 @@ describe("integration: files", () => {
       h.cassette("files/upload-then-responses-file-id");
       const bytes = RECORD
         ? new Uint8Array(
-            await (await fetch("https://picsum.photos/seed/uni-sdk-files-fid/256.jpg")).arrayBuffer(),
+            await (
+              await fetch("https://picsum.photos/seed/uni-sdk-files-fid/256.jpg")
+            ).arrayBuffer(),
           )
         : PNG_1X1;
       const ct = RECORD ? "image/jpeg" : "image/png";
@@ -387,9 +385,7 @@ describe("integration: files", () => {
         ],
       });
       expect(res).toBeDefined();
-      expect(
-        (res as { id?: string }).id ?? (res as { output?: unknown[] }).output,
-      ).toBeDefined();
+      expect((res as { id?: string }).id ?? (res as { output?: unknown[] }).output).toBeDefined();
     },
     120_000,
   );

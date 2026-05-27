@@ -432,9 +432,7 @@ describe("sdk.files — general file management (UNI-88)", () => {
 
     const filePart = extractPart(r.rawBody, "file");
     expect(filePart?.headers).toContain('filename="spec.pdf"');
-    expect(filePart?.headers.toLowerCase()).toContain(
-      "content-type: application/pdf",
-    );
+    expect(filePart?.headers.toLowerCase()).toContain("content-type: application/pdf");
     const purposePart = extractPart(r.rawBody, "purpose");
     expect(purposePart?.payload.toString("utf8")).toBe("user_data");
   });
@@ -507,15 +505,11 @@ describe("parseContentDispositionFilename (RFC 6266 / 5987)", () => {
   });
 
   test("parses legacy filename= with quotes", () => {
-    expect(
-      parseContentDispositionFilename('attachment; filename="report.pdf"'),
-    ).toBe("report.pdf");
+    expect(parseContentDispositionFilename('attachment; filename="report.pdf"')).toBe("report.pdf");
   });
 
   test("parses legacy filename= without quotes", () => {
-    expect(
-      parseContentDispositionFilename("attachment; filename=raw.bin"),
-    ).toBe("raw.bin");
+    expect(parseContentDispositionFilename("attachment; filename=raw.bin")).toBe("raw.bin");
   });
 
   test("prefers filename* over filename per RFC 6266 §4.3", () => {
@@ -530,23 +524,17 @@ describe("parseContentDispositionFilename (RFC 6266 / 5987)", () => {
 
   test("percent-decodes UTF-8 values per RFC 5987", () => {
     expect(
-      parseContentDispositionFilename(
-        "attachment; filename*=UTF-8''r%C3%A9sum%C3%A9.pdf",
-      ),
+      parseContentDispositionFilename("attachment; filename*=UTF-8''r%C3%A9sum%C3%A9.pdf"),
     ).toBe("résumé.pdf");
-    expect(
-      parseContentDispositionFilename(
-        "attachment; filename*=UTF-8''caf%C3%A9.pdf",
-      ),
-    ).toBe("café.pdf");
+    expect(parseContentDispositionFilename("attachment; filename*=UTF-8''caf%C3%A9.pdf")).toBe(
+      "café.pdf",
+    );
   });
 
   test("handles backslash-escaped quotes in legacy form", () => {
-    expect(
-      parseContentDispositionFilename(
-        'attachment; filename="quote\\"inside.txt"',
-      ),
-    ).toBe('quote"inside.txt');
+    expect(parseContentDispositionFilename('attachment; filename="quote\\"inside.txt"')).toBe(
+      'quote"inside.txt',
+    );
   });
 
   test("falls back to legacy when filename* has malformed encoding", () => {
@@ -561,9 +549,7 @@ describe("parseContentDispositionFilename (RFC 6266 / 5987)", () => {
   test("does not match the tail of filename* when looking for legacy", () => {
     // The non-extended branch must anchor on a word boundary so it doesn't
     // greedily eat `filename*=` and produce a garbage value.
-    expect(
-      parseContentDispositionFilename("attachment; filename*=UTF-8''ok.pdf"),
-    ).toBe("ok.pdf");
+    expect(parseContentDispositionFilename("attachment; filename*=UTF-8''ok.pdf")).toBe("ok.pdf");
   });
 });
 
