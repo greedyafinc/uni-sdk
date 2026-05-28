@@ -34,6 +34,20 @@ interface Entry {
 }
 
 /**
+ * Deep-clone the cached payload on read AND write so caller-side mutation
+ * (`result.data.pop()`, in-place sort, etc.) cannot corrupt a future hit.
+ * Prefers the platform `structuredClone` (Node 17+, modern browsers, Bun);
+ * falls back to JSON round-trip — sufficient for our cached scope, which
+ * is JSON-shaped responses (embeddings, image generations).
+ */
+function clone<T>(value: T): T {
+  if (typeof structuredClone === "function") {
+    return structuredClone(value);
+  }
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/**
  * LRU + TTL. Map iteration order is insertion order, so we re-insert on hit
  * to bump entries to the most-recently-used position. Expired entries are
  * detected on read and dropped; we don't run a sweep timer (would need to
@@ -58,12 +72,12 @@ export class LruCache {
     // Refresh LRU position by re-inserting at the tail.
     this.store.delete(key);
     this.store.set(key, entry);
-    return entry.value;
+    return clone(entry.value);
   }
 
   set(key: string, value: unknown): void {
     if (this.store.has(key)) this.store.delete(key);
-    this.store.set(key, { value, expiresAt: Date.now() + this.cfg.ttlMs });
+    this.store.set(key, { value: clone(value), expiresAt: Date.now() + this.cfg.ttlMs });
     while (this.store.size > this.cfg.maxEntries) {
       // Map iteration order is insertion order; the first key is the LRU.
       const oldest = this.store.keys().next().value;
@@ -123,7 +137,7 @@ function fnv1a(input: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-export function cacheKey(method: string, path: string, body: unknown): string {
-  const canonical = `${method.toUpperCase()}|${path}|${stableStringify(body ?? null)}`;
+export function cacheKey(method: string, path: string, body: unknown, query?: unknown): string {
+  const canonical = `${method.toUpperCase()}|${path}|${stableStringify(query ?? null)}|${stableStringify(body ?? null)}`;
   return `${fnv1a(canonical)}|${canonical.length}`;
 }

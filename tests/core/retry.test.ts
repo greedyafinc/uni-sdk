@@ -10,7 +10,7 @@ import {
   resolveRetryConfig,
 } from "../../src/core/_internal/retry";
 import { UnifiedAI } from "../../src/core/client";
-import { RateLimitError, UnifiedAIError } from "../../src/core/errors";
+import { RateLimitError, UnifiedAIAuthError, UnifiedAIError } from "../../src/core/errors";
 
 describe("retry classifier", () => {
   test("retries 408, 429, and all 5xx; not 4xx else", () => {
@@ -33,13 +33,22 @@ describe("retry classifier", () => {
     expect(isIdempotent("GET", false)).toBe(false);
   });
 
-  test("isNetworkErrorRetryable skips AbortError and typed HTTP errors", () => {
+  test("isNetworkErrorRetryable skips AbortError and typed SDK errors but accepts Node fetch errors", () => {
     expect(isNetworkErrorRetryable(new TypeError("fetch failed"))).toBe(true);
     const abort = Object.assign(new Error("aborted"), { name: "AbortError" });
     expect(isNetworkErrorRetryable(abort)).toBe(false);
     expect(isNetworkErrorRetryable(new UnifiedAIError("server_error", "x", 500, undefined))).toBe(
       false,
     );
+    // Node/undici tag connection blips with .code (ECONNRESET / ETIMEDOUT /
+    // UND_ERR_SOCKET). Those are the *target* of retry, not exclusions.
+    const econnreset = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    expect(isNetworkErrorRetryable(econnreset)).toBe(true);
+    const undici = Object.assign(new Error("socket error"), {
+      name: "FetchError",
+      code: "UND_ERR_SOCKET",
+    });
+    expect(isNetworkErrorRetryable(undici)).toBe(true);
   });
 
   test("parseRetryAfterHeader handles numeric seconds", () => {
@@ -185,6 +194,102 @@ describe("UnifiedAI retry integration", () => {
       retry: { maxRetries: 5, initialDelayMs: 1, maxDelayMs: 1 },
     });
     await expect(sdk.request("/x", { retry: false })).rejects.toBeInstanceOf(UnifiedAIError);
+    expect(calls).toBe(1);
+  });
+
+  test("non-idempotent POST does NOT retry 5xx (might double-execute)", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ error: "gateway" }), {
+        status: 502,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const sdk = new UnifiedAI({
+      apiUrl: "https://example.test",
+      token: "t",
+      fetch: fetchImpl,
+      retry: { maxRetries: 3, initialDelayMs: 1, maxDelayMs: 1 },
+    });
+    await expect(sdk.request("/x", { method: "POST", body: {} })).rejects.toBeInstanceOf(
+      UnifiedAIError,
+    );
+    expect(calls).toBe(1);
+  });
+
+  test("non-idempotent POST DOES retry 429 (server told us to back off)", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify({ error: "rate_limited" }), {
+          status: 429,
+          headers: { "retry-after": "0", "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const sdk = new UnifiedAI({
+      apiUrl: "https://example.test",
+      token: "t",
+      fetch: fetchImpl,
+      retry: { initialDelayMs: 1, maxDelayMs: 1 },
+    });
+    const res = await sdk.request<{ ok: boolean }>("/x", { method: "POST", body: {} });
+    expect(res.ok).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  test("abort during retry backoff surfaces AbortError, not the prior network error", async () => {
+    let calls = 0;
+    const ctrl = new AbortController();
+    const fetchImpl = (async () => {
+      calls += 1;
+      throw new TypeError("network blip");
+    }) as unknown as typeof fetch;
+    const sdk = new UnifiedAI({
+      apiUrl: "https://example.test",
+      token: "t",
+      fetch: fetchImpl,
+      retry: { maxRetries: 3, initialDelayMs: 50, maxDelayMs: 50 },
+    });
+    setTimeout(() => ctrl.abort(), 10);
+    let caught: unknown;
+    try {
+      await sdk.request("/x", { method: "POST", idempotent: true, signal: ctrl.signal });
+    } catch (e) {
+      caught = e;
+    }
+    expect((caught as Error)?.name).toBe("AbortError");
+    expect(calls).toBe(1);
+  });
+
+  test("plain Error from host token provider on refresh does not re-trigger retry", async () => {
+    let calls = 0;
+    let refreshCalls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ error: "unauth" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const sdk = new UnifiedAI({
+      apiUrl: "https://example.test",
+      token: () => {
+        refreshCalls += 1;
+        if (refreshCalls > 1) throw new Error("network down"); // plain Error
+        return "stale";
+      },
+      fetch: fetchImpl,
+      retry: { maxRetries: 3, initialDelayMs: 1, maxDelayMs: 1 },
+    });
+    await expect(sdk.request("/x")).rejects.toBeInstanceOf(UnifiedAIAuthError);
+    // 1 initial send (401), 1 refresh that throws → terminal, NO retry.
     expect(calls).toBe(1);
   });
 

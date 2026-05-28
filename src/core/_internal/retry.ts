@@ -132,17 +132,22 @@ export function nextDelay(
 export function delay(ms: number, signal?: AbortSignal): Promise<void> {
   if (ms <= 0) return Promise.resolve();
   return new Promise((resolve) => {
-    const t = setTimeout(resolve, ms);
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    let onAbort: (() => void) | undefined;
+    const t = setTimeout(() => {
+      // Detach the abort listener so a long-lived signal reused across
+      // many requests doesn't accumulate dead listeners (V8 warns past 10).
+      if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
     if (signal) {
-      const onAbort = () => {
+      onAbort = () => {
         clearTimeout(t);
         resolve();
       };
-      if (signal.aborted) {
-        clearTimeout(t);
-        resolve();
-        return;
-      }
       signal.addEventListener("abort", onAbort, { once: true });
     }
   });
@@ -151,20 +156,32 @@ export function delay(ms: number, signal?: AbortSignal): Promise<void> {
 /**
  * Network errors thrown by fetch are environment-specific (TypeError in
  * browsers, FetchError in undici, AbortError when the caller cancelled).
- * We retry network failures (TypeError/FetchError) but NOT:
+ * We retry network failures but NOT:
  *   - AbortError: user intent, must propagate immediately
- *   - any error with a `.code` or `.status` we already classified as an
- *     HTTP response error (UnifiedError / UnifiedAIError) — those were
- *     thrown intentionally by the 401-after-refresh path or similar and
- *     are not transient.
+ *   - typed SDK errors (UnifiedError / UnifiedAIError / UnifiedAIAuthError):
+ *     thrown intentionally by the 401-after-refresh path; not transient.
+ *
+ * Node-side fetch errors (undici) decorate the Error with a `code` like
+ * `ECONNRESET`, `ETIMEDOUT`, `UND_ERR_SOCKET`, `EAI_AGAIN` — those are
+ * exactly the connection blips retry should cover. We can't filter on
+ * `.code` alone, so we structural-check against the SDK error name to
+ * exclude only our own typed errors.
  */
+const SDK_ERROR_NAMES = new Set([
+  "UnifiedError",
+  "UnifiedAIError",
+  "UnifiedAIAuthError",
+  "AuthenticationError",
+  "BadRequestError",
+  "NotFoundError",
+  "RateLimitError",
+  "UsageLimitError",
+  "ServerError",
+]);
+
 export function isNetworkErrorRetryable(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   if (err.name === "AbortError") return false;
-  // UnifiedError / UnifiedAIError / UnifiedAIAuthError all set a non-empty
-  // `code` field; treating those as non-retryable keeps the auth-failure
-  // path single-shot.
-  const code = (err as { code?: unknown }).code;
-  if (typeof code === "string" && code.length > 0) return false;
+  if (SDK_ERROR_NAMES.has(err.name)) return false;
   return true;
 }

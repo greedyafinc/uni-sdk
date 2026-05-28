@@ -235,7 +235,7 @@ export class UnifiedAI extends Core {
     // Opt-in cache: lookup before any network work. Cache only applies to
     // JSON `request()` — binary and stream responses aren't worth storing.
     if (options.cache && this.responseCache) {
-      const key = cacheKey(method, path, options.body);
+      const key = cacheKey(method, path, options.body, options.query);
       const hit = this.responseCache.get(key);
       if (hit !== undefined) return hit as T;
     }
@@ -352,7 +352,7 @@ export class UnifiedAI extends Core {
     if (res.status === 204) return undefined as T;
     const parsed = (await res.json()) as T;
     if (options.cache && this.responseCache) {
-      const key = cacheKey(method, path, options.body);
+      const key = cacheKey(method, path, options.body, options.query);
       this.responseCache.set(key, parsed);
     }
     return parsed;
@@ -525,11 +525,14 @@ export class UnifiedAI extends Core {
     let attempt = 0;
     // Token is resolved once before the retry loop so a sign-out / refresh
     // racing the loop doesn't turn a retried 5xx into a not_bootstrapped error.
-    // The 401-refresh path inside runOnce still rotates the token when needed.
-    const initialToken = await this.getInitialAccessToken();
+    // We track it as `currentToken` so a successful 401-refresh inside one
+    // attempt rolls forward into the next attempt — without this, every
+    // retry following a refresh would re-send the stale original token and
+    // force another 401 + refresh round-trip.
+    let currentToken = await this.getInitialAccessToken();
 
     const runOnce = async (): Promise<Response> => {
-      let res = await send(initialToken);
+      let res = await send(currentToken);
       if (res.status === 401) {
         await drainResponse(res);
         let freshToken: string;
@@ -537,8 +540,20 @@ export class UnifiedAI extends Core {
           freshToken = await this.refreshAccessToken();
         } catch (err) {
           await this.onAuthFailure();
-          throw err;
+          // Surface as a typed auth error so the outer retry classifier
+          // recognizes this as a terminal failure. Without this, a host
+          // token provider that throws a plain Error would be misread by
+          // isNetworkErrorRetryable as a transient blip and trigger
+          // duplicate onAuthFailure() / markExpired() on every retry.
+          if (err instanceof UnifiedError) throw err;
+          const wrapped = new UnifiedAIAuthError(
+            "auth_refresh_failed",
+            err instanceof Error ? err.message : "refresh failed",
+          );
+          if (err instanceof Error) wrapped.cause = err;
+          throw wrapped;
         }
+        currentToken = freshToken;
         res = await send(freshToken);
         if (res.status === 401) {
           const body = await readErrorBody(res);
@@ -565,10 +580,20 @@ export class UnifiedAI extends Core {
       }
 
       // Decide whether to retry. `cfg` undefined means retry disabled.
+      // Idempotency policy:
+      //   - 429 is always safe (server told us to back off; the request
+      //     didn't take effect — RFC 6585).
+      //   - 408 (request timeout) and 5xx COULD have side-effected on a
+      //     non-idempotent call (e.g. a 502 after the origin already
+      //     processed the POST). Gate on idempotent for those.
+      //   - Network errors: gate on idempotent. We don't know if the
+      //     server saw the request.
       const retryable = cfg
         ? res
-          ? isRetryableStatus(res.status)
-          : isNetworkErrorRetryable(err) && (idempotent || false)
+          ? res.status === 429
+            ? true
+            : isRetryableStatus(res.status) && idempotent
+          : isNetworkErrorRetryable(err) && idempotent
         : false;
 
       if (!retryable || !cfg) {
@@ -607,9 +632,10 @@ export class UnifiedAI extends Core {
       if (res) await drainResponse(res);
       await retryDelay(wait, options.signal);
       if (options.signal?.aborted) {
-        if (err !== undefined) throw err;
-        // The next runOnce() would see the aborted signal and reject; bail
-        // here with a synthetic AbortError so we don't burn an extra attempt.
+        // Always surface the abort, never the prior attempt's error. If
+        // user code cancelled mid-backoff, that's the load-bearing signal —
+        // burying it under a TypeError('fetch failed') from the previous
+        // attempt confuses every abort handler downstream.
         throw typeof DOMException !== "undefined"
           ? new DOMException("Aborted", "AbortError")
           : Object.assign(new Error("Aborted"), { name: "AbortError" });

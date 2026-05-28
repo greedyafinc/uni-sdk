@@ -40,6 +40,23 @@ describe("cacheKey", () => {
     expect(cacheKey("GET", "/x", {})).not.toBe(cacheKey("POST", "/x", {}));
     expect(cacheKey("GET", "/x", {})).not.toBe(cacheKey("GET", "/y", {}));
   });
+
+  test("different query params yield different keys", () => {
+    expect(cacheKey("GET", "/x", {}, { limit: 10 })).not.toBe(
+      cacheKey("GET", "/x", {}, { limit: 100 }),
+    );
+  });
+});
+
+describe("LruCache isolation", () => {
+  test("caller mutation of a returned value does not corrupt subsequent hits", () => {
+    const c = new LruCache({ maxEntries: 4, ttlMs: 60_000 });
+    c.set("k", { data: [1, 2, 3] });
+    const r1 = c.get("k") as { data: number[] };
+    r1.data.pop();
+    const r2 = c.get("k") as { data: number[] };
+    expect(r2.data).toEqual([1, 2, 3]);
+  });
 });
 
 describe("UnifiedAI cache integration", () => {
