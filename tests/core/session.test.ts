@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { SessionEvent } from "../../src/core/session";
+import { Session, type SessionEvent } from "../../src/core/session";
 import { UnifiedAI } from "../../src/index";
 
 const okFetch = (async () =>
@@ -60,6 +60,27 @@ describe("session surface (browser / trusted-token)", () => {
     await sdk.usage.get();
 
     expect(events.map((e) => e.type)).toEqual(["refreshed"]);
+  });
+
+  test("signed_out is terminal: a late refresh/expiry cannot override it", () => {
+    const session = new Session("active");
+    const events: SessionEvent[] = [];
+    session.onChange((e) => events.push(e));
+
+    session.markSignedOut();
+    // A refresh or expiry that resolves after sign-out must be ignored — only
+    // an explicit re-sign-in reactivates the session.
+    session.markRefreshed({ expiresAt: Date.now() + 60_000 });
+    session.markExpired();
+
+    expect(session.status).toBe("signed_out");
+    expect(session.isAuthenticated()).toBe(false);
+    expect(events.map((e) => e.type)).toEqual(["signedOut"]);
+
+    // An explicit sign-in still works after sign-out.
+    session.markSignedIn({ identity: { user_id: "u", client_id: "c" } });
+    expect(session.status).toBe("active");
+    expect(events.map((e) => e.type)).toEqual(["signedOut", "signedIn"]);
   });
 
   test("onChange unsubscribe stops delivery", async () => {

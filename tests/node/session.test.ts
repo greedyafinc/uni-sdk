@@ -246,6 +246,60 @@ describe("session surface (node OAuth)", () => {
     }
   }, 8000);
 
+  test("signOut during an in-flight proactive refresh wins — no trailing expired", async () => {
+    // Regression: the proactive refresh's failure path (the generation-guard
+    // rejection raised when signOut bumps the generation mid-flight) routed
+    // through onAuthFailure → markExpired, clobbering the deliberate
+    // signed_out state with a contradictory `expired` event.
+    const h = await startSdk({ refreshSkewSeconds: 3598 });
+    try {
+      const events: SessionEvent[] = [];
+      h.sdk.session.onChange((e) => events.push(e));
+
+      // Pin the proactive refresh at the server, then sign out while it's
+      // blocked, then release it.
+      h.web.pauseRefresh();
+      await h.web.waitForRefreshStarted();
+      await h.sdk.signOut();
+      h.web.releaseRefresh();
+
+      // Let the released refresh resolve and any trailing handlers run.
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(events.map((e) => e.type)).toEqual(["signedOut"]);
+      expect(h.sdk.session.status).toBe("signed_out");
+      expect(h.sdk.session.isAuthenticated()).toBe(false);
+    } finally {
+      await h.cleanup();
+    }
+  }, 8000);
+
+  test("concurrent failed refreshes emit exactly one expired event", async () => {
+    // Regression: onAuthFailure runs once per awaiting caller, so N coalesced
+    // 401s whose shared refresh fails each call markExpired. The transition
+    // must collapse to a single `expired` (and a single `error`).
+    const h = await startSdk({ refreshSkewSeconds: 0 });
+    try {
+      const events: SessionEvent[] = [];
+      h.sdk.session.onChange((e) => events.push(e));
+
+      h.api.setValidAccessTokens([]); // every request 401s
+      h.web.revokeRefreshTokens(); // and the shared refresh fails
+
+      const N = 5;
+      const results = await Promise.allSettled(
+        Array.from({ length: N }, () => h.sdk.request("/v1/ping")),
+      );
+      expect(results.every((r) => r.status === "rejected")).toBe(true);
+
+      expect(events.filter((e) => e.type === "expired")).toHaveLength(1);
+      expect(events.filter((e) => e.type === "error")).toHaveLength(1);
+      expect(h.sdk.session.status).toBe("expired");
+    } finally {
+      await h.cleanup();
+    }
+  });
+
   test("proactive refresh is disabled when skew is 0", async () => {
     const h = await startSdk({ refreshSkewSeconds: 0 });
     try {

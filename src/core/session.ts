@@ -109,6 +109,10 @@ export class Session {
 
   /** @internal */
   markRefreshed(opts: { expiresAt?: number; identity?: Identity } = {}): void {
+    // `signed_out` is terminal until an explicit markSignedIn. A refresh that
+    // resolves AFTER the host signed out (e.g. a coalesced trusted refresh, or
+    // any in-flight renewal) must not resurrect the session.
+    if (this._status === "signed_out") return;
     this._status = "active";
     this._expiresAt = opts.expiresAt;
     // A refresh keeps the same user; only overwrite identity when supplied so
@@ -127,6 +131,12 @@ export class Session {
 
   /** @internal */
   markExpired(): void {
+    // Only `active` → `expired` is a real transition, and emitting it must be
+    // idempotent: a burst of concurrent failed refreshes each routes through
+    // onAuthFailure → markExpired, and a signOut may have already ended the
+    // session deliberately. Suppressing every non-active origin collapses
+    // those to a single `expired` event and never overrides `signed_out`.
+    if (this._status !== "active") return;
     this._status = "expired";
     this._expiresAt = undefined;
     this._identity = undefined;
@@ -135,6 +145,9 @@ export class Session {
 
   /** @internal */
   emitError(error: unknown): void {
+    // Once signed out, an in-flight refresh that later fails is irrelevant to
+    // the host — don't surface an error for a session they already ended.
+    if (this._status === "signed_out") return;
     this.emit("error", error);
   }
 
