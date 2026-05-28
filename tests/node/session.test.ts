@@ -199,6 +199,53 @@ describe("session surface (node OAuth)", () => {
     }
   }, 8000);
 
+  test("signOut cancels a pending proactive refresh", async () => {
+    // Skew schedules the timer ~1–2s out. signOut immediately should cancel it
+    // so no refresh ever fires, even after the would-fire window passes.
+    const h = await startSdk({ refreshSkewSeconds: 3598 });
+    try {
+      const events: SessionEvent[] = [];
+      h.sdk.session.onChange((e) => events.push(e));
+
+      await h.sdk.signOut();
+      // Wait well past when the proactive timer would have fired.
+      await new Promise((r) => setTimeout(r, 2500));
+
+      expect(h.web.refreshCallCount()).toBe(0);
+      expect(events.map((e) => e.type)).toEqual(["signedOut"]);
+      expect(h.sdk.session.status).toBe("signed_out");
+    } finally {
+      await h.cleanup();
+    }
+  }, 8000);
+
+  test("a failed proactive refresh tears the session down (error → expired)", async () => {
+    const h = await startSdk({ refreshSkewSeconds: 3598 });
+    try {
+      const apiCallsAtStart = h.api.requestCount();
+      const events: SessionEvent[] = [];
+      const expired = new Promise<void>((resolve) => {
+        h.sdk.session.onChange((e) => {
+          events.push(e);
+          if (e.type === "expired") resolve();
+        });
+      });
+
+      // The server rejects the refresh; the proactive path must surface error
+      // then expired — with no 401/API round-trip involved.
+      h.web.revokeRefreshTokens();
+      await expired;
+
+      expect(events.map((e) => e.type)).toEqual(["error", "expired"]);
+      expect(h.web.refreshCallCount()).toBe(1);
+      expect(h.api.requestCount()).toBe(apiCallsAtStart);
+      expect(h.sdk.session.status).toBe("expired");
+      expect(h.sdk.session.isAuthenticated()).toBe(false);
+    } finally {
+      await h.cleanup();
+    }
+  }, 8000);
+
   test("proactive refresh is disabled when skew is 0", async () => {
     const h = await startSdk({ refreshSkewSeconds: 0 });
     try {
