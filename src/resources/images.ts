@@ -144,6 +144,12 @@ export interface ImageResponse {
 
 export interface ImageRequestOptions {
   signal?: AbortSignal;
+  /**
+   * Opt into the client's in-memory response cache. Honored only by
+   * `generate` — `edit`, `upload`, and `createVariation` mutate or upload
+   * and aren't sensible to cache.
+   */
+  cache?: boolean;
 }
 
 // ── Resource ───────────────────────────────────────────────────────────────────
@@ -152,8 +158,9 @@ export class Images {
   constructor(private readonly client: Core) {}
 
   generate(params: ImageGenerateParams, options: ImageRequestOptions = {}): Promise<ImageResponse> {
-    const req: RequestOptions = { method: "POST", body: params };
+    const req: RequestOptions = { method: "POST", body: params, idempotent: true };
     if (options.signal) req.signal = options.signal;
+    if (options.cache) req.cache = true;
     return this.client.request<ImageResponse>("/api/v1/images/generations", req);
   }
 

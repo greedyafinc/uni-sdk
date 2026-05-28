@@ -146,6 +146,10 @@ async function putChunkWithRetry(
           method: "PUT",
           body: bytes,
           contentType: "application/octet-stream",
+          // This loop already owns retry/backoff for chunk PUTs; opting out
+          // of Core-level retry avoids double-backoff and keeps the abort
+          // semantics this resource documents.
+          retry: false,
           ...(signal && { signal }),
         },
       );

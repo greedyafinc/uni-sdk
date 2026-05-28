@@ -177,6 +177,7 @@ describe("fetch path throws typed errors", () => {
         { "x-request-id": "req_z" },
       ),
       token: "abc",
+      retry: false,
     });
     try {
       await sdk.usage.get();
@@ -195,6 +196,7 @@ describe("fetch path throws typed errors", () => {
       apiUrl: "https://example.test",
       fetch: fakeFetchReturning(429, { error: "rate_limited" }, { "retry-after": "7" }),
       token: "abc",
+      retry: false,
     });
     try {
       await sdk.usage.get();
@@ -211,6 +213,7 @@ describe("fetch path throws typed errors", () => {
       apiUrl: "https://example.test",
       fetch: fakeFetchReturning(500, { message: "boom" }),
       token: "abc",
+      retry: false,
     });
     await expect(sdk.usage.get()).rejects.toBeInstanceOf(ServerError);
   });
@@ -220,6 +223,7 @@ describe("fetch path throws typed errors", () => {
       apiUrl: "https://example.test",
       fetch: fakeFetchReturning(404, { message: "no such model" }),
       token: "abc",
+      retry: false,
     });
     await expect(sdk.models.list()).rejects.toBeInstanceOf(NotFoundError);
   });
@@ -229,6 +233,7 @@ describe("fetch path throws typed errors", () => {
       apiUrl: "https://example.test",
       fetch: fakeFetchReturning(400, { message: "bad payload" }),
       token: "abc",
+      retry: false,
     });
     await expect(sdk.usage.get()).rejects.toBeInstanceOf(BadRequestError);
   });
