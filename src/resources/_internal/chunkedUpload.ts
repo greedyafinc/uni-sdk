@@ -93,6 +93,28 @@ function backoffMs(attempt: number): number {
 }
 
 /**
+ * Emit a progress event without letting a throwing listener tear down the
+ * upload. Mirrors the same swallow-on-throw policy used in client.ts —
+ * host UI bugs must not abort an otherwise-healthy upload.
+ */
+function safeEmit(
+  listener: UploadProgressListener | undefined,
+  loaded: number,
+  total: number,
+): void {
+  if (!listener) return;
+  try {
+    listener({
+      loaded,
+      total,
+      percent: total > 0 ? Math.floor((loaded / total) * 100) : 0,
+    });
+  } catch {
+    // Host listener errors must not abort the upload.
+  }
+}
+
+/**
  * Decide whether a chunk PUT failure is worth retrying. Network errors and
  * 5xx are transient; 4xx (except 408 / 429) almost always indicate a client
  * bug (wrong index, expired session, bad MIME) — re-sending bytes won't help.
@@ -133,8 +155,10 @@ async function putChunkWithRetry(
       await sleep(backoffMs(attempt), signal);
     }
   }
-  // Unreachable — the loop either returns or throws.
-  throw lastErr;
+  // Defensive: the loop above either returns on success or throws on the
+  // final attempt. Reaching this line would indicate a logic bug in the
+  // retry budget; surface `lastErr` explicitly so it isn't swallowed.
+  throw lastErr ?? new Error("putChunkWithRetry exited without return or throw");
 }
 
 /**
@@ -205,6 +229,18 @@ export async function performChunkedUpload(
           `resume session has mime_type ${state.mime_type}; current payload is ${opts.mimeType} (different file?)`,
         );
       }
+      // Filename is also a cheap "same logical file" signal: a host with
+      // multiple in-flight uploads of the same size and mime (e.g. two
+      // different PDFs from the same scanner) would otherwise have its
+      // resume silently stitched under the wrong stored name. The server
+      // keeps the filename from init, so we have to defer to it for
+      // consistency rather than overwrite.
+      if (state.filename !== opts.filename) {
+        throw new UnifiedError(
+          "invalid_input",
+          `resume session has filename ${state.filename}; current payload is ${opts.filename} (different file?)`,
+        );
+      }
       uploadId = state.upload_id;
       chunkSize = state.chunk_size;
       const expectedTotalChunks = totalBytes === 0 ? 0 : Math.ceil(totalBytes / chunkSize);
@@ -257,13 +293,7 @@ export async function performChunkedUpload(
     // Emit a synthetic 0/total before any bytes flow. On resume we still start
     // from 0 — the host sees acknowledged-chunks progress jump to whatever's
     // already done on the first emit after the first PUT.
-    if (opts.onProgress) {
-      try {
-        opts.onProgress({ loaded: 0, total: totalBytes, percent: 0 });
-      } catch {
-        // swallow
-      }
-    }
+    safeEmit(opts.onProgress, 0, totalBytes);
 
     // Account for bytes already on the server (resume case). Counted toward
     // progress immediately so the listener doesn't first report 0 % then jump
@@ -273,17 +303,7 @@ export async function performChunkedUpload(
       const isLast = idx === totalChunks - 1;
       loaded += isLast ? totalBytes - chunkSize * idx : chunkSize;
     }
-    if (opts.onProgress && loaded > 0) {
-      try {
-        opts.onProgress({
-          loaded,
-          total: totalBytes,
-          percent: totalBytes > 0 ? Math.floor((loaded / totalBytes) * 100) : 0,
-        });
-      } catch {
-        // swallow
-      }
-    }
+    if (loaded > 0) safeEmit(opts.onProgress, loaded, totalBytes);
 
     // The outer try (opened at line ~165) wraps init/resume + the upload loop
     // + complete in one scope so an abort anywhere takes the persist-clear
@@ -302,17 +322,7 @@ export async function performChunkedUpload(
       const chunkBytes = new Uint8Array(await opts.blob.slice(start, end).arrayBuffer());
       await putChunkWithRetry(client, uploadId, i, chunkBytes, opts.signal);
       loaded += chunkBytes.byteLength;
-      if (opts.onProgress) {
-        try {
-          opts.onProgress({
-            loaded,
-            total: totalBytes,
-            percent: totalBytes > 0 ? Math.floor((loaded / totalBytes) * 100) : 0,
-          });
-        } catch {
-          // swallow
-        }
-      }
+      safeEmit(opts.onProgress, loaded, totalBytes);
     }
 
     const file = await client.request<FileObject>(
