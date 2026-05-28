@@ -15,6 +15,16 @@ import { deriveRevokeUrl, revokeToken } from "./_internal/revoke";
 const DEFAULT_AUTHORIZE_URL = "https://web.unifiedai.app/oauth/authorize";
 const DEFAULT_TOKEN_URL = "https://api.unifiedai.app/oauth/token";
 
+// Refresh this many seconds before the access token's expiry by default. One
+// minute gives an ample window for the refresh round-trip while keeping the
+// token live for in-flight requests.
+const DEFAULT_REFRESH_SKEW_SECONDS = 60;
+
+// setTimeout delays are stored in a signed 32-bit int; anything larger fires
+// immediately. We never schedule beyond this — on an early (clamped) wake we
+// re-evaluate and reschedule the remainder.
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+
 function envVar(name: string): string | undefined {
   if (typeof process === "undefined" || !process.env) return undefined;
   return process.env[name];
@@ -42,6 +52,12 @@ export interface UnifiedAIOptions extends BaseOptions {
    * Defaults to 5000ms.
    */
   revokeTimeoutMs?: number;
+  /**
+   * Refresh the access token this many seconds before it expires, instead of
+   * waiting for a 401. Set to `0` to disable proactive refresh entirely (the
+   * reactive 401-retry path still applies). Defaults to 60.
+   */
+  refreshSkewSeconds?: number;
 }
 
 /**
@@ -60,8 +76,10 @@ export class UnifiedAI extends BaseUnifiedAI {
   private readonly openUrl: OpenUrl;
   private readonly loopback: LoopbackServer;
   private readonly revokeTimeoutMs: number | undefined;
+  private readonly refreshSkewSeconds: number;
   private bootstrapPromise: Promise<void> | undefined;
   private refreshPromise: Promise<TokenSet> | undefined;
+  private proactiveTimer: ReturnType<typeof setTimeout> | undefined;
   private tokens: TokenSet | undefined;
   // Cached client_id so onAuthFailure() can clear the keychain entry even
   // after this.tokens has been nulled out by a racing signOut.
@@ -84,15 +102,29 @@ export class UnifiedAI extends BaseUnifiedAI {
     this.openUrl = options.openUrl ?? defaultOpenUrl;
     this.loopback = options.loopback ?? createNodeLoopback();
     this.revokeTimeoutMs = options.revokeTimeoutMs;
+    this.refreshSkewSeconds = options.refreshSkewSeconds ?? DEFAULT_REFRESH_SKEW_SECONDS;
   }
 
   override bootstrap(): Promise<void> {
     if (this.options.token !== undefined) return Promise.resolve();
     if (!this.bootstrapPromise) {
-      this.bootstrapPromise = this.doBootstrap().catch((err) => {
-        this.bootstrapPromise = undefined;
-        throw err;
-      });
+      this.bootstrapPromise = this.doBootstrap()
+        .then(() => {
+          // Establishing tokens — from the keychain cache, a handoff, or a
+          // fresh PKCE flow — is "signed in" from this instance's view. Emit
+          // once (bootstrap is single-flight) and arm the proactive timer.
+          if (this.tokens) {
+            this.session.markSignedIn({
+              expiresAt: this.tokens.expires_at * 1000,
+              identity: this.identityFromTokens(this.tokens),
+            });
+            this.scheduleProactiveRefresh();
+          }
+        })
+        .catch((err) => {
+          this.bootstrapPromise = undefined;
+          throw err;
+        });
     }
     return this.bootstrapPromise;
   }
@@ -170,6 +202,12 @@ export class UnifiedAI extends BaseUnifiedAI {
       clearError = err;
     }
 
+    // In-memory tokens are cleared by clearLocalSession before its (possibly
+    // throwing) keychain.clear, so the session is signed out regardless of the
+    // keychain outcome — emit now so listeners aren't held hostage by a
+    // best-effort revoke that may take seconds.
+    this.session.markSignedOut();
+
     let revokeError: unknown;
     let revokeFailed = false;
     if (snapshot) {
@@ -237,6 +275,9 @@ export class UnifiedAI extends BaseUnifiedAI {
     // were nulled out by a racing signOut between the 401 and this hook.
     const clientId = this.tokens?.client_id ?? this.lastClientId;
     await this.clearLocalSession(clientId);
+    // A failed refresh (or a retry that still 401s) means the session can no
+    // longer be renewed — surface it as expired so hosts can prompt re-auth.
+    this.session.markExpired();
   }
 
   // ─── OAuth internals ────────────────────────────────────────────────────
@@ -263,6 +304,15 @@ export class UnifiedAI extends BaseUnifiedAI {
       refreshToken: current.refresh_token,
       fetch: this.options.fetch,
     })
+      .catch((err) => {
+        // Genuine refresh failure (network / invalid_grant). Surface it as an
+        // `error` event before rethrowing so hosts can observe the cause; the
+        // resulting `expired` event comes later from onAuthFailure. The
+        // generation-guard rejection below is NOT a refresh failure, so it's
+        // intentionally outside this catch.
+        this.session.emitError(err);
+        throw err;
+      })
       .then(async (next) => {
         if (this.sessionGeneration !== generationAtStart) {
           // signOut (or some other clearLocalSession) ran while we were
@@ -274,6 +324,16 @@ export class UnifiedAI extends BaseUnifiedAI {
           );
         }
         await this.persist(next.client_id, next);
+        // persist() guards a narrower window: a signOut landing DURING
+        // keychain.set rolls back the just-written tokens. If that happened,
+        // don't announce a refresh on a session the user already ended.
+        if (this.sessionGeneration === generationAtStart) {
+          this.session.markRefreshed({
+            expiresAt: next.expires_at * 1000,
+            identity: this.identityFromTokens(next),
+          });
+          this.scheduleProactiveRefresh();
+        }
         return next;
       })
       .finally(() => {
@@ -301,6 +361,7 @@ export class UnifiedAI extends BaseUnifiedAI {
     this.lastClientId = undefined;
     this.bootstrapPromise = undefined;
     this.refreshPromise = undefined;
+    this.cancelProactiveRefresh();
     if (!clientId) return;
     try {
       await this.keychain.clear(clientId);
@@ -401,6 +462,79 @@ export class UnifiedAI extends BaseUnifiedAI {
       } catch {
         // ignore — clearLocalSession will have already attempted its own clear
       }
+    }
+  }
+
+  private identityFromTokens(tokens: TokenSet): Identity {
+    return { user_id: tokens.user_id, client_id: tokens.client_id };
+  }
+
+  // ─── Proactive refresh ──────────────────────────────────────────────────
+
+  /**
+   * Arm a one-shot timer to refresh the access token shortly before it
+   * expires. Reschedules itself after each successful refresh (the
+   * ensureFreshToken success path calls this again). No-op in trusted-token
+   * mode, when proactive refresh is disabled (skew 0), when no tokens are
+   * held, or when the token is already inside the skew window — in that last
+   * case the reactive 401 path covers it, and scheduling a zero-delay refresh
+   * could hot-loop against a server issuing very short-lived tokens.
+   */
+  private scheduleProactiveRefresh(): void {
+    this.cancelProactiveRefresh();
+    if (this.options.token !== undefined) return;
+    if (this.refreshSkewSeconds <= 0) return;
+    const tokens = this.tokens;
+    if (!tokens) return;
+
+    const skewMs = this.refreshSkewSeconds * 1000;
+    const fireAt = tokens.expires_at * 1000 - skewMs;
+    const delay = fireAt - Date.now();
+    if (delay <= 0) return;
+
+    const generationAtSchedule = this.sessionGeneration;
+    const timer = setTimeout(
+      () => {
+        this.proactiveTimer = undefined;
+        // A signOut/refresh since scheduling invalidates this fire.
+        if (this.sessionGeneration !== generationAtSchedule) return;
+        const current = this.tokens;
+        if (!current) return;
+        // We clamp long delays to MAX_TIMER_DELAY_MS; if we woke early because of
+        // that clamp, the token isn't due yet — reschedule the remainder.
+        if (current.expires_at * 1000 - skewMs > Date.now()) {
+          this.scheduleProactiveRefresh();
+          return;
+        }
+        void this.proactiveRefresh();
+      },
+      Math.min(delay, MAX_TIMER_DELAY_MS),
+    );
+
+    // Don't let a pending refresh timer keep a Node process alive on its own.
+    (timer as { unref?: () => void }).unref?.();
+    this.proactiveTimer = timer;
+  }
+
+  private cancelProactiveRefresh(): void {
+    if (this.proactiveTimer !== undefined) {
+      clearTimeout(this.proactiveTimer);
+      this.proactiveTimer = undefined;
+    }
+  }
+
+  /**
+   * Drive a pre-expiry refresh through the same single-flight path as the
+   * reactive 401 retry, so a proactive refresh and a concurrent 401 coalesce
+   * into one network call. On failure, tear the session down exactly as the
+   * reactive path would (clear + `expired` event) — ensureFreshToken already
+   * emitted the `error`.
+   */
+  private async proactiveRefresh(): Promise<void> {
+    try {
+      await this.ensureFreshToken();
+    } catch {
+      await this.onAuthFailure();
     }
   }
 }

@@ -24,6 +24,7 @@ import {
   headersToRecord,
 } from "./errors";
 import type { Identity } from "./identity";
+import { Session } from "./session";
 
 const DEFAULT_API_URL = "https://api.unifiedai.app";
 
@@ -156,6 +157,14 @@ export class UnifiedAI extends Core {
   readonly embeddings: Embeddings = new Embeddings(this);
   readonly helpers: Helpers = new Helpers();
 
+  /**
+   * Observable auth-session surface: `isAuthenticated()`, `expiresAt`,
+   * `identity`, and `onChange(listener)`. In trusted-token mode it reflects
+   * the configured token (active while one is set); the node OAuth subclass
+   * additionally tracks expiry, caches identity, and drives proactive refresh.
+   */
+  readonly session: Session;
+
   private trustedRefreshPromise: Promise<string> | undefined;
 
   constructor(options: UnifiedAIOptions = {}) {
@@ -163,6 +172,11 @@ export class UnifiedAI extends Core {
       ...options,
       apiUrl: options.apiUrl ?? envVar("UNIFIEDAI_API_URL") ?? DEFAULT_API_URL,
     });
+    // Trusted-token mode is "authenticated" the moment a token is configured —
+    // the host owns the lifecycle so the SDK can't see expiry, but it can
+    // truthfully report that a session exists. OAuth mode starts signed-out
+    // until bootstrap() establishes tokens.
+    this.session = new Session(this.options.token !== undefined ? "active" : "signed_out");
   }
 
   /**
@@ -196,7 +210,9 @@ export class UnifiedAI extends Core {
    * Resolves successfully so callers can wire it into UI flows uniformly.
    */
   async signOut(): Promise<void> {
-    // Trusted-token mode has no SDK-owned session to clear.
+    // Trusted-token mode has no SDK-owned session to clear, but the host can
+    // still observe the lifecycle — emit so listeners see a uniform signedOut.
+    this.session.markSignedOut();
   }
 
   override async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -550,6 +566,14 @@ export class UnifiedAI extends Core {
         if (this.trustedRefreshPromise === p) this.trustedRefreshPromise = undefined;
       });
       this.trustedRefreshPromise = p;
+      // Emit `refreshed` once per coalesced burst, not once per awaiting
+      // caller. Attach to `p` (shared by all callers) rather than awaiting
+      // here so the single-flight contract is preserved. The rejection
+      // branch is a no-op — the real failure propagates via the returned `p`.
+      p.then(
+        () => this.session.markRefreshed(),
+        () => {},
+      );
       return p;
     }
     throw new UnifiedError(

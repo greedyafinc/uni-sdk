@@ -33,6 +33,16 @@ export type {
 // Identity.
 export type { Identity } from "../core/identity";
 
+// Session surface.
+export { Session } from "../core/session";
+export type {
+  SessionStatus,
+  SessionSnapshot,
+  SessionEvent,
+  SessionEventType,
+  SessionListener,
+} from "../core/session";
+
 // Stream + SSE.
 export { UnifiedStream } from "../core/_internal/stream";
 export type { StreamUsage, StreamUsageExtractor } from "../core/_internal/stream";
