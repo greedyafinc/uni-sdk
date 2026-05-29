@@ -59,6 +59,88 @@ describe("LruCache isolation", () => {
   });
 });
 
+describe("resource-level cache opt-in", () => {
+  test("embeddings.create(cache:true) reuses cached body across identical params", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return new Response(
+        JSON.stringify({
+          object: "list",
+          data: [{ object: "embedding", embedding: [0.1, 0.2], index: 0 }],
+          model: "m",
+          usage: { prompt_tokens: 1, total_tokens: 1 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    const sdk = new UnifiedAI({
+      apiUrl: "https://example.test",
+      token: "t",
+      fetch: fetchImpl,
+      cache: { ttlMs: 60_000 },
+    });
+    const a = await sdk.embeddings.create({ model: "m", input: "hi" }, { cache: true });
+    const b = await sdk.embeddings.create({ model: "m", input: "hi" }, { cache: true });
+    expect(a).toEqual(b);
+    expect(calls).toBe(1);
+    // Different input → miss.
+    await sdk.embeddings.create({ model: "m", input: "bye" }, { cache: true });
+    expect(calls).toBe(2);
+  });
+
+  test("images.generate(cache:true) reuses cached body across identical params", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ created: 0, data: [{ url: "https://x/img.png" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const sdk = new UnifiedAI({
+      apiUrl: "https://example.test",
+      token: "t",
+      fetch: fetchImpl,
+      cache: { ttlMs: 60_000 },
+    });
+    await sdk.images.generate({ prompt: "a cat" }, { cache: true });
+    await sdk.images.generate({ prompt: "a cat" }, { cache: true });
+    expect(calls).toBe(1);
+  });
+
+  test("embeddings.create is treated as idempotent for retry (POST + 5xx retried)", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response("{}", {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          object: "list",
+          data: [{ object: "embedding", embedding: [0.1], index: 0 }],
+          model: "m",
+          usage: { prompt_tokens: 1, total_tokens: 1 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    const sdk = new UnifiedAI({
+      apiUrl: "https://example.test",
+      token: "t",
+      fetch: fetchImpl,
+      retry: { initialDelayMs: 1, maxDelayMs: 1 },
+    });
+    const res = await sdk.embeddings.create({ model: "m", input: "x" });
+    expect(res.data).toHaveLength(1);
+    expect(calls).toBe(2);
+  });
+});
+
 describe("UnifiedAI cache integration", () => {
   test("cache hit short-circuits the HTTP call", async () => {
     let calls = 0;

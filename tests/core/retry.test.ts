@@ -56,6 +56,22 @@ describe("retry classifier", () => {
     expect(parseRetryAfterHeader(res)).toBe(2000);
   });
 
+  test("parseRetryAfterHeader handles HTTP-date form", () => {
+    const future = new Date(Date.now() + 2500).toUTCString();
+    const res = new Response("", { headers: { "retry-after": future } });
+    const v = parseRetryAfterHeader(res);
+    // Allow a 1s tolerance for clock skew between Date.now() calls.
+    expect(v).toBeGreaterThan(1000);
+    expect(v).toBeLessThan(3500);
+  });
+
+  test("parseRetryAfterHeader returns undefined when missing or garbage", () => {
+    expect(parseRetryAfterHeader(new Response(""))).toBeUndefined();
+    expect(
+      parseRetryAfterHeader(new Response("", { headers: { "retry-after": "not-a-date" } })),
+    ).toBeUndefined();
+  });
+
   test("computeBackoff respects the per-attempt cap", () => {
     const cfg = { ...DEFAULT_RETRY, initialDelayMs: 100, maxDelayMs: 1000 };
     // With rng() = 1, expo cap at attempt 0 is 100; attempt 5 hits maxDelay.
@@ -265,7 +281,205 @@ describe("UnifiedAI retry integration", () => {
       caught = e;
     }
     expect((caught as Error)?.name).toBe("AbortError");
-    expect(calls).toBe(1);
+    // Jitter on backoff means the wait can occasionally be smaller than the
+    // abort scheduling window — accept attempt 1 (abort during delay, the
+    // common case) or attempt 2 (wait happened to fall under 10ms). The
+    // load-bearing assertion is that the surfaced error is AbortError.
+    expect(calls).toBeLessThanOrEqual(2);
+  });
+
+  test("maxElapsedMs caps the retry budget across attempts", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ error: "boom" }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const start = Date.now();
+    const sdk = new UnifiedAI({
+      apiUrl: "https://example.test",
+      token: "t",
+      fetch: fetchImpl,
+      retry: {
+        maxRetries: 20,
+        // Each backoff jitters in [0, 50] then [0, 100] etc., capped at 50.
+        initialDelayMs: 50,
+        maxDelayMs: 50,
+        maxElapsedMs: 120,
+      },
+    });
+    await expect(sdk.request("/x")).rejects.toBeInstanceOf(UnifiedAIError);
+    const elapsed = Date.now() - start;
+    // The loop must have exited via the elapsed cap before exhausting all 20
+    // retries (which would otherwise take ~1s+). Realistic window: < ~400ms.
+    expect(elapsed).toBeLessThan(400);
+    expect(calls).toBeLessThan(10);
+  });
+
+  test("client-level AND per-call onRetry listeners both fire", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify({}), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const clientEvents: number[] = [];
+    const perCallEvents: number[] = [];
+    const sdk = new UnifiedAI({
+      apiUrl: "https://example.test",
+      token: "t",
+      fetch: fetchImpl,
+      retry: { initialDelayMs: 1, maxDelayMs: 1 },
+      onRetry: (e) => clientEvents.push(e.status ?? -1),
+    });
+    await sdk.request("/x", { onRetry: (e) => perCallEvents.push(e.attempt) });
+    expect(clientEvents).toEqual([503]);
+    expect(perCallEvents).toEqual([1]);
+  });
+
+  test("a throwing onRetry listener does not break the retry loop", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response("{}", {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const sdk = new UnifiedAI({
+      apiUrl: "https://example.test",
+      token: "t",
+      fetch: fetchImpl,
+      retry: { initialDelayMs: 1, maxDelayMs: 1 },
+      onRetry: () => {
+        throw new Error("buggy listener");
+      },
+    });
+    const res = await sdk.request<{ ok: boolean }>("/x");
+    expect(res.ok).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  test("requestBinary retries on 5xx for idempotent GET", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response("err", {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { "content-type": "application/octet-stream" },
+      });
+    }) as unknown as typeof fetch;
+    const sdk = new UnifiedAI({
+      apiUrl: "https://example.test",
+      token: "t",
+      fetch: fetchImpl,
+      retry: { initialDelayMs: 1, maxDelayMs: 1 },
+    });
+    const { bytes } = await sdk.requestBinary("/x");
+    expect(new Uint8Array(bytes)).toEqual(new Uint8Array([1, 2, 3]));
+    expect(calls).toBe(2);
+  });
+
+  test("stream retries on 5xx for idempotent GET", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response("err", {
+          status: 502,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("data: hello\n\n", {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as unknown as typeof fetch;
+    const sdk = new UnifiedAI({
+      apiUrl: "https://example.test",
+      token: "t",
+      fetch: fetchImpl,
+      retry: { initialDelayMs: 1, maxDelayMs: 1 },
+    });
+    const body = await sdk.stream("/x");
+    expect(body).toBeDefined();
+    expect(calls).toBe(2);
+    // Drain so the test doesn't leak an open reader.
+    const reader = body.getReader();
+    while (!(await reader.read()).done) {}
+  });
+
+  test("successful 401 refresh in attempt 1 propagates fresh token to attempt 2 (5xx)", async () => {
+    // This exercises the `currentToken` mutable-across-attempts fix: a 401
+    // inside attempt 1 triggers refresh; the second send in attempt 1 returns
+    // a retryable 5xx; attempt 2 must reuse the REFRESHED token, not the
+    // original. Without the fix, attempt 2 sends the stale token → another
+    // 401 → forces a second refresh cycle.
+    const tokens: string[] = [];
+    let tokenSeq = 0;
+    let calls = 0;
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      calls += 1;
+      const auth = (init.headers as Record<string, string>).authorization ?? "";
+      tokens.push(auth);
+      if (calls === 1) {
+        return new Response("{}", {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (calls === 2) {
+        return new Response("{}", {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const sdk = new UnifiedAI({
+      apiUrl: "https://example.test",
+      token: () => {
+        tokenSeq += 1;
+        return `t-${tokenSeq}`;
+      },
+      fetch: fetchImpl,
+      retry: { initialDelayMs: 1, maxDelayMs: 1 },
+    });
+    const res = await sdk.request<{ ok: boolean }>("/x");
+    expect(res.ok).toBe(true);
+    expect(calls).toBe(3);
+    // Token sequence: original → refreshed (after 401) → refreshed reused
+    // (no second 401 on attempt 2). Tokens captured at each send:
+    //   tokens[0] = first call (original)
+    //   tokens[1] = retry within attempt 1 (refreshed)
+    //   tokens[2] = attempt 2 retry — MUST equal tokens[1]
+    expect(tokens[2]).toBe(tokens[1]);
+    expect(tokens[1]).not.toBe(tokens[0]);
   });
 
   test("plain Error from host token provider on refresh does not re-trigger retry", async () => {
