@@ -146,6 +146,10 @@ async function putChunkWithRetry(
           method: "PUT",
           body: bytes,
           contentType: "application/octet-stream",
+          // This loop already owns retry/backoff for chunk PUTs; opting out
+          // of Core-level retry avoids double-backoff and keeps the abort
+          // semantics this resource documents.
+          retry: false,
           ...(signal && { signal }),
         },
       );
@@ -215,7 +219,14 @@ export async function performChunkedUpload(
       //     stale indices fall out of range.
       const state = await client.request<SessionStateResponse>(
         `/api/v1/files/uploads/${encodeURIComponent(opts.resumeFrom)}`,
-        { method: "GET", ...(opts.signal && { signal: opts.signal }) },
+        {
+          method: "GET",
+          // This driver owns its own retry; don't stack Core-level retry on
+          // top — a 429 retry of a GET is benign but doubles wall-clock cost
+          // unnecessarily during a chunked session.
+          retry: false,
+          ...(opts.signal && { signal: opts.signal }),
+        },
       );
       if (state.total_bytes !== totalBytes) {
         throw new UnifiedError(
@@ -267,6 +278,11 @@ export async function performChunkedUpload(
           total_bytes: totalBytes,
           ...(opts.purpose ? { purpose: opts.purpose } : {}),
         },
+        // Session init is NON-idempotent: a 429-retried init can leave an
+        // orphaned upload_id on the server (first attempt succeeded server-
+        // side, gateway rate-limited the response, SDK retries → second
+        // session created). Opt out — host should retry the whole upload.
+        retry: false,
         ...(opts.signal && { signal: opts.signal }),
       });
       uploadId = init.upload_id;
@@ -327,7 +343,13 @@ export async function performChunkedUpload(
 
     const file = await client.request<FileObject>(
       `/api/v1/files/uploads/${encodeURIComponent(uploadId)}/complete`,
-      { method: "POST", ...(opts.signal && { signal: opts.signal }) },
+      {
+        method: "POST",
+        // Same hazard as init: a 429-retried /complete can double-finalize a
+        // session whose first attempt the server already committed.
+        retry: false,
+        ...(opts.signal && { signal: opts.signal }),
+      },
     );
 
     // Successful completion: clear the persisted session id so a future load

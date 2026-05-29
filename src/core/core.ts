@@ -1,6 +1,11 @@
+import type { CacheConfig } from "./_internal/cache";
+import type { RetryAttempt, RetryConfig, RetryListener } from "./_internal/retry";
 import { UnifiedError } from "./errors";
 
 export type TokenProvider = string | (() => string | Promise<string>);
+
+export type { CacheConfig } from "./_internal/cache";
+export type { RetryAttempt, RetryConfig, RetryListener } from "./_internal/retry";
 
 /**
  * Progress event fired during a multipart upload. `loaded` and `total` are
@@ -31,6 +36,30 @@ export interface CoreOptions {
   workspaceId?: string;
   appId?: string;
   fetch?: typeof globalThis.fetch;
+  /**
+   * Retry policy for transient failures (429, 5xx, network errors). Pass
+   * `false` to disable, an object to override individual fields, or leave
+   * unset to use the defaults (3 retries, exponential backoff with jitter,
+   * 60s elapsed cap). Honored by `request`, `requestBinary`, and `stream`.
+   * Per-call overrides are available via `RequestOptions.retry`.
+   *
+   * 401-with-refresh is handled separately and is NOT counted against the
+   * retry budget — it's an authentication concern, not a transient failure.
+   */
+  retry?: false | Partial<RetryConfig>;
+  /**
+   * Fires on every retry attempt with the failing reason and computed delay.
+   * Use for telemetry / debug logging — host visibility into when the SDK
+   * is papering over transient failures.
+   */
+  onRetry?: RetryListener;
+  /**
+   * Opt-in in-memory response cache. When enabled, resources that support
+   * caching (embeddings, image generations) can pass `cache: true` on the
+   * call to short-circuit identical repeat requests. Initial scope is
+   * deterministic-ish endpoints; other resources ignore the option.
+   */
+  cache?: false | Partial<CacheConfig>;
 }
 
 export interface RequestOptions {
@@ -65,11 +94,39 @@ export interface RequestOptions {
    * boundary-tagged multipart type itself) and JSON bodies.
    */
   contentType?: string;
+  /**
+   * Per-call retry override. `false` disables retry for this call; an object
+   * overrides individual config fields. Falls back to the client-level setting.
+   */
+  retry?: false | Partial<RetryConfig>;
+  /**
+   * Treat this call as idempotent for retry classification. POST/PATCH are
+   * not retried on network errors by default (the SDK can't tell if the
+   * server processed the request). Set `true` when the endpoint is known to
+   * be safe to repeat — e.g. embeddings, image generations, or any GET-like
+   * POST.
+   */
+  idempotent?: boolean;
+  /**
+   * Per-call retry listener. Fires in addition to the client-level `onRetry`.
+   */
+  onRetry?: RetryListener;
+  /**
+   * When `true` and the client was constructed with `cache` enabled, look up
+   * the cache before sending and store the result on success. Quietly ignored
+   * if the client has no cache configured.
+   */
+  cache?: boolean;
 }
 
 export class Core {
-  protected readonly options: Readonly<Required<Omit<CoreOptions, "token">>> & {
+  protected readonly options: Readonly<
+    Required<Omit<CoreOptions, "token" | "retry" | "cache" | "onRetry">>
+  > & {
     token: TokenProvider | undefined;
+    retry: CoreOptions["retry"];
+    cache: CoreOptions["cache"];
+    onRetry: RetryListener | undefined;
   };
 
   constructor(options: CoreOptions = {}) {
@@ -79,6 +136,9 @@ export class Core {
       workspaceId: options.workspaceId ?? "",
       appId: options.appId ?? "",
       fetch: options.fetch ?? globalThis.fetch.bind(globalThis),
+      retry: options.retry,
+      cache: options.cache,
+      onRetry: options.onRetry,
     });
   }
 

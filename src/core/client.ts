@@ -9,12 +9,24 @@ import { Models } from "../resources/models";
 import { Responses } from "../resources/responses";
 import { Usage } from "../resources/usage";
 import { Videos } from "../resources/videos";
+import { LruCache, cacheKey, resolveCacheConfig } from "./_internal/cache";
 import {
   drainResponse,
   formatBody,
   httpErrorMessage,
   readErrorBody,
 } from "./_internal/http-errors";
+import {
+  type RetryAttempt,
+  type RetryConfig,
+  type RetryListener,
+  isIdempotent,
+  isNetworkErrorRetryable,
+  isRetryableStatus,
+  nextDelay,
+  resolveRetryConfig,
+  delay as retryDelay,
+} from "./_internal/retry";
 import { Core, type CoreOptions, type RequestOptions, type UploadProgressListener } from "./core";
 import {
   UnifiedAIAuthError,
@@ -166,12 +178,15 @@ export class UnifiedAI extends Core {
   readonly session: Session;
 
   private trustedRefreshPromise: Promise<string> | undefined;
+  private readonly responseCache: LruCache | undefined;
 
   constructor(options: UnifiedAIOptions = {}) {
     super({
       ...options,
       apiUrl: options.apiUrl ?? envVar("UNIFIEDAI_API_URL") ?? DEFAULT_API_URL,
     });
+    const cacheCfg = resolveCacheConfig(this.options.cache);
+    this.responseCache = cacheCfg ? new LruCache(cacheCfg) : undefined;
     // Trusted-token mode is "authenticated" the moment a token is configured —
     // the host owns the lifecycle so the SDK can't see expiry, but it can
     // truthfully report that a session exists. OAuth mode starts signed-out
@@ -216,7 +231,14 @@ export class UnifiedAI extends Core {
   }
 
   override async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-    const initialToken = await this.getInitialAccessToken();
+    const method = options.method ?? "GET";
+    // Opt-in cache: lookup before any network work. Cache only applies to
+    // JSON `request()` — binary and stream responses aren't worth storing.
+    if (options.cache && this.responseCache) {
+      const key = cacheKey(method, path, options.body, options.query);
+      const hit = this.responseCache.get(key);
+      if (hit !== undefined) return hit as T;
+    }
     const url = this.buildUrl(path, options.query);
     const isMultipart = typeof FormData !== "undefined" && options.body instanceof FormData;
     const isBinaryBody =
@@ -308,29 +330,7 @@ export class UnifiedAI extends Core {
       return this.options.fetch(url, init);
     };
 
-    let res = await send(initialToken);
-    if (res.status === 401) {
-      await drainResponse(res);
-      let freshToken: string;
-      try {
-        freshToken = await this.refreshAccessToken();
-      } catch (err) {
-        await this.onAuthFailure();
-        throw err;
-      }
-      res = await send(freshToken);
-      if (res.status === 401) {
-        const body = await readErrorBody(res);
-        await this.onAuthFailure();
-        throw new UnifiedAIAuthError(
-          "auth_retry_still_unauthorized",
-          `request still 401 after refresh: ${formatBody(body)}`,
-          401,
-          body,
-          headersToRecord(res.headers),
-        );
-      }
-    }
+    const res = await this.executeWithRetry(send, method, options);
     // Final bookend for the above-cap progress path. The wrapping branch
     // already emits total/total naturally as the last chunk drains, so
     // this only fires when we sent the FormData as-is. The `total` here
@@ -350,7 +350,12 @@ export class UnifiedAI extends Core {
       );
     }
     if (res.status === 204) return undefined as T;
-    return (await res.json()) as T;
+    const parsed = (await res.json()) as T;
+    if (options.cache && this.responseCache) {
+      const key = cacheKey(method, path, options.body, options.query);
+      this.responseCache.set(key, parsed);
+    }
+    return parsed;
   }
 
   /**
@@ -367,7 +372,6 @@ export class UnifiedAI extends Core {
     contentType: string;
     headers: Readonly<Record<string, string>>;
   }> {
-    const initialToken = await this.getInitialAccessToken();
     const url = this.buildUrl(path, options.query);
     const isMultipart = typeof FormData !== "undefined" && options.body instanceof FormData;
     const bodyInit: BodyInit | undefined = isMultipart
@@ -385,29 +389,7 @@ export class UnifiedAI extends Core {
       return this.options.fetch(url, init);
     };
 
-    let res = await send(initialToken);
-    if (res.status === 401) {
-      await drainResponse(res);
-      let freshToken: string;
-      try {
-        freshToken = await this.refreshAccessToken();
-      } catch (err) {
-        await this.onAuthFailure();
-        throw err;
-      }
-      res = await send(freshToken);
-      if (res.status === 401) {
-        const body = await readErrorBody(res);
-        await this.onAuthFailure();
-        throw new UnifiedAIAuthError(
-          "auth_retry_still_unauthorized",
-          `request still 401 after refresh: ${formatBody(body)}`,
-          401,
-          body,
-          headersToRecord(res.headers),
-        );
-      }
-    }
+    const res = await this.executeWithRetry(send, options.method ?? "GET", options);
     if (!res.ok) {
       const status = res.status;
       const body = await readErrorBody(res);
@@ -466,7 +448,6 @@ export class UnifiedAI extends Core {
     path: string,
     options: RequestOptions = {},
   ): Promise<ReadableStream<Uint8Array>> {
-    const initialToken = await this.getInitialAccessToken();
     const url = this.buildUrl(path, options.query);
     const bodyText = options.body !== undefined ? JSON.stringify(options.body) : undefined;
     const send = (accessToken: string) => {
@@ -481,29 +462,7 @@ export class UnifiedAI extends Core {
       return this.options.fetch(url, init);
     };
 
-    let res = await send(initialToken);
-    if (res.status === 401) {
-      await drainResponse(res);
-      let freshToken: string;
-      try {
-        freshToken = await this.refreshAccessToken();
-      } catch (err) {
-        await this.onAuthFailure();
-        throw err;
-      }
-      res = await send(freshToken);
-      if (res.status === 401) {
-        const body = await readErrorBody(res);
-        await this.onAuthFailure();
-        throw new UnifiedAIAuthError(
-          "auth_retry_still_unauthorized",
-          `stream still 401 after refresh: ${formatBody(body)}`,
-          401,
-          body,
-          headersToRecord(res.headers),
-        );
-      }
-    }
+    const res = await this.executeWithRetry(send, options.method ?? "GET", options);
     if (!res.ok) {
       const status = res.status;
       const body = await readErrorBody(res);
@@ -538,6 +497,175 @@ export class UnifiedAI extends Core {
       );
     }
     return res.body;
+  }
+
+  // ─── Retry orchestration ──────────────────────────────────────────────
+
+  /**
+   * Run `send(token)` with the 401-refresh path and outer retry/backoff
+   * applied. Returns the final Response (which the caller is expected to
+   * inspect for non-retryable 4xx and parse the body). The 401 path is
+   * handled internally and never surfaces to the retry classifier — it's
+   * an auth concern, not a transient one.
+   *
+   * `method` and `options` are used to decide idempotency and to read the
+   * caller-level retry override.
+   */
+  protected async executeWithRetry(
+    send: (accessToken: string) => Promise<Response>,
+    method: string,
+    options: RequestOptions,
+  ): Promise<Response> {
+    const cfg = resolveRetryConfig(options.retry ?? this.options.retry);
+    const idempotent = isIdempotent(method, options.idempotent);
+    const listeners: RetryListener[] = [];
+    if (this.options.onRetry) listeners.push(this.options.onRetry);
+    if (options.onRetry) listeners.push(options.onRetry);
+    const startedAt = Date.now();
+    let attempt = 0;
+    // Token is resolved once before the retry loop so a sign-out / refresh
+    // racing the loop doesn't turn a retried 5xx into a not_bootstrapped error.
+    // We track it as `currentToken` so a successful 401-refresh inside one
+    // attempt rolls forward into the next attempt — without this, every
+    // retry following a refresh would re-send the stale original token and
+    // force another 401 + refresh round-trip.
+    let currentToken = await this.getInitialAccessToken();
+
+    const runOnce = async (): Promise<Response> => {
+      let res = await send(currentToken);
+      if (res.status === 401) {
+        // drainResponse swallows body-read errors internally, but a body
+        // stream that throws synchronously on read (rare; some
+        // gateway/proxy combinations) could still propagate. If it does,
+        // we must NOT let it escape as a generic Error — the outer retry
+        // classifier would treat it as a retryable network blip and the
+        // 401 path would silently restart. Wrap defensively so the
+        // auth-failure contract stays terminal.
+        try {
+          await drainResponse(res);
+        } catch {
+          // Body drain failure on a 401 is non-fatal here: we already know
+          // the request failed auth, the socket may or may not be reusable,
+          // and the subsequent refresh+retry will open a fresh connection.
+        }
+        let freshToken: string;
+        try {
+          freshToken = await this.refreshAccessToken();
+        } catch (err) {
+          await this.onAuthFailure();
+          // Surface as a typed auth error so the outer retry classifier
+          // recognizes this as a terminal failure. Without this, a host
+          // token provider that throws a plain Error would be misread by
+          // isNetworkErrorRetryable as a transient blip and trigger
+          // duplicate onAuthFailure() / markExpired() on every retry.
+          if (err instanceof UnifiedError) throw err;
+          const wrapped = new UnifiedAIAuthError(
+            "auth_refresh_failed",
+            err instanceof Error ? err.message : "refresh failed",
+          );
+          if (err instanceof Error) wrapped.cause = err;
+          throw wrapped;
+        }
+        currentToken = freshToken;
+        res = await send(freshToken);
+        if (res.status === 401) {
+          const body = await readErrorBody(res);
+          await this.onAuthFailure();
+          throw new UnifiedAIAuthError(
+            "auth_retry_still_unauthorized",
+            `request still 401 after refresh: ${formatBody(body)}`,
+            401,
+            body,
+            headersToRecord(res.headers),
+          );
+        }
+      }
+      return res;
+    };
+
+    while (true) {
+      let res: Response | undefined;
+      let err: unknown;
+      try {
+        res = await runOnce();
+      } catch (e) {
+        err = e;
+      }
+
+      // Decide whether to retry. `cfg` undefined means retry disabled.
+      // Idempotency policy:
+      //   - 429 is always safe (server told us to back off; the request
+      //     didn't take effect — RFC 6585).
+      //   - 408 (request timeout) and 5xx COULD have side-effected on a
+      //     non-idempotent call (e.g. a 502 after the origin already
+      //     processed the POST). Gate on idempotent for those.
+      //   - Network errors: gate on idempotent. We don't know if the
+      //     server saw the request.
+      const retryable = cfg
+        ? res
+          ? res.status === 429
+            ? true
+            : isRetryableStatus(res.status) && idempotent
+          : isNetworkErrorRetryable(err) && idempotent
+        : false;
+
+      if (!retryable || !cfg) {
+        if (err !== undefined) throw err;
+        // biome-ignore lint/style/noNonNullAssertion: branch guards res defined
+        return res!;
+      }
+
+      if (attempt >= cfg.maxRetries) {
+        if (err !== undefined) throw err;
+        // biome-ignore lint/style/noNonNullAssertion: branch guards res defined
+        return res!;
+      }
+      const reason: Response | Error = res ?? (err as Error);
+      const wait = nextDelay(attempt, cfg, reason);
+      const elapsed = Date.now() - startedAt;
+      if (elapsed + wait > cfg.maxElapsedMs) {
+        if (err !== undefined) throw err;
+        // biome-ignore lint/style/noNonNullAssertion: branch guards res defined
+        return res!;
+      }
+      const event: RetryAttempt = {
+        attempt: attempt + 1,
+        delayMs: wait,
+        status: res?.status,
+        reason,
+      };
+      for (const l of listeners) {
+        try {
+          l(event);
+        } catch {
+          // Host telemetry listeners must not break the retry loop.
+        }
+      }
+      // Drain the failing response so the underlying socket can be reused.
+      if (res) await drainResponse(res);
+      await retryDelay(wait, options.signal);
+      if (options.signal?.aborted) {
+        // Always surface the abort, never the prior attempt's error. If
+        // user code cancelled mid-backoff, that's the load-bearing signal —
+        // burying it under a TypeError('fetch failed') from the previous
+        // attempt confuses every abort handler downstream.
+        // Preserve `signal.reason` (web platform spec: callers can pass a
+        // typed reason via `controller.abort(reason)`) as the `.cause` of
+        // the surfaced AbortError so error-classification chains that
+        // branch on `err.cause` still see the original intent.
+        const reason = options.signal.reason;
+        const abortError =
+          typeof DOMException !== "undefined"
+            ? new DOMException("Aborted", "AbortError")
+            : Object.assign(new Error("Aborted"), { name: "AbortError" });
+        if (reason !== undefined) {
+          // DOMException allows arbitrary property assignment in V8/Bun.
+          (abortError as { cause?: unknown }).cause = reason;
+        }
+        throw abortError;
+      }
+      attempt += 1;
+    }
   }
 
   // ─── Hooks for subclasses ──────────────────────────────────────────────

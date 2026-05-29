@@ -8,7 +8,15 @@
 
 // Core class — for advanced consumers wiring a custom transport.
 export { Core } from "../core/core";
-export type { CoreOptions, RequestOptions, TokenProvider } from "../core/core";
+export type {
+  CacheConfig,
+  CoreOptions,
+  RequestOptions,
+  RetryAttempt,
+  RetryConfig,
+  RetryListener,
+  TokenProvider,
+} from "../core/core";
 
 // Errors.
 export {
