@@ -72,6 +72,14 @@ describe("retry classifier", () => {
     ).toBeUndefined();
   });
 
+  test("parseRetryAfterHeader treats whitespace-only header as missing (not 0)", () => {
+    // Without the guard, Number('   '.trim()) === Number('') === 0 would
+    // collapse the backoff to 0ms and produce a tight retry burst.
+    expect(
+      parseRetryAfterHeader(new Response("", { headers: { "retry-after": "   " } })),
+    ).toBeUndefined();
+  });
+
   test("computeBackoff respects the per-attempt cap", () => {
     const cfg = { ...DEFAULT_RETRY, initialDelayMs: 100, maxDelayMs: 1000 };
     // With rng() = 1, expo cap at attempt 0 is 100; attempt 5 hits maxDelay.
@@ -480,6 +488,35 @@ describe("UnifiedAI retry integration", () => {
     //   tokens[2] = attempt 2 retry — MUST equal tokens[1]
     expect(tokens[2]).toBe(tokens[1]);
     expect(tokens[1]).not.toBe(tokens[0]);
+  });
+
+  test("abort during retry backoff preserves signal.reason on the surfaced AbortError", async () => {
+    const ctrl = new AbortController();
+    class DomainTimeoutError extends Error {
+      constructor() {
+        super("deadline exceeded");
+        this.name = "DomainTimeoutError";
+      }
+    }
+    const fetchImpl = (async () => {
+      throw new TypeError("network blip");
+    }) as unknown as typeof fetch;
+    const sdk = new UnifiedAI({
+      apiUrl: "https://example.test",
+      token: "t",
+      fetch: fetchImpl,
+      retry: { maxRetries: 3, initialDelayMs: 500, maxDelayMs: 500 },
+    });
+    const reason = new DomainTimeoutError();
+    setTimeout(() => ctrl.abort(reason), 5);
+    let caught: unknown;
+    try {
+      await sdk.request("/x", { method: "POST", idempotent: true, signal: ctrl.signal });
+    } catch (e) {
+      caught = e;
+    }
+    expect((caught as Error)?.name).toBe("AbortError");
+    expect((caught as { cause?: unknown })?.cause).toBe(reason);
   });
 
   test("plain Error from host token provider on refresh does not re-trigger retry", async () => {

@@ -534,7 +534,20 @@ export class UnifiedAI extends Core {
     const runOnce = async (): Promise<Response> => {
       let res = await send(currentToken);
       if (res.status === 401) {
-        await drainResponse(res);
+        // drainResponse swallows body-read errors internally, but a body
+        // stream that throws synchronously on read (rare; some
+        // gateway/proxy combinations) could still propagate. If it does,
+        // we must NOT let it escape as a generic Error — the outer retry
+        // classifier would treat it as a retryable network blip and the
+        // 401 path would silently restart. Wrap defensively so the
+        // auth-failure contract stays terminal.
+        try {
+          await drainResponse(res);
+        } catch {
+          // Body drain failure on a 401 is non-fatal here: we already know
+          // the request failed auth, the socket may or may not be reusable,
+          // and the subsequent refresh+retry will open a fresh connection.
+        }
         let freshToken: string;
         try {
           freshToken = await this.refreshAccessToken();
@@ -636,9 +649,20 @@ export class UnifiedAI extends Core {
         // user code cancelled mid-backoff, that's the load-bearing signal —
         // burying it under a TypeError('fetch failed') from the previous
         // attempt confuses every abort handler downstream.
-        throw typeof DOMException !== "undefined"
-          ? new DOMException("Aborted", "AbortError")
-          : Object.assign(new Error("Aborted"), { name: "AbortError" });
+        // Preserve `signal.reason` (web platform spec: callers can pass a
+        // typed reason via `controller.abort(reason)`) as the `.cause` of
+        // the surfaced AbortError so error-classification chains that
+        // branch on `err.cause` still see the original intent.
+        const reason = options.signal.reason;
+        const abortError =
+          typeof DOMException !== "undefined"
+            ? new DOMException("Aborted", "AbortError")
+            : Object.assign(new Error("Aborted"), { name: "AbortError" });
+        if (reason !== undefined) {
+          // DOMException allows arbitrary property assignment in V8/Bun.
+          (abortError as { cause?: unknown }).cause = reason;
+        }
+        throw abortError;
       }
       attempt += 1;
     }

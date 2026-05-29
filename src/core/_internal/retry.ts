@@ -80,6 +80,11 @@ export function parseRetryAfterHeader(res: Response): number | undefined {
   const v = res.headers.get("retry-after");
   if (!v) return undefined;
   const trimmed = v.trim();
+  // Empty / whitespace-only Retry-After: treat as missing, not as 0ms.
+  // `Number("")` is 0 and isFinite, so without this guard a header of
+  // "   " would degrade to a no-backoff tight retry against a misbehaving
+  // server.
+  if (trimmed === "") return undefined;
   const seconds = Number(trimmed);
   if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
   const t = Date.parse(trimmed);
