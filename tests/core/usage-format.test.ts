@@ -70,6 +70,15 @@ describe("formatTimeUntil", () => {
     expect(formatTimeUntil(null, NOW)).toBeNull();
     expect(formatTimeUntil("not-a-date", NOW)).toBeNull();
   });
+  test("floors each unit (never rounds up across a boundary)", () => {
+    // 59m30s remaining reads "59m", not "1h".
+    expect(formatTimeUntil(iso(59 * 60_000 + 30_000), NOW)).toBe("59m");
+    // 1h59m reads "1h"; 23h59m reads "23h".
+    expect(formatTimeUntil(iso(60 * 60_000 + 59 * 60_000), NOW)).toBe("1h");
+    expect(formatTimeUntil(iso(23 * 3600_000 + 59 * 60_000), NOW)).toBe("23h");
+    // 1d23h reads "1d".
+    expect(formatTimeUntil(iso(47 * 3600_000), NOW)).toBe("1d");
+  });
 });
 
 describe("summarizeUsage", () => {
@@ -125,5 +134,14 @@ describe("summarizeUsage", () => {
     );
     expect(s.daily.ratio).toBeCloseTo(0.8, 5);
     expect(s.daily.isNearLimit).toBe(true); // 0.8 >= 0.75
+  });
+
+  test("surfaces a non-zero balance, including negative (owed/refund)", () => {
+    const zero = summarizeUsage(makeUsage({ credits: { balance: 0 } }), { now: NOW });
+    expect(zero.credits.hasBalance).toBe(false);
+
+    const neg = summarizeUsage(makeUsage({ credits: { balance: -5 } }), { now: NOW });
+    expect(neg.credits.hasBalance).toBe(true);
+    expect(neg.credits.balanceLabel).toBe("$-5.00");
   });
 });
