@@ -45,21 +45,35 @@ export class UnifiedStream<T> implements AsyncIterable<T> {
   }
 
   async *[Symbol.asyncIterator](): AsyncGenerator<T, void, void> {
-    for await (const ev of this.source) {
-      if (this.extractor && !this.usage) {
-        const raw = this.extractor(ev);
-        if (raw) {
-          const elapsed = Date.now() - this.startedAt;
-          this.usage = {
-            input_tokens: raw.input_tokens,
-            output_tokens: raw.output_tokens,
-            total_tokens: raw.total_tokens,
-            elapsed_ms: elapsed,
-            tokens_per_second: elapsed > 0 ? Math.round((raw.output_tokens * 1000) / elapsed) : 0,
-          };
+    // Any early exit from this generator — a consumer's `break`/`return`, a
+    // thrown error (incl. a mid-stream `error` event surfaced as a
+    // UnifiedAIError), or natural completion — invokes this `finally` and
+    // aborts the underlying fetch. Without it, a `for await ... break` reader
+    // that never calls `.abort()` would leave the HTTP request open and the
+    // metered gateway billing tokens for a response nobody is reading. The
+    // `aborted` guard mirrors `abort()` so we don't double-abort.
+    try {
+      for await (const ev of this.source) {
+        if (this.extractor && !this.usage) {
+          const raw = this.extractor(ev);
+          if (raw) {
+            const elapsed = Date.now() - this.startedAt;
+            this.usage = {
+              input_tokens: raw.input_tokens,
+              output_tokens: raw.output_tokens,
+              total_tokens: raw.total_tokens,
+              elapsed_ms: elapsed,
+              tokens_per_second: elapsed > 0 ? Math.round((raw.output_tokens * 1000) / elapsed) : 0,
+            };
+          }
         }
+        yield ev;
       }
-      yield ev;
+    } finally {
+      if (!this.aborted) {
+        this.aborted = true;
+        this.controller.abort();
+      }
     }
   }
 }

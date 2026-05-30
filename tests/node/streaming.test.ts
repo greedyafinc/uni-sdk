@@ -130,6 +130,52 @@ describe("parseSSE", () => {
     for await (const m of parseSSE(stream)) out.push(m.data);
     expect(out).toEqual(["hello", "world"]);
   });
+
+  test("parses CRLF frame separators identically to LF", async () => {
+    // Proxies/servers that normalize to CRLF emit `\r\n\r\n` frame boundaries.
+    // The 4-byte advance in parseSSE must consume the full separator; a
+    // regression to a 2-byte slice would corrupt every subsequent frame.
+    const enc = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(enc.encode('event: a\r\ndata: {"v":1}\r\n\r\n'));
+        controller.enqueue(enc.encode('data: {"v":2}\r\n\r\n'));
+        controller.close();
+      },
+    });
+    const out: Array<{ event?: string; data: string }> = [];
+    for await (const m of parseSSE(stream)) out.push(m);
+    expect(out).toEqual([{ event: "a", data: '{"v":1}' }, { data: '{"v":2}' }]);
+  });
+
+  test("joins multiple data: lines in one frame with \\n", async () => {
+    // Anthropic-style multi-line `data:` payloads must be joined with `\n`;
+    // a regression that dropped lines would silently lose content.
+    const enc = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(enc.encode("data: line one\ndata: line two\n\n"));
+        controller.close();
+      },
+    });
+    const out: string[] = [];
+    for await (const m of parseSSE(stream)) out.push(m.data);
+    expect(out).toEqual(["line one\nline two"]);
+  });
+
+  test("skips leading `:` comment lines", async () => {
+    // SSE comment lines (`: keep-alive`) must be ignored, not emitted as data.
+    const enc = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(enc.encode(": keep-alive\ndata: payload\n\n"));
+        controller.close();
+      },
+    });
+    const out: Array<{ event?: string; data: string }> = [];
+    for await (const m of parseSSE(stream)) out.push(m);
+    expect(out).toEqual([{ data: "payload" }]);
+  });
 });
 
 describe("LLM streaming", () => {
@@ -380,6 +426,91 @@ describe("LLM streaming", () => {
     expect(count).toBeLessThan(50);
     // Give the server's cancel handler a tick to record the abort.
     await new Promise((r) => setTimeout(r, 20));
+    expect(api.aborted()).toBeGreaterThan(before);
+  });
+
+  test("early `break` (without .abort()) closes the underlying fetch", async () => {
+    // A `for await ... break` consumer that never calls stream.abort() must
+    // still cancel the live fetch via the iterator's finally — otherwise the
+    // metered gateway keeps generating and billing tokens nobody reads.
+    api.setFrames(
+      Array.from(
+        { length: 50 },
+        (_, i) =>
+          `data: ${JSON.stringify({
+            id: "x",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: "m",
+            choices: [{ index: 0, delta: { content: `${i}` }, finish_reason: null }],
+          })}\n\n`,
+      ),
+      { delayMs: 20 },
+    );
+    const before = api.aborted();
+    const stream = sdk.chat.completions.create({
+      model: "auto",
+      messages: [{ role: "user", content: "hi" }],
+      stream: true,
+    });
+    let count = 0;
+    for await (const _ of stream) {
+      count++;
+      if (count === 2) break; // NOTE: no stream.abort() call
+    }
+    expect(count).toBe(2);
+    // Give the server's cancel handler a tick to record the abort.
+    await new Promise((r) => setTimeout(r, 40));
+    expect(api.aborted()).toBeGreaterThan(before);
+  });
+
+  test("a mid-stream `error` event throw closes the underlying fetch", async () => {
+    // When a resource generator throws (e.g. the messages `error` event), the
+    // iterator's finally must abort the fetch so the request doesn't dangle.
+    api.setFrames([
+      `event: message_start\ndata: ${JSON.stringify({
+        message: {
+          id: "m1",
+          type: "message",
+          role: "assistant",
+          model: "m",
+          content: [],
+          stop_reason: null,
+          usage: { input_tokens: 1, output_tokens: 0 },
+        },
+      })}\n\n`,
+      `event: error\ndata: ${JSON.stringify({
+        type: "error",
+        error: { type: "overloaded_error", message: "upstream overloaded" },
+      })}\n\n`,
+      // Trailing frames the server would keep streaming after the error if the
+      // fetch were not aborted.
+      ...Array.from(
+        { length: 50 },
+        (_, i) =>
+          `event: content_block_delta\ndata: ${JSON.stringify({
+            index: 0,
+            delta: { type: "text_delta", text: `${i}` },
+          })}\n\n`,
+      ),
+    ]);
+    const before = api.aborted();
+    const stream = sdk.messages.create({
+      model: "auto",
+      max_tokens: 64,
+      messages: [{ role: "user", content: "hi" }],
+      stream: true,
+    });
+    let caught: unknown;
+    try {
+      for await (const _ of stream) {
+        // drain until the error event throws
+      }
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(UnifiedAIError);
+    await new Promise((r) => setTimeout(r, 40));
     expect(api.aborted()).toBeGreaterThan(before);
   });
 
