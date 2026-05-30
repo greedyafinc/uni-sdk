@@ -80,6 +80,10 @@ export function formatUsd(n: number): string {
  * short numeric token (e.g. `"5h"`) — the host's i18n layer wraps it in
  * localized wording like "Resets in {x}". `now` is injectable for deterministic
  * rendering and tests (defaults to `Date.now()`).
+ *
+ * Each unit is floored ("time remaining", not nearest), so the token decreases
+ * monotonically as the deadline nears and never rounds *up* across a boundary
+ * (e.g. 59m30s reads "59m", not "1h").
  */
 export function formatTimeUntil(
   target: string | number | Date | null | undefined,
@@ -90,11 +94,11 @@ export function formatTimeUntil(
   if (!Number.isFinite(t)) return null;
   const ms = t - now;
   if (ms <= 0) return null;
-  const mins = Math.round(ms / 60_000);
+  const mins = Math.floor(ms / 60_000);
   if (mins < 60) return `${mins}m`;
-  const hrs = Math.round(mins / 60);
+  const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h`;
-  return `${Math.round(hrs / 24)}d`;
+  return `${Math.floor(hrs / 24)}d`;
 }
 
 export interface SummarizeUsageOptions {
@@ -199,7 +203,9 @@ export function summarizeUsage(
     credits: {
       balance: credits.balance,
       balanceLabel: formatUsd(credits.balance),
-      hasBalance: credits.balance > 0,
+      // Any non-zero balance is worth surfacing — including a negative one
+      // (e.g. an owed / refund state), which formatUsd renders as "$-X.XX".
+      hasBalance: credits.balance !== 0,
     },
   };
 }
