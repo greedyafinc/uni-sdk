@@ -13,6 +13,13 @@ export interface AudioSpeechParams {
   /** Playback speed multiplier; provider-dependent. Range 0.25–4.0. */
   speed?: number;
   language?: string;
+  /**
+   * Non-OpenAI extension. When set, unified-api persists the generated clip to
+   * the user's audio library, linked to this conversation, so first-party
+   * clients can list and replay it later. Omitted → no persistence side-effect
+   * (pure OpenAI-compatible streaming). The response is binary either way.
+   */
+  conversation_id?: string;
 }
 
 export interface AudioSpeechResponse {

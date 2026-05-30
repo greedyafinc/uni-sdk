@@ -168,6 +168,16 @@ describe("sdk.audio", () => {
     expect(body).not.toHaveProperty("speed");
     expect(body).not.toHaveProperty("language");
     expect(body).not.toHaveProperty("response_format");
+    expect(body).not.toHaveProperty("conversation_id");
+  });
+
+  test("speech forwards conversation_id when provided (persistence opt-in)", async () => {
+    api.setResponse({ status: 200, bytes: new Uint8Array([1]), contentType: "audio/mpeg" });
+
+    await sdk.audio.speech({ model: "m", input: "hi", conversation_id: "conv-9" });
+
+    const body = api.lastRequest().json as Record<string, unknown>;
+    expect(body.conversation_id).toBe("conv-9");
   });
 
   test("speech maps a 400 from the backend to BadRequestError", async () => {
