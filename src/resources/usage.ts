@@ -57,12 +57,15 @@ export class Usage {
 // re-deriving the same math. These power the optional UI packages
 // (see UI-COMPONENTS-PLAN.md) and can be used directly by any custom UI.
 
-/** Compact count label: 950 → "950", 1_234 → "1.2k", 3_400_000 → "3.4M". */
+/**
+ * Compact count label: 950 → "950", 1_234 → "1.2k", 3_400_000 → "3.4M".
+ * Counts are non-negative; non-finite or negative input clamps to "0" rather
+ * than emitting a nonsensical "-1.5k".
+ */
 export function formatTokenCount(n: number): string {
-  if (!Number.isFinite(n)) return "0";
-  const abs = Math.abs(n);
-  if (abs >= 1_000_000) return `${(n / 1_000_000).toFixed(abs >= 10_000_000 ? 0 : 1)}M`;
-  if (abs >= 1_000) return `${(n / 1_000).toFixed(abs >= 10_000 ? 0 : 1)}k`;
+  if (!Number.isFinite(n) || n < 0) return "0";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k`;
   return String(Math.round(n));
 }
 

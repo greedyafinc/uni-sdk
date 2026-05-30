@@ -43,8 +43,11 @@ describe("formatTokenCount", () => {
     expect(formatTokenCount(3_400_000)).toBe("3.4M");
     expect(formatTokenCount(0)).toBe("0");
   });
-  test("guards non-finite input", () => {
+  test("clamps non-finite and negative input to 0", () => {
     expect(formatTokenCount(Number.NaN)).toBe("0");
+    expect(formatTokenCount(Number.POSITIVE_INFINITY)).toBe("0");
+    expect(formatTokenCount(-1500)).toBe("0");
+    expect(formatTokenCount(-1)).toBe("0");
   });
 });
 
