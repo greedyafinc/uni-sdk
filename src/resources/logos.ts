@@ -43,3 +43,21 @@ export function listProviderLogos(): string[] {
     (slug) => !slug.endsWith("-dark") && slug !== FALLBACK_SLUG,
   );
 }
+
+/** Minimal shape needed to resolve a catalog model's brand logo. */
+export interface ModelLogoInput {
+  model_author?: { name?: string | null } | null;
+  owned_by?: string | null;
+}
+
+/**
+ * Resolve a catalog model's brand logo, preferring the friendly
+ * `model_author.name` (present when models are listed with
+ * `include: ["author"]`) and falling back to the `owned_by` slug. A
+ * convenience over {@link getProviderLogo} that encodes the correct field to
+ * key on — logos are indexed by author/provider name, not by model id.
+ */
+export function getModelLogo(model: ModelLogoInput, theme: LogoTheme = "light"): string {
+  const author = model.model_author?.name ?? model.owned_by ?? null;
+  return getProviderLogo(author, theme);
+}
