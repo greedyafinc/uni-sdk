@@ -16,6 +16,7 @@ import {
   httpErrorMessage,
   readErrorBody,
 } from "./_internal/http-errors";
+import { safeEmit } from "./_internal/progress";
 import {
   type RetryAttempt,
   type RetryConfig,
@@ -90,27 +91,6 @@ function estimateFormDataBytes(form: FormData): number {
   // headers with room to spare. The trailing boundary adds another ~50.
   total += partCount * 200 + 50;
   return total;
-}
-
-/**
- * Emit a progress event without letting a throwing listener tear down the
- * upload. Host UI bugs must not abort an otherwise-healthy request.
- */
-function safeEmit(
-  listener: UploadProgressListener | undefined,
-  loaded: number,
-  total: number,
-): void {
-  if (!listener) return;
-  try {
-    listener({
-      loaded,
-      total,
-      percent: total > 0 ? Math.floor((loaded / total) * 100) : 0,
-    });
-  } catch {
-    // Host listener errors must not abort the upload.
-  }
 }
 
 function progressStream(

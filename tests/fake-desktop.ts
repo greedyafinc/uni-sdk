@@ -4,6 +4,8 @@
 export interface FakeDesktop {
   readonly port: number;
   readonly requestCount: () => number;
+  /** Value of the x-handoff-token header on the most recent request, or null if it was absent. */
+  readonly lastHandoffToken: () => string | null;
   readonly stop: () => Promise<void>;
 }
 
@@ -14,6 +16,7 @@ export interface FakeDesktopConfig {
 
 export async function startFakeDesktop(config: FakeDesktopConfig): Promise<FakeDesktop> {
   let count = 0;
+  let lastHandoffToken: string | null = null;
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -23,6 +26,7 @@ export async function startFakeDesktop(config: FakeDesktopConfig): Promise<FakeD
         return new Response("not found", { status: 404 });
       }
       count++;
+      lastHandoffToken = req.headers.get("x-handoff-token");
       const body = (await req.json()) as { client_id?: string };
       if (body.client_id !== config.knownClientId) {
         return new Response("unknown client", { status: 404 });
@@ -39,6 +43,7 @@ export async function startFakeDesktop(config: FakeDesktopConfig): Promise<FakeD
   return {
     port: server.port ?? 0,
     requestCount: () => count,
+    lastHandoffToken: () => lastHandoffToken,
     stop: async () => {
       await server.stop(true);
     },

@@ -14,6 +14,27 @@ const envWith = (port: number | undefined): EnvReader => ({
   read: () => ({ handoffPort: port, clientId: undefined }),
 });
 
+const HANDOFF_TOKEN_ENV = "UNIFIEDAI_HANDOFF_TOKEN";
+
+// Set the env var to a value, or unset it when value is undefined, returning a
+// restore fn. Uses Reflect.deleteProperty so a missing var is truly absent
+// (not the string "undefined") without tripping biome's noDelete rule.
+function withHandoffTokenEnv(value: string | undefined): () => void {
+  const prev = process.env[HANDOFF_TOKEN_ENV];
+  if (value === undefined) {
+    Reflect.deleteProperty(process.env, HANDOFF_TOKEN_ENV);
+  } else {
+    process.env[HANDOFF_TOKEN_ENV] = value;
+  }
+  return () => {
+    if (prev === undefined) {
+      Reflect.deleteProperty(process.env, HANDOFF_TOKEN_ENV);
+    } else {
+      process.env[HANDOFF_TOKEN_ENV] = prev;
+    }
+  };
+}
+
 describe("bootstrap", () => {
   test("loads from keychain when present and skips handoff", async () => {
     const desktop = await startFakeDesktop({ knownClientId: CLIENT, userId: USER });
@@ -55,6 +76,44 @@ describe("bootstrap", () => {
       expect(desktop.requestCount()).toBe(1);
       expect(await keychain.get(CLIENT)).not.toBeNull();
     } finally {
+      await desktop.stop();
+    }
+  });
+
+  test("sends x-handoff-token header when UNIFIEDAI_HANDOFF_TOKEN is set", async () => {
+    const desktop = await startFakeDesktop({ knownClientId: CLIENT, userId: USER });
+    const restoreEnv = withHandoffTokenEnv("secret-launch-token");
+    try {
+      const sdk = new UnifiedAI({
+        appId: CLIENT,
+        keychain: new InMemoryKeychain(),
+        env: envWith(desktop.port),
+        discovery: emptyDiscovery,
+      });
+      await sdk.bootstrap();
+      expect(desktop.requestCount()).toBe(1);
+      expect(desktop.lastHandoffToken()).toBe("secret-launch-token");
+    } finally {
+      restoreEnv();
+      await desktop.stop();
+    }
+  });
+
+  test("omits x-handoff-token header when UNIFIEDAI_HANDOFF_TOKEN is absent", async () => {
+    const desktop = await startFakeDesktop({ knownClientId: CLIENT, userId: USER });
+    const restoreEnv = withHandoffTokenEnv(undefined);
+    try {
+      const sdk = new UnifiedAI({
+        appId: CLIENT,
+        keychain: new InMemoryKeychain(),
+        env: envWith(desktop.port),
+        discovery: emptyDiscovery,
+      });
+      await sdk.bootstrap();
+      expect(desktop.requestCount()).toBe(1);
+      expect(desktop.lastHandoffToken()).toBeNull();
+    } finally {
+      restoreEnv();
       await desktop.stop();
     }
   });

@@ -1,3 +1,4 @@
+import { safeEmit } from "../../core/_internal/progress";
 import type { Core } from "../../core/core";
 import { UnifiedAIError, UnifiedError } from "../../core/errors";
 import type { FileObject, UploadProgressListener } from "../files";
@@ -90,28 +91,6 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 function backoffMs(attempt: number): number {
   return Math.min(RETRY_BASE_MS * 2 ** attempt, RETRY_CAP_MS);
-}
-
-/**
- * Emit a progress event without letting a throwing listener tear down the
- * upload. Mirrors the same swallow-on-throw policy used in client.ts —
- * host UI bugs must not abort an otherwise-healthy upload.
- */
-function safeEmit(
-  listener: UploadProgressListener | undefined,
-  loaded: number,
-  total: number,
-): void {
-  if (!listener) return;
-  try {
-    listener({
-      loaded,
-      total,
-      percent: total > 0 ? Math.floor((loaded / total) * 100) : 0,
-    });
-  } catch {
-    // Host listener errors must not abort the upload.
-  }
 }
 
 /**
