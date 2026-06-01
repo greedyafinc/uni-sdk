@@ -175,3 +175,9 @@ SDKs surface these as typed errors. Names normative; messages free-form.
   body.
 - `keychain_unavailable` — OS keychain inaccessible (no native module, locked,
   etc.). SDKs MAY treat persist failures as non-fatal for the current session.
+- `model_deprecated` — a call-time request named a model that has been retired.
+  unified-api returns HTTP `410` with body `{code: "model_deprecated", message}`
+  from any model endpoint (chat, messages, embeddings, images, responses, …);
+  the model is also absent from `models.list()`. SDKs MUST key off the body
+  `code`, not the `410` status alone — `410` is also returned for expired upload
+  sessions. Retrying does not help; switch to a current model.

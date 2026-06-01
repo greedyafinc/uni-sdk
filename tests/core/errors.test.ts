@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   AuthenticationError,
   BadRequestError,
+  DeprecatedModelError,
   NotFoundError,
   RateLimitError,
   ServerError,
@@ -41,6 +42,35 @@ describe("buildHttpError", () => {
     const e = buildHttpError("msg", 404, { message: "nope" });
     expect(e).toBeInstanceOf(NotFoundError);
     expect(e.code).toBe("not_found");
+  });
+
+  test("410 + body code model_deprecated → DeprecatedModelError", () => {
+    const e = buildHttpError("msg", 410, {
+      status: "UNKNOWN",
+      message: 'Model "gpt-3" is deprecated and is no longer available.',
+      code: "model_deprecated",
+    });
+    expect(e).toBeInstanceOf(DeprecatedModelError);
+    expect(e).toBeInstanceOf(UnifiedAIError);
+    expect(e.code).toBe("model_deprecated");
+    expect(e.status).toBe(410);
+    expect((e as DeprecatedModelError).isDeprecated).toBe(true);
+  });
+
+  test("410 without the model_deprecated code stays generic (expired upload session)", () => {
+    const e = buildHttpError("msg", 410, {
+      status: "UNKNOWN",
+      message: "Upload session abc has expired",
+    });
+    expect(e).not.toBeInstanceOf(DeprecatedModelError);
+    expect(e).toBeInstanceOf(UnifiedAIError);
+    expect(e.status).toBe(410);
+  });
+
+  test("model_deprecated body code is honored regardless of status", () => {
+    const e = buildHttpError("msg", 400, { code: "model_deprecated", message: "gone" });
+    expect(e).toBeInstanceOf(DeprecatedModelError);
+    expect(e.code).toBe("model_deprecated");
   });
 
   test("429 generic throttle → RateLimitError with retryAfter", () => {

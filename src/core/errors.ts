@@ -30,6 +30,7 @@ export type UnifiedAIHttpErrorCode =
   | "unauthorized"
   | "forbidden"
   | "not_found"
+  | "model_deprecated"
   | "rate_limited"
   | "usage_limit_exceeded"
   | "server_error"
@@ -116,6 +117,31 @@ export class NotFoundError extends UnifiedAIError {
   ) {
     super("not_found", message, status, body, headers);
     this.name = "NotFoundError";
+  }
+}
+
+/**
+ * The requested model still exists in the catalog but has been retired and
+ * is no longer callable. unified-api returns HTTP 410 with a body
+ * `{code: "model_deprecated"}` from any call-time endpoint (chat, messages,
+ * embeddings, images, responses, …) when a deprecated model id is requested;
+ * the deprecated model is also absent from `models.list()`.
+ *
+ * Detected via the body `code` rather than the 410 status alone, because 410
+ * is also used for expired upload sessions. Retrying will not help — switch
+ * to a current model (see `models.list()`).
+ */
+export class DeprecatedModelError extends UnifiedAIError {
+  readonly isDeprecated = true as const;
+
+  constructor(
+    message: string,
+    status: number,
+    body: unknown,
+    headers?: Readonly<Record<string, string>>,
+  ) {
+    super("model_deprecated", message, status, body, headers);
+    this.name = "DeprecatedModelError";
   }
 }
 
@@ -260,6 +286,17 @@ function isUsageLimitBody(body: unknown): boolean {
   return false;
 }
 
+/**
+ * A retired model. unified-api emits `{code: "model_deprecated"}` (HTTP 410)
+ * for call-time requests against a deprecated model id. Keyed on the explicit
+ * `code` rather than the status, because 410 is also used for expired upload
+ * sessions — those must stay generic, not surface as a DeprecatedModelError.
+ */
+function isDeprecatedModelBody(body: unknown): boolean {
+  if (!body || typeof body !== "object") return false;
+  return (body as Record<string, unknown>).code === "model_deprecated";
+}
+
 export function httpErrorCodeFromStatus(status: number): UnifiedAIHttpErrorCode {
   if (status === 400) return "bad_request";
   if (status === 401) return "unauthorized";
@@ -280,6 +317,12 @@ export function buildHttpError(
   body: unknown,
   headers?: Readonly<Record<string, string>>,
 ): UnifiedAIError {
+  // Checked before the status branches: a deprecated-model error is identified
+  // by its body code (it arrives as 410, which otherwise has no dedicated class
+  // and is shared with expired upload sessions).
+  if (isDeprecatedModelBody(body)) {
+    return new DeprecatedModelError(message, status, body, headers);
+  }
   if (status === 400) return new BadRequestError(message, status, body, headers);
   if (status === 401) return new AuthenticationError(message, status, body, headers);
   if (status === 404) return new NotFoundError(message, status, body, headers);

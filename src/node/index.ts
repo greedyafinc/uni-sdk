@@ -26,6 +26,7 @@ export {
   AuthenticationError,
   BadRequestError,
   NotFoundError,
+  DeprecatedModelError,
   RateLimitError,
   UsageLimitError,
   ServerError,
