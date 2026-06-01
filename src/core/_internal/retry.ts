@@ -179,6 +179,7 @@ const SDK_ERROR_NAMES = new Set([
   "AuthenticationError",
   "BadRequestError",
   "NotFoundError",
+  "DeprecatedModelError",
   "RateLimitError",
   "UsageLimitError",
   "ServerError",
