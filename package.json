@@ -42,11 +42,12 @@
   "scripts": {
     "clean": "rm -rf dist docs",
     "logos": "bun run scripts/generate-logos.ts",
-    "build": "bun run clean && bun run logos && bun run build:browser && bun run build:node && bun run build:types && bun run build:verify",
+    "build": "bun run clean && bun run logos && bun run build:browser && bun run build:node && bun run build:types && bun run build:fixup-dts && bun run build:verify",
     "prepare": "bun run build",
     "build:browser": "bun build ./src/index.ts --outdir dist --target browser --format esm --sourcemap --entry-naming index.browser.js",
     "build:node": "bun build ./src/node/index.ts --outdir dist/node --target node --format esm --sourcemap --external @napi-rs/keyring --entry-naming index.js",
     "build:types": "tsc -p tsconfig.build.json",
+    "build:fixup-dts": "bun run scripts/fixup-dts-extensions.ts",
     "build:verify": "bun run scripts/verify-browser-bundle.ts",
     "typecheck": "bun run logos && tsc --noEmit",
     "test": "bun run logos && bun test tests/core tests/node tests/bundle",
