@@ -16,7 +16,7 @@
 // bundler and NodeNext, so every consumer is covered. The runtime JS bundles are
 // single flat files with no relative imports, so only `.d.ts` need this.
 
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const DIST = join(import.meta.dir, "..", "dist");
@@ -56,4 +56,6 @@ for (const file of walk(DIST)) {
     patched += 1;
   }
 }
-console.log(`[fixup-dts] added .js extensions to relative specifiers in ${patched} declaration file(s)`);
+console.log(
+  `[fixup-dts] added .js extensions to relative specifiers in ${patched} declaration file(s)`,
+);
