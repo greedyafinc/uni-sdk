@@ -26,6 +26,12 @@ export interface UsageDaily {
 }
 
 export interface UsageCredits {
+  /**
+   * Persistent prepaid top-up reserve, in USD. Spent automatically once the
+   * plan's daily limit is exhausted (a fallback, not part of the limit window).
+   * Accrues each subscription period and via rollover of unused daily credits,
+   * so unlike the limit window it does not reset. `0` when the user has none.
+   */
   balance: number;
 }
 
