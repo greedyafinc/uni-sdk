@@ -63,6 +63,13 @@ export interface MessageCreateParams {
   tools?: AnthropicToolDefinition[];
   tool_choice?: AnthropicToolChoice;
   thinking?: { type: "enabled"; budget_tokens: number };
+  /**
+   * Ask the gateway to deterministically compress older conversation context
+   * (tool results, long prior assistant turns) server-side before routing.
+   * Falls back to the client-level `compression` default when unset; an
+   * explicit `false` here overrides a client default of `true`.
+   */
+  compression?: boolean;
 }
 
 export interface AnthropicMessageResponse {
@@ -241,7 +248,10 @@ export class Messages {
     if (params.stream) {
       return this.createStream(params as MessageCreateParams & { stream: true }, options);
     }
-    const req: RequestOptions = { method: "POST", body: params };
+    const req: RequestOptions = {
+      method: "POST",
+      body: { ...params, compression: params.compression ?? this.client.defaultCompression },
+    };
     if (options.signal) req.signal = options.signal;
     return this.client.request<AnthropicMessageResponse>("/v1/messages", req);
   }
@@ -259,7 +269,7 @@ export class Messages {
     const iter = (async function* (): AsyncGenerator<MessageStreamEvent, void, void> {
       const body = await client.stream("/v1/messages", {
         method: "POST",
-        body: params,
+        body: { ...params, compression: params.compression ?? client.defaultCompression },
         signal: controller.signal,
       });
       for await (const msg of parseSSE(body)) {

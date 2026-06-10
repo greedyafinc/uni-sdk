@@ -60,6 +60,14 @@ export interface CoreOptions {
    * deterministic-ish endpoints; other resources ignore the option.
    */
   cache?: false | Partial<CacheConfig>;
+  /**
+   * Client-level default for the `compression` request param on
+   * chat/messages/responses (gateway-side deterministic compression of
+   * conversation context). Per-request `compression` values override this
+   * default — an explicit per-request `false` beats a client default of
+   * `true`. When neither is set, the param is omitted from the wire body.
+   */
+  compression?: boolean;
 }
 
 export interface RequestOptions {
@@ -121,12 +129,13 @@ export interface RequestOptions {
 
 export class Core {
   protected readonly options: Readonly<
-    Required<Omit<CoreOptions, "token" | "retry" | "cache" | "onRetry">>
+    Required<Omit<CoreOptions, "token" | "retry" | "cache" | "onRetry" | "compression">>
   > & {
     token: TokenProvider | undefined;
     retry: CoreOptions["retry"];
     cache: CoreOptions["cache"];
     onRetry: RetryListener | undefined;
+    compression: boolean | undefined;
   };
 
   constructor(options: CoreOptions = {}) {
@@ -139,7 +148,17 @@ export class Core {
       retry: options.retry,
       cache: options.cache,
       onRetry: options.onRetry,
+      compression: options.compression,
     });
+  }
+
+  /**
+   * Client-level `compression` default, readable by resources when merging
+   * request bodies (`options` itself is `protected`). `undefined` when the
+   * client was constructed without one.
+   */
+  get defaultCompression(): boolean | undefined {
+    return this.options.compression;
   }
 
   async request<T>(_path: string, _options: RequestOptions = {}): Promise<T> {

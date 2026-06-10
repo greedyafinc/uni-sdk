@@ -118,6 +118,13 @@ export interface ChatCompletionCreateParams {
   response_format?: ChatCompletionResponseFormat;
   stream_options?: { include_usage?: boolean };
   thinking?: { type: "enabled"; budget_tokens?: number };
+  /**
+   * Ask the gateway to deterministically compress older conversation context
+   * (tool outputs, long prior assistant turns) server-side before routing.
+   * Falls back to the client-level `compression` default when unset; an
+   * explicit `false` here overrides a client default of `true`.
+   */
+  compression?: boolean;
   user?: string;
 }
 
@@ -204,7 +211,10 @@ export class ChatCompletions {
     if (params.stream) {
       return this.createStream(params as ChatCompletionCreateParams & { stream: true }, options);
     }
-    const req: RequestOptions = { method: "POST", body: params };
+    const req: RequestOptions = {
+      method: "POST",
+      body: { ...params, compression: params.compression ?? this.client.defaultCompression },
+    };
     if (options.signal) req.signal = options.signal;
     return this.client.request<ChatCompletionResponse>("/api/v1/chat/completions", req);
   }
@@ -222,7 +232,7 @@ export class ChatCompletions {
     const iter = (async function* (): AsyncGenerator<ChatCompletionChunk, void, void> {
       const body = await client.stream("/api/v1/chat/completions", {
         method: "POST",
-        body: params,
+        body: { ...params, compression: params.compression ?? client.defaultCompression },
         signal: controller.signal,
       });
       for await (const msg of parseSSE(body)) {

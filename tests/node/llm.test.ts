@@ -61,7 +61,11 @@ async function startFakeLlmApi(): Promise<FakeLlmApi> {
   };
 }
 
-function makeSdk(api: FakeLlmApi, keychain: InMemoryKeychain): UnifiedAI {
+function makeSdk(
+  api: FakeLlmApi,
+  keychain: InMemoryKeychain,
+  extra: { compression?: boolean } = {},
+): UnifiedAI {
   return new UnifiedAI({
     appId: CLIENT,
     apiUrl: api.baseUrl,
@@ -69,6 +73,7 @@ function makeSdk(api: FakeLlmApi, keychain: InMemoryKeychain): UnifiedAI {
     env: { read: () => ({ handoffPort: undefined, clientId: undefined }) },
     discovery: { read: async () => null },
     openUrl: async () => {},
+    ...extra,
   });
 }
 
@@ -177,6 +182,59 @@ describe("LLM sub-clients", () => {
     expect(r.path).toBe("/v1/messages");
     expect(r.method).toBe("POST");
     expect((r.body as { max_tokens: number }).max_tokens).toBe(64);
+  });
+
+  test("client-level compression default reaches the wire for chat", async () => {
+    api.setResponse({
+      status: 200,
+      body: {
+        id: "cmpl-2",
+        object: "chat.completion",
+        created: 1700000000,
+        model: "openai/gpt-4o-mini",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "hi" },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+      },
+    });
+    const sdkWithDefault = makeSdk(api, keychain, { compression: true });
+    await sdkWithDefault.bootstrap();
+    await sdkWithDefault.chat.completions.create({
+      model: "auto",
+      messages: [{ role: "user", content: "hello" }],
+    });
+    const r = api.lastRequest();
+    expect(r.path).toBe("/api/v1/chat/completions");
+    expect((r.body as { compression?: boolean }).compression).toBe(true);
+  });
+
+  test("sdk.messages.create carries compression on the wire", async () => {
+    api.setResponse({
+      status: 200,
+      body: {
+        id: "msg_2",
+        type: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "hello" }],
+        model: "anthropic/claude-haiku",
+        stop_reason: "end_turn",
+        usage: { input_tokens: 4, output_tokens: 2 },
+      },
+    });
+    await sdk.messages.create({
+      model: "auto",
+      max_tokens: 64,
+      messages: [{ role: "user", content: "hi" }],
+      compression: true,
+    });
+    const r = api.lastRequest();
+    expect(r.path).toBe("/v1/messages");
+    expect((r.body as { compression?: boolean }).compression).toBe(true);
   });
 
   test("non-2xx surfaces UnifiedAIError with status and body", async () => {

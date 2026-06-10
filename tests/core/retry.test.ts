@@ -273,6 +273,11 @@ describe("UnifiedAI retry integration", () => {
     const ctrl = new AbortController();
     const fetchImpl = (async () => {
       calls += 1;
+      // Abort while attempt 1 is in flight: the backoff check must surface
+      // the cancellation, not the TypeError below. Aborting here (instead of
+      // a timer) is deterministic — full-jitter backoff can draw waits short
+      // enough to slip extra attempts in before any scheduled abort fires.
+      ctrl.abort();
       throw new TypeError("network blip");
     }) as unknown as typeof fetch;
     const sdk = new UnifiedAI({
@@ -281,7 +286,6 @@ describe("UnifiedAI retry integration", () => {
       fetch: fetchImpl,
       retry: { maxRetries: 3, initialDelayMs: 50, maxDelayMs: 50 },
     });
-    setTimeout(() => ctrl.abort(), 10);
     let caught: unknown;
     try {
       await sdk.request("/x", { method: "POST", idempotent: true, signal: ctrl.signal });
@@ -289,11 +293,7 @@ describe("UnifiedAI retry integration", () => {
       caught = e;
     }
     expect((caught as Error)?.name).toBe("AbortError");
-    // Jitter on backoff means the wait can occasionally be smaller than the
-    // abort scheduling window — accept attempt 1 (abort during delay, the
-    // common case) or attempt 2 (wait happened to fall under 10ms). The
-    // load-bearing assertion is that the surfaced error is AbortError.
-    expect(calls).toBeLessThanOrEqual(2);
+    expect(calls).toBe(1);
   });
 
   test("maxElapsedMs caps the retry budget across attempts", async () => {
@@ -302,28 +302,30 @@ describe("UnifiedAI retry integration", () => {
       calls += 1;
       return new Response(JSON.stringify({ error: "boom" }), {
         status: 500,
-        headers: { "content-type": "application/json" },
+        // Retry-After pins every wait to exactly maxDelayMs (min(1000, 50)),
+        // sidestepping jitter: unlucky near-zero draws otherwise let 10+
+        // attempts through the 120ms budget on a fast machine, while a slow
+        // runner can blow a wall-clock bound. With 50ms waits the loop can
+        // only attempt at t≈0/50/100 before `elapsed + wait` exceeds the cap.
+        headers: { "content-type": "application/json", "retry-after": "1" },
       });
     }) as unknown as typeof fetch;
-    const start = Date.now();
     const sdk = new UnifiedAI({
       apiUrl: "https://example.test",
       token: "t",
       fetch: fetchImpl,
       retry: {
         maxRetries: 20,
-        // Each backoff jitters in [0, 50] then [0, 100] etc., capped at 50.
         initialDelayMs: 50,
         maxDelayMs: 50,
         maxElapsedMs: 120,
       },
     });
     await expect(sdk.request("/x")).rejects.toBeInstanceOf(UnifiedAIError);
-    const elapsed = Date.now() - start;
-    // The loop must have exited via the elapsed cap before exhausting all 20
-    // retries (which would otherwise take ~1s+). Realistic window: < ~400ms.
-    expect(elapsed).toBeLessThan(400);
-    expect(calls).toBeLessThan(10);
+    // Exited via the elapsed cap, far short of the 20 configured retries.
+    // Slow runners only shrink the count (elapsed grows faster), never grow it.
+    expect(calls).toBeGreaterThanOrEqual(1);
+    expect(calls).toBeLessThanOrEqual(3);
   });
 
   test("client-level AND per-call onRetry listeners both fire", async () => {
@@ -498,7 +500,11 @@ describe("UnifiedAI retry integration", () => {
         this.name = "DomainTimeoutError";
       }
     }
+    const reason = new DomainTimeoutError();
     const fetchImpl = (async () => {
+      // Abort in-flight with a typed reason (deterministic; see the
+      // AbortError test above for why a timer-scheduled abort is racy).
+      ctrl.abort(reason);
       throw new TypeError("network blip");
     }) as unknown as typeof fetch;
     const sdk = new UnifiedAI({
@@ -507,8 +513,6 @@ describe("UnifiedAI retry integration", () => {
       fetch: fetchImpl,
       retry: { maxRetries: 3, initialDelayMs: 500, maxDelayMs: 500 },
     });
-    const reason = new DomainTimeoutError();
-    setTimeout(() => ctrl.abort(reason), 5);
     let caught: unknown;
     try {
       await sdk.request("/x", { method: "POST", idempotent: true, signal: ctrl.signal });

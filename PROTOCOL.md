@@ -159,6 +159,39 @@ Stored value is the `TokenSet` JSON, UTF-8.
 | `UNIFIEDAI_AUTHORIZE_URL` | Override the OAuth authorize endpoint URL (testing / staging). |
 | `UNIFIEDAI_API_URL` | Override the base URL for `/api/v1/*` and `/v1/messages` requests. Defaults to `https://api.unifiedai.app`. |
 
+## Context compression
+
+`POST /api/v1/chat/completions`, `POST /v1/messages`, and
+`POST /api/v1/responses` accept an OPTIONAL boolean `compression` field in the
+request body. Absent or `false` means off — off is the default.
+
+```
+POST /api/v1/chat/completions
+Content-Type: application/json
+Body: {
+  "model": "<string>",
+  "messages": [...],
+  "compression": true
+}
+```
+
+When `true`, the gateway deterministically compresses conversation context
+server-side before the call reaches the provider: tool outputs and long
+assistant text in older turns may be rewritten in place. User messages and the
+system prompt are never modified, the last 4 messages are protected, and
+messages are never added or removed. Compressed content carries
+`"[compressed: <description>]"` markers, which MAY appear in context the model
+sees and echoes.
+
+SDKs SHOULD expose both a client-level default and a per-request value; the
+per-request value MUST take precedence (an explicit per-request `false`
+overrides a client default of `true`). When neither is set, SDKs MUST omit the
+`compression` key from the wire body entirely.
+
+Savings are observable through usage telemetry (character counts before/after
+compression per call). There are no new error codes: requesting compression
+never fails a call — surfaces without support simply ignore the parameter.
+
 ## Error codes
 
 SDKs surface these as typed errors. Names normative; messages free-form.
