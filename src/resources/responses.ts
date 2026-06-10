@@ -124,6 +124,13 @@ export interface ResponseCreateParams {
   parallel_tool_calls?: boolean;
   previous_response_id?: string;
   text?: unknown;
+  /**
+   * Ask the gateway to deterministically compress older conversation context
+   * (tool outputs, long prior assistant turns) server-side before routing.
+   * Falls back to the client-level `compression` default when unset; an
+   * explicit `false` here overrides a client default of `true`.
+   */
+  compression?: boolean;
   user?: string;
 }
 
@@ -202,7 +209,10 @@ export class Responses {
     if (params.stream) {
       return this.createStream(params as ResponseCreateParams & { stream: true }, options);
     }
-    const req: RequestOptions = { method: "POST", body: params };
+    const req: RequestOptions = {
+      method: "POST",
+      body: { ...params, compression: params.compression ?? this.client.defaultCompression },
+    };
     if (options.signal) req.signal = options.signal;
     return this.client.request<ResponseObject>("/api/v1/responses", req);
   }
@@ -220,7 +230,7 @@ export class Responses {
     const iter = (async function* (): AsyncGenerator<ResponseStreamEvent, void, void> {
       const body = await client.stream("/api/v1/responses", {
         method: "POST",
-        body: params,
+        body: { ...params, compression: params.compression ?? client.defaultCompression },
         signal: controller.signal,
       });
       for await (const msg of parseSSE(body)) {
