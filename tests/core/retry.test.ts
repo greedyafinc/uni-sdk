@@ -273,6 +273,11 @@ describe("UnifiedAI retry integration", () => {
     const ctrl = new AbortController();
     const fetchImpl = (async () => {
       calls += 1;
+      // Abort while attempt 1 is in flight: the backoff check must surface
+      // the cancellation, not the TypeError below. Aborting here (instead of
+      // a timer) is deterministic — full-jitter backoff can draw waits short
+      // enough to slip extra attempts in before any scheduled abort fires.
+      ctrl.abort();
       throw new TypeError("network blip");
     }) as unknown as typeof fetch;
     const sdk = new UnifiedAI({
@@ -281,7 +286,6 @@ describe("UnifiedAI retry integration", () => {
       fetch: fetchImpl,
       retry: { maxRetries: 3, initialDelayMs: 50, maxDelayMs: 50 },
     });
-    setTimeout(() => ctrl.abort(), 10);
     let caught: unknown;
     try {
       await sdk.request("/x", { method: "POST", idempotent: true, signal: ctrl.signal });
@@ -289,11 +293,7 @@ describe("UnifiedAI retry integration", () => {
       caught = e;
     }
     expect((caught as Error)?.name).toBe("AbortError");
-    // Jitter on backoff means the wait can occasionally be smaller than the
-    // abort scheduling window — accept attempt 1 (abort during delay, the
-    // common case) or attempt 2 (wait happened to fall under 10ms). The
-    // load-bearing assertion is that the surfaced error is AbortError.
-    expect(calls).toBeLessThanOrEqual(2);
+    expect(calls).toBe(1);
   });
 
   test("maxElapsedMs caps the retry budget across attempts", async () => {
@@ -498,7 +498,11 @@ describe("UnifiedAI retry integration", () => {
         this.name = "DomainTimeoutError";
       }
     }
+    const reason = new DomainTimeoutError();
     const fetchImpl = (async () => {
+      // Abort in-flight with a typed reason (deterministic; see the
+      // AbortError test above for why a timer-scheduled abort is racy).
+      ctrl.abort(reason);
       throw new TypeError("network blip");
     }) as unknown as typeof fetch;
     const sdk = new UnifiedAI({
@@ -507,8 +511,6 @@ describe("UnifiedAI retry integration", () => {
       fetch: fetchImpl,
       retry: { maxRetries: 3, initialDelayMs: 500, maxDelayMs: 500 },
     });
-    const reason = new DomainTimeoutError();
-    setTimeout(() => ctrl.abort(reason), 5);
     let caught: unknown;
     try {
       await sdk.request("/x", { method: "POST", idempotent: true, signal: ctrl.signal });
