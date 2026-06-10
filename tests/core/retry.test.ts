@@ -302,28 +302,30 @@ describe("UnifiedAI retry integration", () => {
       calls += 1;
       return new Response(JSON.stringify({ error: "boom" }), {
         status: 500,
-        headers: { "content-type": "application/json" },
+        // Retry-After pins every wait to exactly maxDelayMs (min(1000, 50)),
+        // sidestepping jitter: unlucky near-zero draws otherwise let 10+
+        // attempts through the 120ms budget on a fast machine, while a slow
+        // runner can blow a wall-clock bound. With 50ms waits the loop can
+        // only attempt at t≈0/50/100 before `elapsed + wait` exceeds the cap.
+        headers: { "content-type": "application/json", "retry-after": "1" },
       });
     }) as unknown as typeof fetch;
-    const start = Date.now();
     const sdk = new UnifiedAI({
       apiUrl: "https://example.test",
       token: "t",
       fetch: fetchImpl,
       retry: {
         maxRetries: 20,
-        // Each backoff jitters in [0, 50] then [0, 100] etc., capped at 50.
         initialDelayMs: 50,
         maxDelayMs: 50,
         maxElapsedMs: 120,
       },
     });
     await expect(sdk.request("/x")).rejects.toBeInstanceOf(UnifiedAIError);
-    const elapsed = Date.now() - start;
-    // The loop must have exited via the elapsed cap before exhausting all 20
-    // retries (which would otherwise take ~1s+). Realistic window: < ~400ms.
-    expect(elapsed).toBeLessThan(400);
-    expect(calls).toBeLessThan(10);
+    // Exited via the elapsed cap, far short of the 20 configured retries.
+    // Slow runners only shrink the count (elapsed grows faster), never grow it.
+    expect(calls).toBeGreaterThanOrEqual(1);
+    expect(calls).toBeLessThanOrEqual(3);
   });
 
   test("client-level AND per-call onRetry listeners both fire", async () => {
