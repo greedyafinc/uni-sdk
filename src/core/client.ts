@@ -35,6 +35,7 @@ import {
   UnifiedError,
   buildHttpError,
   headersToRecord,
+  isUsageLimitBody,
 } from "./errors";
 import type { Identity } from "./identity";
 import { Session } from "./session";
@@ -581,10 +582,18 @@ export class UnifiedAI extends Core {
       //     processed the POST). Gate on idempotent for those.
       //   - Network errors: gate on idempotent. We don't know if the
       //     server saw the request.
+      // A 429 from billing-window exhaustion (UsageLimitError) is terminal
+      // within the window — retrying just amplifies load and log noise, and
+      // the usage read is the call most likely to trip it. A transient
+      // rate-limit 429 IS worth retrying, so tell them apart by the body code
+      // before deciding. Only peek when we'd otherwise retry (cfg + 429).
+      const usageLimited429 =
+        !!cfg && res?.status === 429 && (await this.is429UsageLimit(res));
+
       const retryable = cfg
         ? res
           ? res.status === 429
-            ? true
+            ? !usageLimited429
             : isRetryableStatus(res.status) && idempotent
           : isNetworkErrorRetryable(err) && idempotent
         : false;
@@ -645,6 +654,21 @@ export class UnifiedAI extends Core {
         throw abortError;
       }
       attempt += 1;
+    }
+  }
+
+  /**
+   * Peek a 429 body to tell a terminal usage-limit (quota exhausted; won't
+   * clear by waiting) from a transient rate-limit (worth retrying). Reads a
+   * `clone()` so the original response stays intact for the caller's error
+   * path and the retry-drain. Any read/parse failure falls back to `false`
+   * (treat-as-retryable) so a malformed body keeps the prior behavior.
+   */
+  private async is429UsageLimit(res: Response): Promise<boolean> {
+    try {
+      return isUsageLimitBody(await readErrorBody(res.clone()));
+    } catch {
+      return false;
     }
   }
 

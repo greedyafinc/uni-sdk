@@ -275,7 +275,7 @@ function parseUsageFields(body: unknown): {
  * response may include `{error: "rate_limited", limit: 60}` (requests
  * per window), and that should stay a `RateLimitError`.
  */
-function isUsageLimitBody(body: unknown): boolean {
+export function isUsageLimitBody(body: unknown): boolean {
   if (!body || typeof body !== "object") return false;
   const obj = body as Record<string, unknown>;
   if (obj.code === "usage_limit_exceeded") return true;

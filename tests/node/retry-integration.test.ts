@@ -163,6 +163,55 @@ describe("integration: retry against real HTTP server", () => {
     expect(res.ok).toBe(true);
   });
 
+  test("usage-limit 429 (code: usage_limit_exceeded) is terminal — not retried", async () => {
+    // Quota exhaustion won't clear by waiting, so the retry layer must treat
+    // this 429 as terminal. Enqueue several denials so any retry would show up
+    // as extra hits; only the initial request should ever reach the server.
+    for (let i = 0; i < 4; i++) {
+      h.api.enqueue("/v1/usage", {
+        status: 429,
+        body: {
+          message: "Usage limit exceeded. Window cost: $1.0000 / $1.00; top-up reserve $0.00",
+          code: "usage_limit_exceeded",
+        },
+      });
+    }
+    const retryEvents: number[] = [];
+    let caught: unknown;
+    try {
+      await h.sdk.request("/v1/usage", { onRetry: (e) => retryEvents.push(e.attempt) });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(UnifiedAIError);
+    expect((caught as { name?: string }).name).toBe("UsageLimitError");
+    // No retry events fired and only the single initial request was sent.
+    expect(retryEvents).toEqual([]);
+    const hits = h.api.requestLog().filter((r) => r.path === "/v1/usage").length;
+    expect(hits).toBe(1);
+  });
+
+  test("usage-limit 429 detected by message alone (no code) is also terminal", async () => {
+    // Back-compat: older unified-api builds emit the human message without the
+    // machine code. isUsageLimitBody's message fallback must still stop the
+    // retry storm so this keeps working before every gateway ships the code.
+    for (let i = 0; i < 4; i++) {
+      h.api.enqueue("/v1/usage", {
+        status: 429,
+        body: { message: "Usage limit exceeded. Window cost: $2.0000 / $1.00" },
+      });
+    }
+    let caught: unknown;
+    try {
+      await h.sdk.request("/v1/usage");
+    } catch (e) {
+      caught = e;
+    }
+    expect((caught as { name?: string }).name).toBe("UsageLimitError");
+    const hits = h.api.requestLog().filter((r) => r.path === "/v1/usage").length;
+    expect(hits).toBe(1);
+  });
+
   test("persistent 503 exhausts retries and surfaces ServerError with attempt count", async () => {
     for (let i = 0; i < 10; i++) {
       h.api.enqueue("/v1/dead", { status: 503, body: { error: "down" } });
