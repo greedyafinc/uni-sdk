@@ -587,8 +587,7 @@ export class UnifiedAI extends Core {
       // the usage read is the call most likely to trip it. A transient
       // rate-limit 429 IS worth retrying, so tell them apart by the body code
       // before deciding. Only peek when we'd otherwise retry (cfg + 429).
-      const usageLimited429 =
-        !!cfg && res?.status === 429 && (await this.is429UsageLimit(res));
+      const usageLimited429 = !!cfg && res?.status === 429 && (await this.is429UsageLimit(res));
 
       const retryable = cfg
         ? res
