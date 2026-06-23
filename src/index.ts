@@ -6,6 +6,7 @@
 
 export { UnifiedAI } from "./core/client";
 export type { UnifiedAIOptions } from "./core/client";
+
 export {
   extractServerMessage,
   formatBody,
@@ -59,15 +60,23 @@ export type { StreamUsage, StreamUsageExtractor } from "./core/_internal/stream"
 export { parseSSE } from "./core/_internal/sse";
 
 // Resource modules — all browser-safe.
+// Explicit /index: agent is a directory barrel (same dts-fixup reason as storage).
+export * from "./resources/agent/index";
 export * from "./resources/audio";
 export * from "./resources/chat";
 export * from "./resources/embeddings";
 export * from "./resources/files";
+// Explicit /index: fs is a directory barrel (same dts-fixup reason as storage).
+export * from "./resources/fs/index";
 export * from "./resources/helpers";
 export * from "./resources/images";
 export * from "./resources/messages";
 export * from "./resources/models";
 export * from "./resources/responses";
+// Explicit /index: storage is a directory barrel, so the emitted .d.ts must
+// reference ".../storage/index.js" (the dts-fixup would otherwise produce a
+// non-resolving ".../storage.js").
+export * from "./resources/storage/index";
 export * from "./resources/usage";
 export * from "./resources/videos";
 export * from "./resources/logos";

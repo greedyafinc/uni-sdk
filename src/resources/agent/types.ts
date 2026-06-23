@@ -1,0 +1,75 @@
+// Public types for `sdk.agent` — the unopinionated tool-loop SCAFFOLDING.
+//
+// The SDK provides the loop mechanics (stream-consume, accumulate streamed
+// tool-calls, thread messages, abort, step cap, usage events) and a TOOL SPEC
+// abstraction. It provides NO system prompt and NO tool policy: the app supplies
+// its own prompt and composes its own tool set (optionally including the
+// `fsTools()` pack). This is a daemon-less generalization of OpenDesign's
+// in-process unified-agent loop. See docs/capability-platform.md.
+import type {
+  ChatCompletionMessage,
+  ChatCompletionToolDefinition,
+  ChatCompletionUserContentPart,
+} from "../chat";
+
+/** What a tool's `execute` returns: text fed back to the model, flagged on error. */
+export interface ToolResult {
+  content: string;
+  isError?: boolean;
+}
+
+/**
+ * One tool the model may call: its wire DEFINITION (name/description/JSON-schema
+ * params, OpenAI function shape) plus the host-side `execute` the loop runs when
+ * the model calls it. The app owns these — it can use `fsTools()`, subset them,
+ * wrap them, or supply entirely its own.
+ */
+export interface ToolSpec {
+  definition: ChatCompletionToolDefinition;
+  /** Run the tool. `input` is the parsed JSON arguments; honor `signal` for cancellation. */
+  execute: (
+    input: Record<string, unknown>,
+    signal: AbortSignal,
+  ) => Promise<ToolResult> | ToolResult;
+}
+
+/** Streamed events the loop emits so the app can render progress as it happens. */
+export type AgentEvent =
+  | { type: "text_delta"; delta: string }
+  | { type: "thinking_delta"; delta: string }
+  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
+  | { type: "tool_result"; toolUseId: string; content: string; isError: boolean }
+  | { type: "usage"; usage: { inputTokens?: number; outputTokens?: number } };
+
+export interface RunAgentOptions {
+  /**
+   * The full message array to start from. Takes precedence over `system`/`prompt`
+   * — pass this to continue or refine a prior run (the app persists the transcript
+   * returned in `RunAgentResult.messages`).
+   */
+  messages?: ChatCompletionMessage[];
+  /** App-supplied system prompt. The SDK injects none. Ignored when `messages` is set. */
+  system?: string;
+  /** The first user turn — plain text or multimodal content parts. Ignored when `messages` is set. */
+  prompt?: string | ChatCompletionUserContentPart[];
+  /** Tools the model may call. Compose `fsTools(ns)` with your own; omit/empty for a plain completion. */
+  tools?: ToolSpec[];
+  /** Model id; defaults to the gateway's `auto` router. */
+  model?: string;
+  /** Safety cap on tool-call round trips (default 40). */
+  maxSteps?: number;
+  /** Cancellation. When aborted mid-run the loop stops and returns `canceled: true`. */
+  signal?: AbortSignal;
+  /** Progress sink — text/thinking deltas, tool calls, tool results, usage. */
+  onEvent?: (event: AgentEvent) => void;
+}
+
+export interface RunAgentResult {
+  ok: boolean;
+  canceled?: boolean;
+  error?: string;
+  /** Whether any assistant text or tool activity was produced. */
+  producedOutput: boolean;
+  /** The full transcript after the run — persist it to continue/refine later. */
+  messages: ChatCompletionMessage[];
+}

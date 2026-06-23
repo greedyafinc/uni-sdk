@@ -9,6 +9,10 @@ export type UnifiedErrorCode =
   | "auth_refresh_failed"
   | "auth_retry_still_unauthorized"
   | "keychain_unavailable"
+  | "storage_unavailable"
+  | "storage_read_only"
+  | "storage_not_granted"
+  | "not_found"
   | (string & {});
 
 export class UnifiedError extends Error {
