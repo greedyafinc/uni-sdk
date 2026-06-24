@@ -6,6 +6,18 @@
 
 export { UnifiedAI } from "./core/client";
 export type { UnifiedAIOptions } from "./core/client";
+
+// Browser PKCE sign-in (injectable loopback + URL opener for desktop hosts).
+export {
+  signInWithBrowser,
+  runBrowserPkce,
+  type BrowserSignInArgs,
+  type LoopbackHandle,
+  type LoopbackServer,
+  type OpenUrl,
+} from "./auth/browser-sign-in";
+export type { TokenSet } from "./core/_internal/tokens";
+
 export {
   extractServerMessage,
   formatBody,
