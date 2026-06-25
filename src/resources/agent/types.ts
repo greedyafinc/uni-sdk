@@ -38,6 +38,12 @@ export interface ToolSpec {
 export type AgentEvent =
   | { type: "text_delta"; delta: string }
   | { type: "thinking_delta"; delta: string }
+  // A tool call is still STREAMING its arguments (not yet dispatched). Emitted as
+  // the arguments accrue so a long tool call (e.g. write_file streaming a big
+  // file) shows live progress instead of going silent between the model's text
+  // and the `tool_use` that fires once the arguments are complete. `chars` is the
+  // length of the arguments JSON streamed so far.
+  | { type: "tool_partial"; name: string; chars: number }
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
   | { type: "tool_result"; toolUseId: string; content: string; isError: boolean }
   | { type: "usage"; usage: { inputTokens?: number; outputTokens?: number } };

@@ -85,6 +85,12 @@ async function consumeChatStream(
           if (typeof tc.function?.arguments === "string") acc.arguments += tc.function.arguments;
           toolAcc.set(index, acc);
         }
+        // Heartbeat for the tool currently streaming (the last one with a name) so
+        // a big write_file shows live byte progress rather than going silent.
+        let name = "";
+        let chars = 0;
+        for (const acc of toolAcc.values()) if (acc.name) { name = acc.name; chars = acc.arguments.length; }
+        if (name) emit({ type: "tool_partial", name, chars });
       }
     }
     if (choice?.finish_reason) finishReason = choice.finish_reason;
