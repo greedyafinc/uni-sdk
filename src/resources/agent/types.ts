@@ -11,6 +11,7 @@ import type {
   ChatCompletionToolDefinition,
   ChatCompletionUserContentPart,
 } from "../chat";
+import type { UnifiedAIHttpErrorCode, UnifiedErrorCode } from "../../core/errors";
 
 /** What a tool's `execute` returns: text fed back to the model, flagged on error. */
 export interface ToolResult {
@@ -58,6 +59,15 @@ export interface RunAgentOptions {
   model?: string;
   /** Safety cap on tool-call round trips (default 40). */
   maxSteps?: number;
+  /**
+   * Per-completion output-token cap (`max_tokens`). Raise it for REASONING models
+   * that otherwise spend the whole default budget on hidden `reasoning_content` and
+   * hit `finish_reason: "length"` before producing any visible text or tool call.
+   * Omit to use the gateway/provider default. A generous value is safe: the gateway
+   * clamps an over-large `max_tokens` down to each model's real limit rather than
+   * erroring.
+   */
+  maxTokens?: number;
   /** Cancellation. When aborted mid-run the loop stops and returns `canceled: true`. */
   signal?: AbortSignal;
   /** Progress sink — text/thinking deltas, tool calls, tool results, usage. */
@@ -67,7 +77,21 @@ export interface RunAgentOptions {
 export interface RunAgentResult {
   ok: boolean;
   canceled?: boolean;
+  /** Human-readable failure message (the typed error's `.message`). */
   error?: string;
+  /**
+   * Structured detail of the failing error, lifted from the SDK's typed error
+   * hierarchy (see `core/errors`) so callers can branch on the KIND of failure —
+   * e.g. `"rate_limited"` vs `"usage_limit_exceeded"` vs `"unauthorized"` — and
+   * render a specific message instead of a generic one. Absent on success/cancel
+   * and on synthetic failures (e.g. the tool-call-limit guard) that have no HTTP
+   * error behind them.
+   */
+  errorCode?: UnifiedAIHttpErrorCode | UnifiedErrorCode;
+  /** HTTP status of the failing request, when the error is an HTTP error. */
+  errorStatus?: number;
+  /** Seconds to back off before retrying — present only on a rate-limit error. */
+  errorRetryAfter?: number;
   /** Whether any assistant text or tool activity was produced. */
   producedOutput: boolean;
   /** The full transcript after the run — persist it to continue/refine later. */

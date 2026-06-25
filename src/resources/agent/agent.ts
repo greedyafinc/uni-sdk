@@ -9,6 +9,7 @@
 // ToolSpec the app provided, so the APP orchestrates which tools exist and what
 // they do. See docs/capability-platform.md.
 import type { Core } from "../../core/core";
+import { RateLimitError, UnifiedError } from "../../core/errors";
 import {
   type ChatCompletionChunk,
   type ChatCompletionMessage,
@@ -16,6 +17,26 @@ import {
   ChatCompletions,
 } from "../chat";
 import type { AgentEvent, RunAgentOptions, RunAgentResult, ToolSpec } from "./types";
+
+/**
+ * Lift the structured detail out of a thrown SDK error so a failed run can carry
+ * the KIND of failure (not just a message) — letting callers branch on
+ * `errorCode`/`errorStatus` to render a specific message. Returns only the keys
+ * that apply (no `undefined` values, to satisfy `exactOptionalPropertyTypes`).
+ */
+function errorDetail(
+  err: unknown,
+): Pick<RunAgentResult, "errorCode" | "errorStatus" | "errorRetryAfter"> {
+  const out: Pick<RunAgentResult, "errorCode" | "errorStatus" | "errorRetryAfter"> = {};
+  if (err instanceof UnifiedError) {
+    out.errorCode = err.code;
+    if (err.status !== undefined) out.errorStatus = err.status;
+  }
+  if (err instanceof RateLimitError && err.retryAfter !== undefined) {
+    out.errorRetryAfter = err.retryAfter;
+  }
+  return out;
+}
 
 interface ToolCallAccumulator {
   id?: string;
@@ -127,6 +148,7 @@ export class Agent {
             ...(tools.length > 0
               ? { tools: tools.map((t) => t.definition), tool_choice: "auto" as const }
               : {}),
+            ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
             stream: true,
             stream_options: { include_usage: true },
           },
@@ -140,6 +162,7 @@ export class Agent {
         return {
           ok: false,
           error: err instanceof Error ? err.message : String(err),
+          ...errorDetail(err),
           producedOutput,
           messages,
         };
@@ -164,7 +187,11 @@ export class Agent {
               tool_calls: turn.toolCalls.map((tc) => ({
                 id: tc.id,
                 type: "function" as const,
-                function: { name: tc.name, arguments: tc.arguments },
+                // A no-arg tool (e.g. `list_files`) streams its arguments as an
+                // empty string. Send `"{}"` instead so the gateway can
+                // `JSON.parse` it on the follow-up turn — `""` is invalid JSON
+                // and 500s the next request, aborting the loop.
+                function: { name: tc.name, arguments: tc.arguments.trim() ? tc.arguments : "{}" },
               })),
             }
           : {}),
@@ -173,6 +200,21 @@ export class Agent {
 
       // No tool calls → the model is done.
       if (turn.toolCalls.length === 0 || turn.finishReason !== "tool_calls") {
+        // …unless it was CUT OFF at the output-token limit without producing
+        // anything usable. Reasoning models can burn the whole budget on hidden
+        // `reasoning_content` and end with `finish_reason: "length"` before any
+        // visible text or tool call — which otherwise looks like a clean-but-empty
+        // turn. Flag it so the caller can tell the user (vs. a silent no-op).
+        if (turn.finishReason === "length" && !turn.assistantText.trim()) {
+          return {
+            ok: false,
+            error:
+              "The model's reply was cut off at the output-token limit before it produced any result — it likely spent the budget on internal reasoning. Retry, or switch to a different (non-reasoning) model.",
+            errorCode: "response_truncated",
+            producedOutput,
+            messages,
+          };
+        }
         return { ok: true, producedOutput, messages };
       }
 
