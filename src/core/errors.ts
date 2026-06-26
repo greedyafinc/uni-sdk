@@ -13,6 +13,7 @@ export type UnifiedErrorCode =
   | "storage_read_only"
   | "storage_not_granted"
   | "not_found"
+  | "stream_interrupted"
   | (string & {});
 
 export class UnifiedError extends Error {
@@ -24,6 +25,28 @@ export class UnifiedError extends Error {
     this.name = "UnifiedError";
     this.code = code;
     this.status = status;
+  }
+}
+
+/**
+ * A streaming response ended abnormally: the connection dropped after a 200 but
+ * before the stream produced its terminating event (no `[DONE]` / finish). This
+ * is distinct from an HTTP error (the request had already succeeded) and from a
+ * caller abort (that surfaces as the caller's own AbortError, never this). It
+ * typically means the upstream provider or gateway was slow enough to hit an
+ * idle timeout, or buffered a long generation and the socket was closed mid-
+ * flight. Retrying, or switching to a faster model, usually clears it. The
+ * original transport error (e.g. an ECONNRESET) is attached as `cause`.
+ */
+export class StreamInterruptedError extends UnifiedError {
+  constructor(cause?: unknown, message?: string) {
+    super(
+      "stream_interrupted",
+      message ??
+        "The model stream ended unexpectedly before completing — the connection dropped mid-response. The model may be slow or the upstream may have timed out; retry, or switch to a different model.",
+    );
+    this.name = "StreamInterruptedError";
+    if (cause !== undefined) (this as { cause?: unknown }).cause = cause;
   }
 }
 

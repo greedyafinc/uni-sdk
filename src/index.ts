@@ -35,6 +35,7 @@ export {
   RateLimitError,
   UsageLimitError,
   ServerError,
+  StreamInterruptedError,
   buildHttpError,
   httpErrorCodeFromStatus,
 } from "./core/errors";
