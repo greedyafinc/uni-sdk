@@ -202,6 +202,17 @@ export class Core {
     return this.options.fs;
   }
 
+  /**
+   * Whether the client can reach the server, i.e. it has a token provider
+   * (trusted-token mode). When true and no backend is injected, `sdk.storage`
+   * and `sdk.fs` default to the server-backed Cloud backend (unified-api) rather
+   * than the local browser fallback — so app data follows the user across
+   * devices. The node OAuth client overrides this to always-true.
+   */
+  get serverCapable(): boolean {
+    return this.options.token !== undefined;
+  }
+
   async request<T>(_path: string, _options: RequestOptions = {}): Promise<T> {
     throw new UnifiedError("not_implemented", "Core.request is not wired up yet");
   }

@@ -1,6 +1,7 @@
 // Barrel for the fs resource. Re-exported from the SDK's browser + node entries.
 // All of this is browser-safe (no `node:*` imports).
 export { Fs } from "./fs";
+export { CloudFsBackend } from "./cloud";
 export { OpfsBackend } from "./opfs";
 export { fsError } from "./errors";
 export type { FsErrorCode } from "./errors";

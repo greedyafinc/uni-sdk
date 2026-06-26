@@ -4,6 +4,7 @@
 // The default backend is the browser's IndexedDB; a host injects a SQLite+files
 // backend via `UnifiedAIOptions.storage`. See STORAGE-SPEC.md.
 import type { Core } from "../../core/core";
+import { CloudStorageBackend } from "./cloud";
 import { storageError } from "./errors";
 import { IndexedDbBackend } from "./indexeddb";
 import type {
@@ -257,8 +258,19 @@ class NamespaceImpl implements Namespace {
 export class Storage {
   constructor(private readonly client: Core) {}
 
+  // Cached cloud backend (built lazily once, so repeated namespace() calls reuse
+  // one instance).
+  private cloud: StorageBackend | null = null;
+
   private resolveBackend(): StorageBackend | null {
-    return this.client.storageBackend ?? defaultBackend();
+    // 1. An explicitly injected backend always wins (tests inject Memory; a host
+    //    could inject a custom one).
+    if (this.client.storageBackend) return this.client.storageBackend;
+    // 2. Server-capable clients (a token is configured) default to the cloud
+    //    backend so data follows the user across devices via unified-api.
+    if (this.client.serverCapable) return (this.cloud ??= new CloudStorageBackend(this.client));
+    // 3. Otherwise fall back to the local browser store (or null if absent).
+    return defaultBackend();
   }
 
   /** Whether a usable storage backend exists in the current runtime. */

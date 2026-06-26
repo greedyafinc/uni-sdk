@@ -9,6 +9,7 @@
 // OpenDesign's `unified-agent.ts` `edit_file` tool, so porting that loop onto
 // `sdk.fs` is a direct mapping. See docs/capability-platform.md.
 import type { Core } from "../../core/core";
+import { CloudFsBackend } from "./cloud";
 import { fsError } from "./errors";
 import { OpfsBackend } from "./opfs";
 import { normalizePrefix, normalizeRelPath } from "./path";
@@ -139,8 +140,16 @@ class FsNamespaceImpl implements FsNamespace {
 export class Fs {
   constructor(private readonly client: Core) {}
 
+  // Cached cloud backend (built lazily once).
+  private cloud: FsBackend | null = null;
+
   private resolveBackend(): FsBackend | null {
-    return this.client.fsBackend ?? defaultBackend();
+    // Injected backend wins; else server-capable clients default to the cloud
+    // backend (unified-api) so the file workspace follows the user; else the
+    // local OPFS fallback.
+    if (this.client.fsBackend) return this.client.fsBackend;
+    if (this.client.serverCapable) return (this.cloud ??= new CloudFsBackend(this.client));
+    return defaultBackend();
   }
 
   /** Whether a usable fs backend exists in the current runtime. */
