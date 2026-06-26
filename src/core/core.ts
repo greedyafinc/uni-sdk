@@ -1,3 +1,5 @@
+import type { FsBackend } from "../resources/fs/types";
+import type { StorageBackend } from "../resources/storage/types";
 import type { CacheConfig } from "./_internal/cache";
 import type { RetryAttempt, RetryConfig, RetryListener } from "./_internal/retry";
 import { UnifiedError } from "./errors";
@@ -68,6 +70,20 @@ export interface CoreOptions {
    * `true`. When neither is set, the param is omitted from the wire body.
    */
   compression?: boolean;
+  /**
+   * Storage backend for `sdk.storage` (the local-first, app-namespaced store).
+   * When unset, the SDK uses a default browser IndexedDB backend if one is
+   * available, else `sdk.storage` reports unavailable. A desktop host injects
+   * its own backend (e.g. Tauri SQLite + files) here. See STORAGE-SPEC.md.
+   */
+  storage?: StorageBackend;
+  /**
+   * File-workspace backend for `sdk.fs` (the local-first, app-namespaced file
+   * tree). When unset, the SDK uses a default browser OPFS backend if one is
+   * available, else `sdk.fs` reports unavailable. A desktop host injects its
+   * own backend (e.g. Tauri disk) here. See docs/capability-platform.md.
+   */
+  fs?: FsBackend;
 }
 
 export interface RequestOptions {
@@ -129,13 +145,17 @@ export interface RequestOptions {
 
 export class Core {
   protected readonly options: Readonly<
-    Required<Omit<CoreOptions, "token" | "retry" | "cache" | "onRetry" | "compression">>
+    Required<
+      Omit<CoreOptions, "token" | "retry" | "cache" | "onRetry" | "compression" | "storage" | "fs">
+    >
   > & {
     token: TokenProvider | undefined;
     retry: CoreOptions["retry"];
     cache: CoreOptions["cache"];
     onRetry: RetryListener | undefined;
     compression: boolean | undefined;
+    storage: StorageBackend | undefined;
+    fs: FsBackend | undefined;
   };
 
   constructor(options: CoreOptions = {}) {
@@ -149,6 +169,8 @@ export class Core {
       cache: options.cache,
       onRetry: options.onRetry,
       compression: options.compression,
+      storage: options.storage,
+      fs: options.fs,
     });
   }
 
@@ -159,6 +181,36 @@ export class Core {
    */
   get defaultCompression(): boolean | undefined {
     return this.options.compression;
+  }
+
+  /**
+   * The app identity used to namespace `sdk.storage`. Set by the host when it
+   * constructs a per-app SDK; empty for an unscoped client (storage then falls
+   * back to a `"default"` namespace).
+   */
+  get appId(): string {
+    return this.options.appId;
+  }
+
+  /** The injected storage backend, if any. `undefined` falls back to browser IndexedDB. */
+  get storageBackend(): StorageBackend | undefined {
+    return this.options.storage;
+  }
+
+  /** The injected fs backend, if any. `undefined` falls back to browser OPFS. */
+  get fsBackend(): FsBackend | undefined {
+    return this.options.fs;
+  }
+
+  /**
+   * Whether the client can reach the server, i.e. it has a token provider
+   * (trusted-token mode). When true and no backend is injected, `sdk.storage`
+   * and `sdk.fs` default to the server-backed Cloud backend (unified-api) rather
+   * than the local browser fallback — so app data follows the user across
+   * devices. The node OAuth client overrides this to always-true.
+   */
+  get serverCapable(): boolean {
+    return this.options.token !== undefined;
   }
 
   async request<T>(_path: string, _options: RequestOptions = {}): Promise<T> {

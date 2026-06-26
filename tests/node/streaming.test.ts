@@ -651,6 +651,72 @@ describe("LLM streaming", () => {
     expect(stream.usage?.total_tokens).toBe(28);
   });
 
+  test("agent.run surfaces the served model for an `auto` request + emits one model event", async () => {
+    // The gateway stamps the SERVED model on every chunk; for an `auto` request
+    // that's the router's concrete pick. agent.run must capture it (result.model)
+    // and emit a single `model` event the first time it appears — not per-chunk.
+    api.setFrames([
+      `data: ${JSON.stringify({
+        id: "x",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "claude-opus-4-8",
+        choices: [{ index: 0, delta: { content: "hel" }, finish_reason: null }],
+      })}\n\n`,
+      `data: ${JSON.stringify({
+        id: "x",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "claude-opus-4-8",
+        choices: [{ index: 0, delta: { content: "lo" }, finish_reason: "stop" }],
+      })}\n\n`,
+      "data: [DONE]\n\n",
+    ]);
+    let modelEvents = 0;
+    let firstModel: string | undefined;
+    const result = await sdk.agent.run({
+      model: "auto",
+      prompt: "hi",
+      onEvent: (ev) => {
+        if (ev.type === "model") {
+          modelEvents++;
+          firstModel = ev.model;
+        }
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.model).toBe("claude-opus-4-8");
+    expect(modelEvents).toBe(1);
+    expect(firstModel).toBe("claude-opus-4-8");
+  });
+
+  test("agent.run ignores a chunk model of `auto` (nothing concrete to surface)", async () => {
+    // A bare `auto` on the chunk is the unresolved router placeholder, not a real
+    // model — it must not be captured or emitted, so the consumer keeps its
+    // optimistic "Auto" chip rather than flipping to a meaningless value.
+    api.setFrames([
+      `data: ${JSON.stringify({
+        id: "x",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "auto",
+        choices: [{ index: 0, delta: { content: "hi" }, finish_reason: "stop" }],
+      })}\n\n`,
+      "data: [DONE]\n\n",
+    ]);
+    let modelEvents = 0;
+    const result = await sdk.agent.run({
+      model: "auto",
+      prompt: "hi",
+      onEvent: (ev) => {
+        if (ev.type === "model") modelEvents++;
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.model).toBeUndefined();
+    expect(modelEvents).toBe(0);
+  });
+
   test("non-2xx surfaces UnifiedAIError before iteration", async () => {
     api.setFrames([], { status: 400 });
     let caught: unknown;

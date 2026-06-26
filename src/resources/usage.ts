@@ -44,6 +44,14 @@ export interface UsageResponse {
 
 export interface GetUsageOptions {
   signal?: AbortSignal;
+  /**
+   * Aggregation scope. `"app"` (default) returns usage for the calling token's
+   * app only. `"account"` returns the user's total across all of their apps —
+   * honored only for first-party / own-credential callers (a direct trusted
+   * token or `uapi_` key); a third-party OAuth client always stays app-scoped
+   * regardless of this value.
+   */
+  scope?: "app" | "account";
 }
 
 export class Usage {
@@ -52,6 +60,7 @@ export class Usage {
   get(options: GetUsageOptions = {}): Promise<UsageResponse> {
     const req: RequestOptions = { method: "GET" };
     if (options.signal) req.signal = options.signal;
+    if (options.scope) req.query = { scope: options.scope };
     return this.client.request<UsageResponse>("/api/v1/usage", req);
   }
 }

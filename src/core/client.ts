@@ -1,12 +1,15 @@
+import { Agent } from "../resources/agent";
 import { Audio } from "../resources/audio";
 import { Chat } from "../resources/chat";
 import { Embeddings } from "../resources/embeddings";
 import { Files } from "../resources/files";
+import { Fs } from "../resources/fs";
 import { Helpers } from "../resources/helpers";
 import { Images } from "../resources/images";
 import { Messages } from "../resources/messages";
 import { Models } from "../resources/models";
 import { Responses } from "../resources/responses";
+import { Storage } from "../resources/storage";
 import { Usage } from "../resources/usage";
 import { Videos } from "../resources/videos";
 import { LruCache, cacheKey, resolveCacheConfig } from "./_internal/cache";
@@ -149,6 +152,30 @@ export class UnifiedAI extends Core {
   readonly videos: Videos = new Videos(this);
   readonly embeddings: Embeddings = new Embeddings(this);
   readonly helpers: Helpers = new Helpers();
+
+  /**
+   * Local-first, app-namespaced storage (`STORAGE-SPEC.md`). Typed collections
+   * over a swappable backend — browser IndexedDB by default, a host-injected
+   * SQLite+files backend on desktop. Independent of auth: works without a token.
+   */
+  readonly storage: Storage = new Storage(this);
+
+  /**
+   * Local-first, app-namespaced file workspace (`docs/capability-platform.md`).
+   * A jailed directory tree the app — and the agent loop running on its behalf —
+   * reads, writes, and edits. Browser OPFS by default, a host-injected disk
+   * backend on desktop. Independent of auth: works without a token.
+   */
+  readonly fs: Fs = new Fs(this);
+
+  /**
+   * Unopinionated tool-loop scaffolding (`docs/capability-platform.md`).
+   * `sdk.agent.run({ system, prompt, tools, … })` runs the model with the app's
+   * OWN prompt and tools (compose `fsTools(sdk.fs.namespace())` with your own),
+   * dispatching tool-calls until the model stops. No prompt or tool policy is
+   * baked in — the app orchestrates.
+   */
+  readonly agent: Agent = new Agent(this);
 
   /**
    * Observable auth-session surface: `isAuthenticated()`, `expiresAt`,

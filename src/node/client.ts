@@ -105,6 +105,14 @@ export class UnifiedAI extends BaseUnifiedAI {
     this.refreshSkewSeconds = options.refreshSkewSeconds ?? DEFAULT_REFRESH_SKEW_SECONDS;
   }
 
+  // The node client always reaches the server — via trusted-token OR the OAuth
+  // session it manages itself. So server-backed `sdk.storage` / `sdk.fs` default
+  // on even in OAuth mode (where `options.token` is undefined), letting
+  // third-party CLIs/apps share the user's app data across devices.
+  override get serverCapable(): boolean {
+    return true;
+  }
+
   override bootstrap(): Promise<void> {
     if (this.options.token !== undefined) return Promise.resolve();
     if (!this.bootstrapPromise) {

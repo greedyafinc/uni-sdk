@@ -1,7 +1,7 @@
 import { parseSSE } from "../core/_internal/sse";
 import { UnifiedStream } from "../core/_internal/stream";
 import type { Core, RequestOptions } from "../core/core";
-import { UnifiedAIError } from "../core/errors";
+import { StreamInterruptedError, UnifiedAIError, UnifiedError } from "../core/errors";
 
 // ── Request types (OpenAI chat.completions, mirrored from unified-api) ─────────
 
@@ -235,24 +235,40 @@ export class ChatCompletions {
         body: { ...params, compression: params.compression ?? client.defaultCompression },
         signal: controller.signal,
       });
-      for await (const msg of parseSSE(body)) {
-        if (msg.data === "[DONE]") return;
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(msg.data);
-        } catch {
-          continue;
+      try {
+        for await (const msg of parseSSE(body)) {
+          if (msg.data === "[DONE]") return;
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(msg.data);
+          } catch {
+            continue;
+          }
+          const obj = parsed as { error?: { message?: string; type?: string } };
+          if (obj.error) {
+            throw new UnifiedAIError(
+              "request_failed",
+              `chat.completions stream error: ${obj.error.message ?? "unknown"}`,
+              0,
+              obj.error,
+            );
+          }
+          yield parsed as ChatCompletionChunk;
         }
-        const obj = parsed as { error?: { message?: string; type?: string } };
-        if (obj.error) {
-          throw new UnifiedAIError(
-            "request_failed",
-            `chat.completions stream error: ${obj.error.message ?? "unknown"}`,
-            0,
-            obj.error,
-          );
-        }
-        yield parsed as ChatCompletionChunk;
+      } catch (err) {
+        // A caller-initiated abort surfaces here as the fetch's AbortError —
+        // leave it for the consumer's cancellation path, don't relabel it.
+        if (controller.signal.aborted) throw err;
+        // Already-typed failures (an in-band `{error}` frame above) are
+        // meaningful as-is; pass them through unchanged.
+        if (err instanceof UnifiedError) throw err;
+        // Anything else is an abrupt mid-stream transport drop: the socket
+        // closed after a 200 but before the stream terminated (e.g. ECONNRESET
+        // from an idle timeout or a provider closing a buffered generation).
+        // Surface it as a typed, actionable error so callers — and
+        // `sdk.agent.run`'s `errorCode` — can offer "retry / switch model"
+        // instead of an opaque socket-closed string.
+        throw new StreamInterruptedError(err);
       }
     })();
     return new UnifiedStream(iter, controller, (chunk) => {
