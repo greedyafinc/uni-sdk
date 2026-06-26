@@ -75,6 +75,8 @@ export * from "../resources/images";
 export * from "../resources/messages";
 export * from "../resources/models";
 export * from "../resources/responses";
+// Explicit /index: storage is a directory barrel (see src/index.ts note).
+export * from "../resources/storage/index";
 export * from "../resources/usage";
 export * from "../resources/videos";
 export * from "../resources/logos";
@@ -88,5 +90,12 @@ export type { UnifiedAIOptions } from "./client";
 export type { DiscoveryReader } from "./_internal/discovery";
 export type { EnvReader } from "./_internal/env";
 export type { KeychainAdapter } from "./_internal/keychain";
-export type { LoopbackServer, LoopbackHandle, OpenUrl } from "./_internal/browser-auth";
+export {
+  signInWithBrowser,
+  runBrowserPkce,
+  type BrowserSignInArgs,
+  type LoopbackServer,
+  type LoopbackHandle,
+  type OpenUrl,
+} from "../auth/browser-sign-in";
 export type { TokenSet } from "../core/_internal/tokens";
