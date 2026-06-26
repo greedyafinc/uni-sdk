@@ -49,6 +49,12 @@ interface StreamTurnResult {
   toolCalls: Array<{ id: string; name: string; arguments: string }>;
   finishReason: string | null;
   usage: { prompt_tokens?: number; completion_tokens?: number } | null;
+  /**
+   * The concrete model the gateway actually served this turn, captured from the
+   * chunk-level `model` field. For an `auto` request this is the router's pick,
+   * not `"auto"`; `null` if no chunk carried a concrete (non-`auto`) model.
+   */
+  model: string | null;
 }
 
 // Consume one chat stream, emitting text/thinking deltas and accumulating any
@@ -62,9 +68,17 @@ async function consumeChatStream(
   let assistantText = "";
   let finishReason: string | null = null;
   let usage: { prompt_tokens?: number; completion_tokens?: number } | null = null;
+  let model: string | null = null;
   const toolAcc = new Map<number, ToolCallAccumulator>();
 
   for await (const chunk of stream as AsyncIterable<ChatCompletionChunk>) {
+    // The gateway stamps the SERVED model on every chunk. For an `auto` request
+    // that's the router's concrete pick — capture it the first time it appears
+    // and emit a live event so the UI can flip a "Auto" badge mid-stream.
+    if (!model && chunk.model && chunk.model !== "auto") {
+      model = chunk.model;
+      emit({ type: "model", model });
+    }
     const choice = chunk.choices?.[0];
     const delta = choice?.delta;
     if (delta) {
@@ -89,7 +103,11 @@ async function consumeChatStream(
         // a big write_file shows live byte progress rather than going silent.
         let name = "";
         let chars = 0;
-        for (const acc of toolAcc.values()) if (acc.name) { name = acc.name; chars = acc.arguments.length; }
+        for (const acc of toolAcc.values())
+          if (acc.name) {
+            name = acc.name;
+            chars = acc.arguments.length;
+          }
         if (name) emit({ type: "tool_partial", name, chars });
       }
     }
@@ -106,7 +124,7 @@ async function consumeChatStream(
     }))
     .filter((tc) => tc.name);
 
-  return { assistantText, toolCalls, finishReason, usage };
+  return { assistantText, toolCalls, finishReason, usage, model };
 }
 
 /**
@@ -141,9 +159,21 @@ export class Agent {
         ];
 
     let producedOutput = false;
+    // The concrete model the gateway served — last-turn-wins, so it reflects the
+    // model that produced the final user-visible output. Threaded onto every
+    // return path that follows at least one streamed turn; the guarded spread
+    // contributes nothing on the abort-before-first-turn paths where it's unset.
+    let resolvedModel: string | undefined;
 
     for (let step = 0; step < maxSteps; step++) {
-      if (signal.aborted) return { ok: false, canceled: true, producedOutput, messages };
+      if (signal.aborted)
+        return {
+          ok: false,
+          canceled: true,
+          ...(resolvedModel ? { model: resolvedModel } : {}),
+          producedOutput,
+          messages,
+        };
 
       let turn: StreamTurnResult;
       try {
@@ -164,15 +194,26 @@ export class Agent {
           producedOutput = true;
         });
       } catch (err) {
-        if (signal.aborted) return { ok: false, canceled: true, producedOutput, messages };
+        if (signal.aborted)
+          return {
+            ok: false,
+            canceled: true,
+            ...(resolvedModel ? { model: resolvedModel } : {}),
+            producedOutput,
+            messages,
+          };
         return {
           ok: false,
           error: err instanceof Error ? err.message : String(err),
           ...errorDetail(err),
+          ...(resolvedModel ? { model: resolvedModel } : {}),
           producedOutput,
           messages,
         };
       }
+
+      // Last-turn-wins: the served model that produced the final output.
+      if (turn.model) resolvedModel = turn.model;
 
       if (turn.usage) {
         // Build conditionally — `exactOptionalPropertyTypes` forbids assigning
@@ -217,17 +258,30 @@ export class Agent {
             error:
               "The model's reply was cut off at the output-token limit before it produced any result — it likely spent the budget on internal reasoning. Retry, or switch to a different (non-reasoning) model.",
             errorCode: "response_truncated",
+            ...(resolvedModel ? { model: resolvedModel } : {}),
             producedOutput,
             messages,
           };
         }
-        return { ok: true, producedOutput, messages };
+        return {
+          ok: true,
+          ...(resolvedModel ? { model: resolvedModel } : {}),
+          producedOutput,
+          messages,
+        };
       }
 
       // Dispatch each requested tool to the app-supplied executor, feeding
       // results back for the next turn.
       for (const tc of turn.toolCalls) {
-        if (signal.aborted) return { ok: false, canceled: true, producedOutput, messages };
+        if (signal.aborted)
+          return {
+            ok: false,
+            canceled: true,
+            ...(resolvedModel ? { model: resolvedModel } : {}),
+            producedOutput,
+            messages,
+          };
         let input: Record<string, unknown> = {};
         try {
           input = tc.arguments ? JSON.parse(tc.arguments) : {};
@@ -259,10 +313,17 @@ export class Agent {
     }
 
     // Hit the step cap — successful-but-truncated if anything was produced.
-    if (producedOutput) return { ok: true, producedOutput, messages };
+    if (producedOutput)
+      return {
+        ok: true,
+        ...(resolvedModel ? { model: resolvedModel } : {}),
+        producedOutput,
+        messages,
+      };
     return {
       ok: false,
       error: "Reached the tool-call limit without output.",
+      ...(resolvedModel ? { model: resolvedModel } : {}),
       producedOutput,
       messages,
     };

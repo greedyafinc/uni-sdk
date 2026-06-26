@@ -1,3 +1,4 @@
+import type { UnifiedAIHttpErrorCode, UnifiedErrorCode } from "../../core/errors";
 // Public types for `sdk.agent` — the unopinionated tool-loop SCAFFOLDING.
 //
 // The SDK provides the loop mechanics (stream-consume, accumulate streamed
@@ -11,7 +12,6 @@ import type {
   ChatCompletionToolDefinition,
   ChatCompletionUserContentPart,
 } from "../chat";
-import type { UnifiedAIHttpErrorCode, UnifiedErrorCode } from "../../core/errors";
 
 /** What a tool's `execute` returns: text fed back to the model, flagged on error. */
 export interface ToolResult {
@@ -46,6 +46,10 @@ export type AgentEvent =
   | { type: "tool_partial"; name: string; chars: number }
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
   | { type: "tool_result"; toolUseId: string; content: string; isError: boolean }
+  // The concrete model the gateway served for the current turn — fires once per
+  // turn, on the first chunk carrying a non-`auto` model. Lets the UI flip an
+  // "Auto" badge to the router's actual pick while the turn is still streaming.
+  | { type: "model"; model: string }
   | { type: "usage"; usage: { inputTokens?: number; outputTokens?: number } };
 
 export interface RunAgentOptions {
@@ -98,6 +102,13 @@ export interface RunAgentResult {
   errorStatus?: number;
   /** Seconds to back off before retrying — present only on a rate-limit error. */
   errorRetryAfter?: number;
+  /**
+   * The concrete model the gateway actually served; for an `auto` request this is
+   * the router's pick, not `"auto"`. Last-turn-wins across a multi-step run.
+   * Absent on runs that never streamed a chunk (e.g. abort before the first turn),
+   * or against a host bundling an older uni-sdk that doesn't capture it.
+   */
+  model?: string;
   /** Whether any assistant text or tool activity was produced. */
   producedOutput: boolean;
   /** The full transcript after the run — persist it to continue/refine later. */
