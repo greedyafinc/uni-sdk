@@ -268,7 +268,10 @@ export class Storage {
     if (this.client.storageBackend) return this.client.storageBackend;
     // 2. Server-capable clients (a token is configured) default to the cloud
     //    backend so data follows the user across devices via unified-api.
-    if (this.client.serverCapable) return (this.cloud ??= new CloudStorageBackend(this.client));
+    if (this.client.serverCapable) {
+      this.cloud ??= new CloudStorageBackend(this.client);
+      return this.cloud;
+    }
     // 3. Otherwise fall back to the local browser store (or null if absent).
     return defaultBackend();
   }

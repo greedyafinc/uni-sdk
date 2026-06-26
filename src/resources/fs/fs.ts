@@ -148,7 +148,10 @@ export class Fs {
     // backend (unified-api) so the file workspace follows the user; else the
     // local OPFS fallback.
     if (this.client.fsBackend) return this.client.fsBackend;
-    if (this.client.serverCapable) return (this.cloud ??= new CloudFsBackend(this.client));
+    if (this.client.serverCapable) {
+      this.cloud ??= new CloudFsBackend(this.client);
+      return this.cloud;
+    }
     return defaultBackend();
   }
 

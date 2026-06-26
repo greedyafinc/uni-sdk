@@ -1,7 +1,7 @@
-import type { TokenSet } from "../core/_internal/tokens";
-import { UnifiedError } from "../core/errors";
 import { challengeFor, generateState, generateVerifier } from "../core/_internal/pkce";
 import { postTokenGrant } from "../core/_internal/token-endpoint";
+import type { TokenSet } from "../core/_internal/tokens";
+import { UnifiedError } from "../core/errors";
 
 export interface LoopbackHandle {
   readonly redirectUri: string;
