@@ -101,14 +101,19 @@ async function consumeChatStream(
         }
         // Heartbeat for the tool currently streaming (the last one with a name) so
         // a big write_file shows live byte progress rather than going silent.
+        // `args` carries the raw arguments-JSON accrued so far (possibly truncated
+        // mid-value) so a host can render a streaming preview of, e.g., the file a
+        // `write_file` is emitting — see RunAgentOptions.onEvent consumers.
         let name = "";
         let chars = 0;
+        let args = "";
         for (const acc of toolAcc.values())
           if (acc.name) {
             name = acc.name;
             chars = acc.arguments.length;
+            args = acc.arguments;
           }
-        if (name) emit({ type: "tool_partial", name, chars });
+        if (name) emit({ type: "tool_partial", name, chars, args });
       }
     }
     if (choice?.finish_reason) finishReason = choice.finish_reason;
@@ -164,6 +169,10 @@ export class Agent {
     // return path that follows at least one streamed turn; the guarded spread
     // contributes nothing on the abort-before-first-turn paths where it's unset.
     let resolvedModel: string | undefined;
+    // The `finish_reason` of the most recent streamed turn — surfaced on the
+    // result so a host can distinguish a clean stop from an output-token-limit
+    // truncation (`"length"`) and auto-recover (e.g. retry with a larger budget).
+    let lastFinishReason: string | null = null;
 
     for (let step = 0; step < maxSteps; step++) {
       if (signal.aborted)
@@ -214,6 +223,7 @@ export class Agent {
 
       // Last-turn-wins: the served model that produced the final output.
       if (turn.model) resolvedModel = turn.model;
+      lastFinishReason = turn.finishReason;
 
       if (turn.usage) {
         // Build conditionally — `exactOptionalPropertyTypes` forbids assigning
@@ -266,6 +276,7 @@ export class Agent {
         return {
           ok: true,
           ...(resolvedModel ? { model: resolvedModel } : {}),
+          ...(lastFinishReason ? { finishReason: lastFinishReason } : {}),
           producedOutput,
           messages,
         };
@@ -317,6 +328,7 @@ export class Agent {
       return {
         ok: true,
         ...(resolvedModel ? { model: resolvedModel } : {}),
+        ...(lastFinishReason ? { finishReason: lastFinishReason } : {}),
         producedOutput,
         messages,
       };

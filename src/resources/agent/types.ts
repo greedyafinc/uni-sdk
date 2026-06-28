@@ -42,8 +42,10 @@ export type AgentEvent =
   // the arguments accrue so a long tool call (e.g. write_file streaming a big
   // file) shows live progress instead of going silent between the model's text
   // and the `tool_use` that fires once the arguments are complete. `chars` is the
-  // length of the arguments JSON streamed so far.
-  | { type: "tool_partial"; name: string; chars: number }
+  // length of the arguments JSON streamed so far; `args` is that raw JSON itself
+  // (a partial object, possibly truncated mid-value) so a host can render a live
+  // preview of the in-flight tool input — e.g. the file a write_file is emitting.
+  | { type: "tool_partial"; name: string; chars: number; args: string }
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
   | { type: "tool_result"; toolUseId: string; content: string; isError: boolean }
   // The concrete model the gateway served for the current turn — fires once per
@@ -109,6 +111,14 @@ export interface RunAgentResult {
    * or against a host bundling an older uni-sdk that doesn't capture it.
    */
   model?: string;
+  /**
+   * The `finish_reason` of the final streamed turn — `"stop"` (clean), `"length"`
+   * (cut off at the output-token limit), `"tool_calls"`, etc. Lets a caller detect
+   * an output-token-limit truncation on an otherwise-`ok` run and auto-recover
+   * (e.g. retry with a larger `maxTokens`). Absent on runs that never completed a
+   * turn, or against a host bundling an older uni-sdk that doesn't capture it.
+   */
+  finishReason?: string;
   /** Whether any assistant text or tool activity was produced. */
   producedOutput: boolean;
   /** The full transcript after the run — persist it to continue/refine later. */
