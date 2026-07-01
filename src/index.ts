@@ -84,6 +84,8 @@ export * from "./resources/helpers";
 export * from "./resources/images";
 export * from "./resources/messages";
 export * from "./resources/models";
+export * from "./resources/projects";
+export * from "./resources/references";
 export * from "./resources/responses";
 // Explicit /index: storage is a directory barrel, so the emitted .d.ts must
 // reference ".../storage/index.js" (the dts-fixup would otherwise produce a

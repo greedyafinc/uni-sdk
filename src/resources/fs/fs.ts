@@ -2,8 +2,10 @@
 // FsBackend. The sibling of `sdk.storage`: the app (and the agent loop running
 // on its behalf) reads/writes/edits a jailed directory tree. The facade owns
 // utf8 encode/decode, the read-modify-write `edit()`, the read-only guard, and
-// path normalization; the default backend is the browser's OPFS, and a host
-// injects a disk-backed one via `UnifiedAIOptions.fs`.
+// path normalization; the backend is the server-backed Cloud workspace
+// (unified-api → Supabase) whenever a token is configured, or a host-injected
+// one via `UnifiedAIOptions.fs`. With no token and nothing injected, `sdk.fs`
+// is unavailable — there is no local browser (OPFS) fallback.
 //
 // `edit()` is implemented HERE (read → unique-replace → write), exactly like
 // OpenDesign's `unified-agent.ts` `edit_file` tool, so porting that loop onto
@@ -11,7 +13,6 @@
 import type { Core } from "../../core/core";
 import { CloudFsBackend } from "./cloud";
 import { fsError } from "./errors";
-import { OpfsBackend } from "./opfs";
 import { normalizePrefix, normalizeRelPath } from "./path";
 import type {
   FsBackend,
@@ -25,18 +26,6 @@ import type {
 
 const utf8Encoder = new TextEncoder();
 const utf8Decoder = new TextDecoder();
-
-// One process-wide default OPFS backend, created lazily so importing the SDK in
-// a non-OPFS runtime never touches `navigator.storage`. `null` means "no local
-// backend here" (e.g. Node without a host-injected backend).
-let cachedDefault: FsBackend | null | undefined;
-function defaultBackend(): FsBackend | null {
-  if (cachedDefault === undefined) {
-    const b = new OpfsBackend();
-    cachedDefault = b.available() ? b : null;
-  }
-  return cachedDefault;
-}
 
 class FsNamespaceImpl implements FsNamespace {
   constructor(
@@ -144,15 +133,16 @@ export class Fs {
   private cloud: FsBackend | null = null;
 
   private resolveBackend(): FsBackend | null {
-    // Injected backend wins; else server-capable clients default to the cloud
-    // backend (unified-api) so the file workspace follows the user; else the
-    // local OPFS fallback.
+    // Injected backend wins; else server-capable clients use the cloud backend
+    // (unified-api → Supabase) so the file workspace follows the user. With no
+    // token and nothing injected, fs is unavailable — there is no local OPFS
+    // fallback (Supabase-only).
     if (this.client.fsBackend) return this.client.fsBackend;
     if (this.client.serverCapable) {
       this.cloud ??= new CloudFsBackend(this.client);
       return this.cloud;
     }
-    return defaultBackend();
+    return null;
   }
 
   /** Whether a usable fs backend exists in the current runtime. */

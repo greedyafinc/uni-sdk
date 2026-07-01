@@ -8,6 +8,8 @@ import { Helpers } from "../resources/helpers";
 import { Images } from "../resources/images";
 import { Messages } from "../resources/messages";
 import { Models } from "../resources/models";
+import { Projects } from "../resources/projects";
+import { References } from "../resources/references";
 import { Responses } from "../resources/responses";
 import { Storage } from "../resources/storage";
 import { Usage } from "../resources/usage";
@@ -154,17 +156,33 @@ export class UnifiedAI extends Core {
   readonly helpers: Helpers = new Helpers();
 
   /**
-   * Local-first, app-namespaced storage (`STORAGE-SPEC.md`). Typed collections
-   * over a swappable backend — browser IndexedDB by default, a host-injected
-   * SQLite+files backend on desktop. Independent of auth: works without a token.
+   * Cross-app projects (`sdk.projects`). A Project gathers artifacts from
+   * different apps into one user-owned workspace; `addLink` attaches an artifact
+   * or a portion of one. Requires auth (writes to unified-api).
+   */
+  readonly projects: Projects = new Projects(this);
+
+  /**
+   * Reference resolution (`sdk.references`). Reads a project link back into
+   * content — including across apps — authorized by project membership. Resolves
+   * a `uniref://` handle (or linkId) to a portion snapshot or a live artifact.
+   */
+  readonly references: References = new References(this);
+
+  /**
+   * App-namespaced storage (`STORAGE-SPEC.md`). Typed collections over a
+   * swappable backend — the server-backed Cloud store (unified-api → Supabase)
+   * when a token is configured, or a host-injected backend. Requires a token (or
+   * an injected backend): there is no local browser fallback.
    */
   readonly storage: Storage = new Storage(this);
 
   /**
-   * Local-first, app-namespaced file workspace (`docs/capability-platform.md`).
-   * A jailed directory tree the app — and the agent loop running on its behalf —
-   * reads, writes, and edits. Browser OPFS by default, a host-injected disk
-   * backend on desktop. Independent of auth: works without a token.
+   * App-namespaced file workspace (`docs/capability-platform.md`). A jailed
+   * directory tree the app — and the agent loop running on its behalf — reads,
+   * writes, and edits. The server-backed Cloud workspace (unified-api → Supabase)
+   * when a token is configured, or a host-injected backend. Requires a token (or
+   * an injected backend): there is no local browser fallback.
    */
   readonly fs: Fs = new Fs(this);
 
@@ -761,11 +779,16 @@ export class UnifiedAI extends Core {
       ? `${base.replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`
       : path;
     if (!query) return full;
-    const u = new URL(full);
+    // `full` may be relative (apiUrl === "" → the host serves /api/* via a dev
+    // proxy or a custom protocol). `new URL(relative)` throws without a base,
+    // so append the query string manually instead of constructing a URL.
+    const params = new URLSearchParams();
     for (const [k, v] of Object.entries(query)) {
-      if (v !== undefined) u.searchParams.set(k, String(v));
+      if (v !== undefined) params.set(k, String(v));
     }
-    return u.toString();
+    const qs = params.toString();
+    if (!qs) return full;
+    return `${full}${full.includes("?") ? "&" : "?"}${qs}`;
   }
 
   protected buildHeaders(accessToken: string, hasBody: boolean): Record<string, string> {

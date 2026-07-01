@@ -2,7 +2,6 @@
 // entries. All of this is browser-safe (no `node:*` imports).
 export { Storage } from "./storage";
 export { CloudStorageBackend } from "./cloud";
-export { IndexedDbBackend } from "./indexeddb";
 export { MemoryBackend } from "./memory";
 export { storageError } from "./errors";
 export type { StorageErrorCode } from "./errors";

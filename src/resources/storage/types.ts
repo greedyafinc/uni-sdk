@@ -5,10 +5,10 @@
 //   1. The PUBLIC, typed surface (`Collection<T>`, `Namespace`, `CollectionSchema`,
 //      `Query`) the app programs against. The typing is compile-time only — a
 //      thin facade casts untyped backend records to `T`.
-//   2. The untyped `StorageBackend` contract every runtime implements (browser
-//      IndexedDB here; an injected SQLite+files backend in the Tauri host). The
-//      backend never sees `T` — it stores a collection name, a JSON-ish metadata
-//      bag, and optional blob bytes.
+//   2. The untyped `StorageBackend` contract every runtime implements (the
+//      server-backed Cloud backend against unified-api → Supabase; or a
+//      host-injected one). The backend never sees `T` — it stores a collection
+//      name, a JSON-ish metadata bag, and optional blob bytes.
 
 /** A record an app stores. Fields must be JSON-serialisable (the blob field aside). */
 export type StorageRecord = Record<string, unknown>;
@@ -166,14 +166,14 @@ export interface BackendSchema {
 }
 
 /**
- * The storage transport. The browser ships an IndexedDB implementation; the
- * Tauri host injects a SQLite+files one via `UnifiedAIOptions.storage`. The
- * backend is untyped and trust-agnostic: in the host, the calling app's
+ * The storage transport. The SDK ships the server-backed Cloud backend (against
+ * unified-api → Supabase); a host may inject its own via `UnifiedAIOptions.storage`.
+ * The backend is untyped and trust-agnostic: in the host, the calling app's
  * identity (`ns`) is re-derived and authorized at the IPC boundary, not taken
  * on faith from these arguments.
  */
 export interface StorageBackend {
-  /** Short identifier, e.g. `"indexeddb"` / `"tauri-sqlite"` — for diagnostics. */
+  /** Short identifier, e.g. `"cloud"` / `"memory"` — for diagnostics. */
   readonly name: string;
   /** Whether the backend can operate in the current runtime right now. */
   available(): boolean;

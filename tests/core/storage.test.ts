@@ -21,7 +21,7 @@ function client(appId = "design-app") {
 describe("sdk.storage", () => {
   test("available() reflects a wired backend", () => {
     expect(client().storage.available()).toBe(true);
-    // No backend + no IndexedDB in this runtime → unavailable.
+    // No injected backend + no token (not server-capable) → unavailable.
     expect(new UnifiedAI({}).storage.available()).toBe(false);
   });
 

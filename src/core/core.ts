@@ -71,17 +71,19 @@ export interface CoreOptions {
    */
   compression?: boolean;
   /**
-   * Storage backend for `sdk.storage` (the local-first, app-namespaced store).
-   * When unset, the SDK uses a default browser IndexedDB backend if one is
-   * available, else `sdk.storage` reports unavailable. A desktop host injects
-   * its own backend (e.g. Tauri SQLite + files) here. See STORAGE-SPEC.md.
+   * Storage backend for `sdk.storage` (the app-namespaced store). When unset,
+   * a token-configured client uses the server-backed Cloud backend (unified-api
+   * → Supabase); with no token and nothing injected, `sdk.storage` reports
+   * unavailable (there is no local browser fallback). A host may inject its own
+   * backend here. See STORAGE-SPEC.md.
    */
   storage?: StorageBackend;
   /**
-   * File-workspace backend for `sdk.fs` (the local-first, app-namespaced file
-   * tree). When unset, the SDK uses a default browser OPFS backend if one is
-   * available, else `sdk.fs` reports unavailable. A desktop host injects its
-   * own backend (e.g. Tauri disk) here. See docs/capability-platform.md.
+   * File-workspace backend for `sdk.fs` (the app-namespaced file tree). When
+   * unset, a token-configured client uses the server-backed Cloud backend
+   * (unified-api → Supabase); with no token and nothing injected, `sdk.fs`
+   * reports unavailable (no local browser fallback). A host may inject its own
+   * backend here. See docs/capability-platform.md.
    */
   fs?: FsBackend;
 }
@@ -192,12 +194,12 @@ export class Core {
     return this.options.appId;
   }
 
-  /** The injected storage backend, if any. `undefined` falls back to browser IndexedDB. */
+  /** The injected storage backend, if any. `undefined` uses the Cloud backend when server-capable, else none. */
   get storageBackend(): StorageBackend | undefined {
     return this.options.storage;
   }
 
-  /** The injected fs backend, if any. `undefined` falls back to browser OPFS. */
+  /** The injected fs backend, if any. `undefined` uses the Cloud backend when server-capable, else none. */
   get fsBackend(): FsBackend | undefined {
     return this.options.fs;
   }
@@ -205,9 +207,10 @@ export class Core {
   /**
    * Whether the client can reach the server, i.e. it has a token provider
    * (trusted-token mode). When true and no backend is injected, `sdk.storage`
-   * and `sdk.fs` default to the server-backed Cloud backend (unified-api) rather
-   * than the local browser fallback — so app data follows the user across
-   * devices. The node OAuth client overrides this to always-true.
+   * and `sdk.fs` use the server-backed Cloud backend (unified-api → Supabase) so
+   * app data follows the user across devices. When false (and nothing injected)
+   * they are unavailable — there is no local browser fallback. The node OAuth
+   * client overrides this to always-true.
    */
   get serverCapable(): boolean {
     return this.options.token !== undefined;

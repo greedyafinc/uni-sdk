@@ -1,12 +1,13 @@
 // `sdk.storage` — the typed facade over a swappable StorageBackend. The app
 // declares typed collections; this layer encodes/decodes blob fields, applies
 // the read-only namespace guard, and casts untyped backend records back to `T`.
-// The default backend is the browser's IndexedDB; a host injects a SQLite+files
-// backend via `UnifiedAIOptions.storage`. See STORAGE-SPEC.md.
+// The backend is the server-backed Cloud store (unified-api → Supabase) whenever
+// a token is configured; a host may inject its own via `UnifiedAIOptions.storage`.
+// With no token and no injected backend, `sdk.storage` is unavailable — there is
+// no local browser fallback. See STORAGE-SPEC.md.
 import type { Core } from "../../core/core";
 import { CloudStorageBackend } from "./cloud";
 import { storageError } from "./errors";
-import { IndexedDbBackend } from "./indexeddb";
 import type {
   BackendQuery,
   BackendRecord,
@@ -26,17 +27,6 @@ import type {
 
 const utf8Encoder = new TextEncoder();
 const utf8Decoder = new TextDecoder();
-
-// One process-wide default IndexedDB backend, created lazily so importing the
-// SDK in a non-browser runtime never touches `indexedDB`. `null` means "no
-// local backend here" (e.g. Node without a host-injected backend).
-let cachedDefault: StorageBackend | null | undefined;
-function defaultBackend(): StorageBackend | null {
-  if (cachedDefault === undefined) {
-    cachedDefault = typeof indexedDB !== "undefined" ? new IndexedDbBackend() : null;
-  }
-  return cachedDefault;
-}
 
 function encodeBlob(raw: unknown): { bytes: Uint8Array; encoding: BlobEncoding } {
   if (typeof raw === "string") return { bytes: utf8Encoder.encode(raw), encoding: "utf8" };
@@ -266,14 +256,15 @@ export class Storage {
     // 1. An explicitly injected backend always wins (tests inject Memory; a host
     //    could inject a custom one).
     if (this.client.storageBackend) return this.client.storageBackend;
-    // 2. Server-capable clients (a token is configured) default to the cloud
-    //    backend so data follows the user across devices via unified-api.
+    // 2. Server-capable clients (a token is configured) use the cloud backend so
+    //    data lives in Supabase (via unified-api) and follows the user.
     if (this.client.serverCapable) {
       this.cloud ??= new CloudStorageBackend(this.client);
       return this.cloud;
     }
-    // 3. Otherwise fall back to the local browser store (or null if absent).
-    return defaultBackend();
+    // 3. No token and nothing injected: storage is unavailable. Supabase-only —
+    //    there is no local browser (IndexedDB) fallback.
+    return null;
   }
 
   /** Whether a usable storage backend exists in the current runtime. */

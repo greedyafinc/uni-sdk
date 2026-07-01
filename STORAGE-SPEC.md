@@ -1,5 +1,11 @@
 # `sdk.storage` — Local-First Storage for UnifiedApp Apps
 
+> **⚠️ Superseded (2026-06-27):** `sdk.storage` and `sdk.fs` are now **Supabase-only** (server-backed Cloud
+> backend via unified-api). The local browser fallbacks — `IndexedDbBackend` (storage) and `OpfsBackend` (fs) —
+> have been **removed**: with no token and no host-injected backend, `sdk.storage`/`sdk.fs` report *unavailable*
+> (there is no offline/local store). `MemoryBackend` remains for tests/injection only. The IndexedDB/OPFS
+> references below are retained as historical design context and no longer describe the shipped code.
+>
 > **Status:** Phases 1–2 implemented — Phase 1 (uni-sdk `sdk.storage` + IndexedDB backend + design-app migration);
 > Phase 2 (Tauri SQLite + file-blob backend in UnifiedApp2, injected via the host SDK). Phase 3 (cloud sync)
 > proposed · **Date:** 2026-06-22 · **Owner:** platform

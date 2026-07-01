@@ -1,5 +1,6 @@
-// Shared helpers for the in-process backends (IndexedDB + Memory). The Tauri
-// host backend implements the same contract in Rust/SQL and does not use these.
+// Shared helpers for the in-process Memory backend (used in tests / non-server
+// runtimes). A host-injected backend implements the same contract itself and
+// does not use these.
 import type { BackendQuery } from "./types";
 
 // Composite keys are JSON-encoded tuples — unambiguous regardless of what
