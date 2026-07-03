@@ -86,6 +86,17 @@ export * from "../resources/logos";
 export { UnifiedAI } from "./client";
 export type { UnifiedAIOptions } from "./client";
 
+// Local-first Ecosystem API discovery (PROTOCOL.md "Local ecosystem hosting & discovery").
+// Resolves the running desktop app's loopback hosting (env handoff → discovery file + probe
+// → class-4 enroll upgrade), or null to fall back to cloud.
+export {
+  discoverLocalEcosystem,
+  defaultEcosystemDiscoveryPath,
+  type LocalEcosystem,
+  type DiscoverOptions,
+  type EcosystemDiscoveryRecord,
+} from "./_internal/ecosystem-discovery";
+
 // Node-specific configuration types.
 export type { DiscoveryReader } from "./_internal/discovery";
 export type { EnvReader } from "./_internal/env";

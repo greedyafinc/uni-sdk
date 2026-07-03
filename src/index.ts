@@ -75,7 +75,10 @@ export { parseSSE } from "./core/_internal/sse";
 // Explicit /index: agent is a directory barrel (same dts-fixup reason as storage).
 export * from "./resources/agent/index";
 export * from "./resources/audio";
+export * from "./resources/actions";
+export * from "./resources/artifacts";
 export * from "./resources/chat";
+export * from "./resources/memory";
 export * from "./resources/embeddings";
 export * from "./resources/files";
 // Explicit /index: fs is a directory barrel (same dts-fixup reason as storage).

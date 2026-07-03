@@ -10,6 +10,9 @@ import { Messages } from "../resources/messages";
 import { Models } from "../resources/models";
 import { Projects } from "../resources/projects";
 import { References } from "../resources/references";
+import { Artifacts } from "../resources/artifacts";
+import { Memory } from "../resources/memory";
+import { Actions } from "../resources/actions";
 import { Responses } from "../resources/responses";
 import { Storage } from "../resources/storage";
 import { Usage } from "../resources/usage";
@@ -168,6 +171,30 @@ export class UnifiedAI extends Core {
    * a `uniref://` handle (or linkId) to a portion snapshot or a live artifact.
    */
   readonly references: References = new References(this);
+
+  /**
+   * Artifacts (`sdk.artifacts`). The cross-app export contract — publish a
+   * canonical, self-contained snapshot of an app's work (design/doc/sheet) that
+   * chat, other apps, and external agents can consume. Versions are whole
+   * snapshots; `resolveRef` reads an `artifact://<id>@<v>` reference.
+   */
+  readonly artifacts: Artifacts = new Artifacts(this);
+
+  /**
+   * Agent memory (`sdk.memory`). The server-side append-only ledger — append
+   * events (the server stamps taint origin + applied/proposed status from the
+   * credential), sync since a cursor, and lexically query. Standalone-app parity
+   * with the desktop shell's memory.
+   */
+  readonly memory: Memory = new Memory(this);
+
+  /**
+   * Cross-app actions (`sdk.actions`). Declare this app's ActionSpecs and SERVE
+   * invocations over a pull channel (`serve(handlers)` polls, runs, responds) — or
+   * INVOKE another app's action (`invoke` + `awaitResult`). Offline apps report as
+   * unavailable so callers can fall back to artifacts.
+   */
+  readonly actions: Actions = new Actions(this);
 
   /**
    * App-namespaced storage (`STORAGE-SPEC.md`). Typed collections over a
