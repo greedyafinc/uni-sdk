@@ -264,8 +264,7 @@ export function summarizeUsage(
       renewsAt: plan.renews_at,
       autoRenew: plan.auto_renew,
       hasTerm: plan.plan_expires_at !== null,
-      status:
-        plan.plan_expires_at === null ? null : plan.auto_renew ? "renews" : "expires",
+      status: plan.plan_expires_at === null ? null : plan.auto_renew ? "renews" : "expires",
       endsInLabel: formatTimeUntil(plan.plan_expires_at, now),
     },
   };
