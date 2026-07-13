@@ -231,15 +231,18 @@ export class Projects {
 
   /** List a project's members (owner or a member may read). */
   async members(projectId: string): Promise<Array<{ userId: string; role: string }>> {
-    const { members } = await this.client.request<{ members: Array<{ userId: string; role: string }> }>(
-      `/api/v1/projects/${encodeURIComponent(projectId)}/members`,
-      { method: "GET" },
-    );
+    const { members } = await this.client.request<{
+      members: Array<{ userId: string; role: string }>;
+    }>(`/api/v1/projects/${encodeURIComponent(projectId)}/members`, { method: "GET" });
     return members;
   }
 
   /** Share a project with a user (owner only). */
-  addMember(projectId: string, userId: string, role = "member"): Promise<{ projectId: string; userId: string; role: string }> {
+  addMember(
+    projectId: string,
+    userId: string,
+    role = "member",
+  ): Promise<{ projectId: string; userId: string; role: string }> {
     return this.client.request(`/api/v1/projects/${encodeURIComponent(projectId)}/members`, {
       method: "POST",
       body: { userId, role },

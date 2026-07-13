@@ -63,21 +63,29 @@ export class Actions {
 
   /** Register (or update) an app you develop: metadata + declared scopes. */
   registerApp(input: RegisterAppInput): Promise<RegisteredApp> {
-    return this.client.request<RegisteredApp>("/api/v1/registry/apps", { method: "POST", body: input });
+    return this.client.request<RegisteredApp>("/api/v1/registry/apps", {
+      method: "POST",
+      body: input,
+    });
   }
 
   /** List the apps you've registered. */
   async listApps(): Promise<RegisteredApp[]> {
-    const res = await this.client.request<{ apps: RegisteredApp[] }>("/api/v1/registry/apps", { method: "GET" });
+    const res = await this.client.request<{ apps: RegisteredApp[] }>("/api/v1/registry/apps", {
+      method: "GET",
+    });
     return res.apps;
   }
 
   /** Declare this app's ActionSpecs (idempotent upsert). */
   async register(actions: ActionSpec[]): Promise<RegisteredAction[]> {
-    const res = await this.client.request<{ actions: RegisteredAction[] }>("/api/v1/registry/actions", {
-      method: "POST",
-      body: { actions },
-    });
+    const res = await this.client.request<{ actions: RegisteredAction[] }>(
+      "/api/v1/registry/actions",
+      {
+        method: "POST",
+        body: { actions },
+      },
+    );
     return res.actions;
   }
 
@@ -85,7 +93,10 @@ export class Actions {
   async list(appId?: string): Promise<RegisteredAction[]> {
     const req: RequestOptions = { method: "GET" };
     if (appId) req.query = { appId };
-    const res = await this.client.request<{ actions: RegisteredAction[] }>("/api/v1/registry/actions", req);
+    const res = await this.client.request<{ actions: RegisteredAction[] }>(
+      "/api/v1/registry/actions",
+      req,
+    );
     return res.actions;
   }
 
@@ -95,7 +106,10 @@ export class Actions {
   invoke(appId: string, actionId: string, args?: unknown): Promise<InvokeResult> {
     const body: Record<string, unknown> = { appId, actionId };
     if (args !== undefined) body.args = args;
-    return this.client.request<InvokeResult>("/api/v1/registry/invocations", { method: "POST", body });
+    return this.client.request<InvokeResult>("/api/v1/registry/invocations", {
+      method: "POST",
+      body,
+    });
   }
 
   /** Poll a single invocation's result. */
@@ -107,7 +121,10 @@ export class Actions {
   }
 
   /** Poll until the invocation completes or the deadline passes. */
-  async awaitResult(id: string, options: { timeoutMs?: number; intervalMs?: number } = {}): Promise<InvocationResult> {
+  async awaitResult(
+    id: string,
+    options: { timeoutMs?: number; intervalMs?: number } = {},
+  ): Promise<InvocationResult> {
     const timeoutMs = options.timeoutMs ?? 30_000;
     const intervalMs = options.intervalMs ?? 400;
     const start = Date.now();
@@ -122,7 +139,10 @@ export class Actions {
 
   /** Register a push webhook (the server POSTs invocations to it), or clear it with "". */
   setWebhook(url: string): Promise<{ ok: boolean }> {
-    return this.client.request<{ ok: boolean }>("/api/v1/registry/webhook", { method: "POST", body: { url } });
+    return this.client.request<{ ok: boolean }>("/api/v1/registry/webhook", {
+      method: "POST",
+      body: { url },
+    });
   }
 
   /** Pull (and clear) this app's pending invocations. Also marks the app live. */
@@ -135,7 +155,10 @@ export class Actions {
   }
 
   /** Post an invocation's result or error. */
-  respond(id: string, payload: { result?: unknown } | { error: { code: string; message: string } }): Promise<{ ok: boolean }> {
+  respond(
+    id: string,
+    payload: { result?: unknown } | { error: { code: string; message: string } },
+  ): Promise<{ ok: boolean }> {
     return this.client.request<{ ok: boolean }>(
       `/api/v1/registry/invocations/${encodeURIComponent(id)}/respond`,
       { method: "POST", body: payload },
@@ -147,7 +170,10 @@ export class Actions {
    * post each result. Returns a stop function. Unknown actions and handler throws are
    * reported back as errors so the invoker never hangs.
    */
-  serve(handlers: Record<string, ActionHandler>, options: { intervalMs?: number } = {}): () => void {
+  serve(
+    handlers: Record<string, ActionHandler>,
+    options: { intervalMs?: number } = {},
+  ): () => void {
     const intervalMs = options.intervalMs ?? 500;
     let stopped = false;
     // Run one already-pulled job to completion, isolating BOTH the handler and the two
@@ -165,7 +191,10 @@ export class Actions {
           await this.respond(job.id, { result });
         } catch (err) {
           await this.respond(job.id, {
-            error: { code: "handler_error", message: err instanceof Error ? err.message : "handler failed" },
+            error: {
+              code: "handler_error",
+              message: err instanceof Error ? err.message : "handler failed",
+            },
           });
         }
       } catch {
