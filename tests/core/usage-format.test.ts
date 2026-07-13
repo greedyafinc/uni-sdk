@@ -19,6 +19,9 @@ function makeUsage(overrides: Partial<UsageResponse> = {}): UsageResponse {
       limit_period_seconds: 2_592_000,
       monthly_price: 20,
       annual_price: 200,
+      plan_expires_at: iso(25 * 24 * 3600_000),
+      renews_at: iso(25 * 24 * 3600_000),
+      auto_renew: true,
     },
     period: {
       input_tokens: 12_340,
@@ -143,5 +146,62 @@ describe("summarizeUsage", () => {
     const neg = summarizeUsage(makeUsage({ credits: { balance: -5 } }), { now: NOW });
     expect(neg.credits.hasBalance).toBe(true);
     expect(neg.credits.balanceLabel).toBe("$-5.00");
+  });
+
+  test("subscription: an active auto-renewing term reads as 'renews'", () => {
+    const s = summarizeUsage(makeUsage(), { now: NOW });
+    expect(s.subscription.hasTerm).toBe(true);
+    expect(s.subscription.autoRenew).toBe(true);
+    expect(s.subscription.status).toBe("renews");
+    expect(s.subscription.renewsAt).toBe(iso(25 * 24 * 3600_000));
+    expect(s.subscription.expiresAt).toBe(iso(25 * 24 * 3600_000));
+    expect(s.subscription.endsInLabel).toBe("25d");
+  });
+
+  test("subscription: a cancelled term reads as 'expires' with null renewsAt", () => {
+    const s = summarizeUsage(
+      makeUsage({
+        plan: {
+          id: 2,
+          name: "Pro",
+          limit: 1_000_000,
+          limit_period_seconds: 2_592_000,
+          monthly_price: 20,
+          annual_price: 200,
+          plan_expires_at: iso(10 * 24 * 3600_000),
+          renews_at: null,
+          auto_renew: false,
+        },
+      }),
+      { now: NOW },
+    );
+    expect(s.subscription.status).toBe("expires");
+    expect(s.subscription.autoRenew).toBe(false);
+    expect(s.subscription.renewsAt).toBeNull();
+    expect(s.subscription.expiresAt).toBe(iso(10 * 24 * 3600_000));
+    expect(s.subscription.endsInLabel).toBe("10d");
+  });
+
+  test("subscription: a Free / no-term plan has no status", () => {
+    const s = summarizeUsage(
+      makeUsage({
+        plan: {
+          id: 0,
+          name: "Free",
+          limit: 0,
+          limit_period_seconds: 0,
+          monthly_price: null,
+          annual_price: null,
+          plan_expires_at: null,
+          renews_at: null,
+          auto_renew: true,
+        },
+      }),
+      { now: NOW },
+    );
+    expect(s.subscription.hasTerm).toBe(false);
+    expect(s.subscription.status).toBeNull();
+    expect(s.subscription.expiresAt).toBeNull();
+    expect(s.subscription.endsInLabel).toBeNull();
   });
 });

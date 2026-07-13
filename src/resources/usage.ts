@@ -7,6 +7,19 @@ export interface UsagePlan {
   limit_period_seconds: number;
   monthly_price: number | null;
   annual_price: number | null;
+  /**
+   * Current subscription term end (ISO), or `null` for Free / no term / a
+   * lapsed plan. Already resolved to the effective tier server-side.
+   */
+  plan_expires_at: string | null;
+  /**
+   * The instant the term auto-renews — equal to {@link plan_expires_at} while
+   * {@link auto_renew} is on, and `null` once the user has cancelled (access
+   * then runs out at `plan_expires_at`) or when there is no term.
+   */
+  renews_at: string | null;
+  /** Whether the term extends at its end rather than lapsing to Free. */
+  auto_renew: boolean;
 }
 
 export interface UsagePeriod {
@@ -160,11 +173,35 @@ export interface UsageSummaryCredits {
   hasBalance: boolean;
 }
 
+export interface UsageSummarySubscription {
+  /** ISO term end, or `null` for Free / no term / lapsed. */
+  expiresAt: string | null;
+  /** ISO renewal instant (term end while auto-renew is on), else `null`. */
+  renewsAt: string | null;
+  autoRenew: boolean;
+  /** True when there is an active paid term (i.e. `expiresAt` is set). */
+  hasTerm: boolean;
+  /**
+   * Which wording the host should render for the term boundary:
+   * `"renews"` (auto-renew on) or `"expires"` (cancelled), or `null` when there
+   * is no term. The host pairs it with the localized date of
+   * {@link renewsAt}/{@link expiresAt} — e.g. "Renews on {date}".
+   */
+  status: "renews" | "expires" | null;
+  /**
+   * Short "time until" token for the term boundary (e.g. `"12d"`), or `null`
+   * when there is no future term. Same monotonic flooring as the other
+   * `*InLabel` tokens.
+   */
+  endsInLabel: string | null;
+}
+
 export interface UsageSummary {
   planName: string;
   daily: UsageSummaryDaily;
   period: UsageSummaryPeriod;
   credits: UsageSummaryCredits;
+  subscription: UsageSummarySubscription;
 }
 
 /**
@@ -221,6 +258,15 @@ export function summarizeUsage(
       // Any non-zero balance is worth surfacing — including a negative one
       // (e.g. an owed / refund state), which formatUsd renders as "$-X.XX".
       hasBalance: credits.balance !== 0,
+    },
+    subscription: {
+      expiresAt: plan.plan_expires_at,
+      renewsAt: plan.renews_at,
+      autoRenew: plan.auto_renew,
+      hasTerm: plan.plan_expires_at !== null,
+      status:
+        plan.plan_expires_at === null ? null : plan.auto_renew ? "renews" : "expires",
+      endsInLabel: formatTimeUntil(plan.plan_expires_at, now),
     },
   };
 }
