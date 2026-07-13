@@ -86,8 +86,15 @@ export interface ListArtifactsOptions {
 function encodePreview(p: PreviewInput): { previewB64: string; previewMime?: string } {
   const c = p.content;
   const bytes =
-    typeof c === "string" ? new TextEncoder().encode(c) : c instanceof Uint8Array ? c : new Uint8Array(c);
-  return { previewB64: bytesToB64(bytes), ...(p.mime !== undefined ? { previewMime: p.mime } : {}) };
+    typeof c === "string"
+      ? new TextEncoder().encode(c)
+      : c instanceof Uint8Array
+        ? c
+        : new Uint8Array(c);
+  return {
+    previewB64: bytesToB64(bytes),
+    ...(p.mime !== undefined ? { previewMime: p.mime } : {}),
+  };
 }
 
 export class Artifacts {
@@ -114,7 +121,10 @@ export class Artifacts {
     if (options.kind) query.kind = options.kind;
     if (Object.keys(query).length) req.query = query;
     if (options.signal) req.signal = options.signal;
-    const { artifacts } = await this.client.request<{ artifacts: Artifact[] }>("/api/v1/artifacts", req);
+    const { artifacts } = await this.client.request<{ artifacts: Artifact[] }>(
+      "/api/v1/artifacts",
+      req,
+    );
     return artifacts;
   }
 

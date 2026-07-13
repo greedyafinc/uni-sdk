@@ -15,6 +15,9 @@ const SAMPLE_USAGE: UsageResponse = {
     limit_period_seconds: 86400,
     monthly_price: null,
     annual_price: null,
+    plan_expires_at: null,
+    renews_at: null,
+    auto_renew: true,
   },
   period: {
     input_tokens: 1234,

@@ -19,7 +19,10 @@
             "limit": 0,
             "limit_period_seconds": 0,
             "monthly_price": 0,
-            "annual_price": 0
+            "annual_price": 0,
+            "plan_expires_at": null,
+            "renews_at": null,
+            "auto_renew": true
           },
           "period": {
             "input_tokens": 0,

@@ -53,7 +53,11 @@ export interface DiscoverOptions {
 }
 
 /** Exchange an OAuth token for a scoped class-4 local token via /enroll; null on failure. */
-async function enrollLocal(baseUrl: string, oauthToken: string, timeoutMs: number): Promise<string | null> {
+async function enrollLocal(
+  baseUrl: string,
+  oauthToken: string,
+  timeoutMs: number,
+): Promise<string | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -83,7 +87,9 @@ async function enrollLocal(baseUrl: string, oauthToken: string, timeoutMs: numbe
  *      enrolls for real scopes (§9), which is a later addition.
  * A stale file (dead port) resolves to null because the probe fails — never throws.
  */
-export async function discoverLocalEcosystem(opts: DiscoverOptions = {}): Promise<LocalEcosystem | null> {
+export async function discoverLocalEcosystem(
+  opts: DiscoverOptions = {},
+): Promise<LocalEcosystem | null> {
   // 1. Env handoff (bundled apps) — the shell injected these for this child.
   const envUrl = process.env.UNIFIEDAI_ECOSYSTEM_URL;
   const envToken = process.env.UNIFIEDAI_ECOSYSTEM_TOKEN;

@@ -68,7 +68,10 @@ export class Memory {
     if (options.projectId) query.projectId = options.projectId;
     if (Object.keys(query).length) req.query = query;
     if (options.signal) req.signal = options.signal;
-    return this.client.request<{ events: MemoryEvent[]; cursor: number }>("/api/v1/memory/events", req);
+    return this.client.request<{ events: MemoryEvent[]; cursor: number }>(
+      "/api/v1/memory/events",
+      req,
+    );
   }
 
   /** Lexical search over applied memory. */

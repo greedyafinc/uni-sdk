@@ -23,7 +23,9 @@ function discoveryFile(record: unknown): string {
 
 afterEach(() => {
   globalThis.fetch = realFetch;
+  // biome-ignore lint/performance/noDelete: delete truly unsets the env var; assigning undefined would coerce it to the string "undefined".
   delete process.env.UNIFIEDAI_ECOSYSTEM_URL;
+  // biome-ignore lint/performance/noDelete: delete truly unsets the env var; assigning undefined would coerce it to the string "undefined".
   delete process.env.UNIFIEDAI_ECOSYSTEM_TOKEN;
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
@@ -53,9 +55,15 @@ describe("discoverLocalEcosystem — env handoff (bundled/class-3)", () => {
 
 describe("discoverLocalEcosystem — class-4 enroll upgrade", () => {
   test("an OAuth token upgrades the anonymous discovery token via /enroll", async () => {
-    const path = discoveryFile({ url: "http://127.0.0.1:5555", token: "anon", pid: 1, started_at: 0 });
+    const path = discoveryFile({
+      url: "http://127.0.0.1:5555",
+      token: "anon",
+      pid: 1,
+      started_at: 0,
+    });
     globalThis.fetch = (async (url: string, init?: RequestInit) => {
-      if (String(url).endsWith("/health")) return new Response(JSON.stringify({ service: "ecosystem" }), { status: 200 });
+      if (String(url).endsWith("/health"))
+        return new Response(JSON.stringify({ service: "ecosystem" }), { status: 200 });
       if (String(url).endsWith("/enroll")) {
         expect((init?.headers as Record<string, string>).authorization).toBe("Bearer my-oauth");
         return new Response(JSON.stringify({ token: "scoped-tok" }), { status: 200 });
@@ -69,7 +77,12 @@ describe("discoverLocalEcosystem — class-4 enroll upgrade", () => {
   });
 
   test("enroll failure (offline) falls back to the anonymous token", async () => {
-    const path = discoveryFile({ url: "http://127.0.0.1:5555", token: "anon", pid: 1, started_at: 0 });
+    const path = discoveryFile({
+      url: "http://127.0.0.1:5555",
+      token: "anon",
+      pid: 1,
+      started_at: 0,
+    });
     globalThis.fetch = (async (url: string) =>
       String(url).endsWith("/health")
         ? new Response(JSON.stringify({ service: "ecosystem" }), { status: 200 })
@@ -83,12 +96,20 @@ describe("discoverLocalEcosystem — class-4 enroll upgrade", () => {
 
 describe("discoverLocalEcosystem", () => {
   test("live hosting → { baseUrl, token }", async () => {
-    const path = discoveryFile({ url: "http://127.0.0.1:5555", token: "tok", pid: 1, started_at: 0 });
+    const path = discoveryFile({
+      url: "http://127.0.0.1:5555",
+      token: "tok",
+      pid: 1,
+      started_at: 0,
+    });
     globalThis.fetch = (async (url: string) => {
       expect(url).toBe("http://127.0.0.1:5555/health");
       return new Response(JSON.stringify({ ok: true, service: "ecosystem" }), { status: 200 });
     }) as unknown as typeof fetch;
-    expect(await discoverLocalEcosystem({ path })).toEqual({ baseUrl: "http://127.0.0.1:5555", token: "tok" });
+    expect(await discoverLocalEcosystem({ path })).toEqual({
+      baseUrl: "http://127.0.0.1:5555",
+      token: "tok",
+    });
   });
 
   test("missing discovery file → null (no fetch)", async () => {
@@ -97,7 +118,9 @@ describe("discoverLocalEcosystem", () => {
       called = true;
       return new Response("{}");
     }) as unknown as typeof fetch;
-    expect(await discoverLocalEcosystem({ path: join(tmpdir(), "does-not-exist-eco.json") })).toBeNull();
+    expect(
+      await discoverLocalEcosystem({ path: join(tmpdir(), "does-not-exist-eco.json") }),
+    ).toBeNull();
     expect(called).toBe(false);
   });
 
@@ -120,14 +143,28 @@ describe("discoverLocalEcosystem", () => {
   });
 
   test("wrong service identity → null (not our server)", async () => {
-    const path = discoveryFile({ url: "http://127.0.0.1:5555", token: "tok", pid: 1, started_at: 0 });
-    globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true, service: "something-else" }), { status: 200 })) as unknown as typeof fetch;
+    const path = discoveryFile({
+      url: "http://127.0.0.1:5555",
+      token: "tok",
+      pid: 1,
+      started_at: 0,
+    });
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ ok: true, service: "something-else" }), {
+        status: 200,
+      })) as unknown as typeof fetch;
     expect(await discoverLocalEcosystem({ path })).toBeNull();
   });
 
   test("non-200 health → null", async () => {
-    const path = discoveryFile({ url: "http://127.0.0.1:5555", token: "tok", pid: 1, started_at: 0 });
-    globalThis.fetch = (async () => new Response("nope", { status: 503 })) as unknown as typeof fetch;
+    const path = discoveryFile({
+      url: "http://127.0.0.1:5555",
+      token: "tok",
+      pid: 1,
+      started_at: 0,
+    });
+    globalThis.fetch = (async () =>
+      new Response("nope", { status: 503 })) as unknown as typeof fetch;
     expect(await discoverLocalEcosystem({ path })).toBeNull();
   });
 });
