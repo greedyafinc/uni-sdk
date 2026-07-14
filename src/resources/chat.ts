@@ -68,6 +68,15 @@ export interface ChatCompletionToolCall {
   id: string;
   type: "function";
   function: { name: string; arguments: string };
+  /**
+   * Opaque provider signature that must be echoed back verbatim on the next
+   * request. Gemini/Vertex stamps every function call it emits while thinking
+   * with a `thoughtSignature`; omitting it on the follow-up turn makes Google
+   * reject or degrade the tool call. The gateway surfaces it here and re-attaches
+   * it as `providerOptions` on the way back in — so callers only need to preserve
+   * it round-trip (which the agent loop does automatically).
+   */
+  thought_signature?: string;
 }
 
 export interface ChatCompletionToolDefinition {
@@ -185,6 +194,9 @@ export interface ChatCompletionChunkChoice {
       id?: string;
       type?: "function";
       function?: { name?: string; arguments?: string };
+      /** See {@link ChatCompletionToolCall.thought_signature}. Arrives on its own
+       *  delta after the tool's argument deltas, keyed to the same `index`. */
+      thought_signature?: string;
     }>;
   };
   finish_reason: "stop" | "length" | "tool_calls" | "content_filter" | null;

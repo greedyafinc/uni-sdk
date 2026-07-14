@@ -2,7 +2,21 @@ import { LOGO_DATA_URIS, type LogoSlug } from "./logos.generated";
 
 export type LogoTheme = "light" | "dark";
 
-export type ProviderLogoInput = string | { author?: string | null } | null | undefined;
+/**
+ * Anything that can resolve to a brand logo: a bare author/provider name, or a
+ * catalog model-shaped object. UI stores often shim `author`; the gateway
+ * returns `model_author.name` / `owned_by` — accept all three so Meta (and
+ * every other author) renders without a client-side rename.
+ */
+export type ProviderLogoInput =
+  | string
+  | {
+      author?: string | null;
+      model_author?: { name?: string | null } | null;
+      owned_by?: string | null;
+    }
+  | null
+  | undefined;
 
 const FALLBACK_SLUG: LogoSlug = "anything-llm-light";
 
@@ -10,7 +24,10 @@ const NORMALIZE_RE = /[\s.]+/g;
 
 function normalizeKey(input: ProviderLogoInput): string | null {
   if (!input) return null;
-  const raw = typeof input === "string" ? input : input.author;
+  const raw =
+    typeof input === "string"
+      ? input
+      : (input.author ?? input.model_author?.name ?? input.owned_by);
   if (!raw) return null;
   return raw.toLowerCase().replace(NORMALIZE_RE, "");
 }
@@ -58,6 +75,5 @@ export interface ModelLogoInput {
  * key on — logos are indexed by author/provider name, not by model id.
  */
 export function getModelLogo(model: ModelLogoInput, theme: LogoTheme = "light"): string {
-  const author = model.model_author?.name ?? model.owned_by ?? null;
-  return getProviderLogo(author, theme);
+  return getProviderLogo(model, theme);
 }

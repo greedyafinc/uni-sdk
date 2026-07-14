@@ -6,6 +6,14 @@ describe("getProviderLogo", () => {
     const uri = getProviderLogo("Anthropic");
     expect(uri.startsWith("data:")).toBe(true);
   });
+  test("resolves Meta from string, author shim, and catalog model fields", () => {
+    const fromString = getProviderLogo("Meta");
+    expect(fromString.startsWith("data:")).toBe(true);
+    expect(fromString).not.toBe(getProviderLogo(null));
+    expect(getProviderLogo({ author: "Meta" })).toBe(fromString);
+    expect(getProviderLogo({ model_author: { name: "Meta" } })).toBe(fromString);
+    expect(getProviderLogo({ owned_by: "Meta" })).toBe(fromString);
+  });
   test("falls back to a data-URI for unknown / null input", () => {
     expect(getProviderLogo(null).startsWith("data:")).toBe(true);
     expect(getProviderLogo("totally-unknown-provider").startsWith("data:")).toBe(true);
@@ -24,6 +32,11 @@ describe("getModelLogo", () => {
     const byOwner = getModelLogo({ owned_by: "OpenAI" });
     expect(byOwner).toBe(getProviderLogo("OpenAI"));
   });
+  test("resolves Meta author logo from catalog model shape", () => {
+    expect(getModelLogo({ model_author: { name: "Meta" }, owned_by: "Meta" })).toBe(
+      getProviderLogo("Meta"),
+    );
+  });
   test("falls back to the neutral mark for an empty model", () => {
     expect(getModelLogo({}).startsWith("data:")).toBe(true);
   });
@@ -41,5 +54,8 @@ describe("listProviderLogos", () => {
     const slugs = listProviderLogos();
     expect(Array.isArray(slugs)).toBe(true);
     expect(slugs.some((s) => s.endsWith("-dark"))).toBe(false);
+  });
+  test("includes meta", () => {
+    expect(listProviderLogos()).toContain("meta");
   });
 });

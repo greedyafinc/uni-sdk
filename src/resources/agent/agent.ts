@@ -42,11 +42,14 @@ interface ToolCallAccumulator {
   id?: string;
   name?: string;
   arguments: string;
+  /** Provider signature (e.g. Gemini/Vertex `thoughtSignature`) that must be
+   *  echoed back on the next request — see ChatCompletionToolCall. */
+  thoughtSignature?: string;
 }
 
 interface StreamTurnResult {
   assistantText: string;
-  toolCalls: Array<{ id: string; name: string; arguments: string }>;
+  toolCalls: Array<{ id: string; name: string; arguments: string; thoughtSignature?: string }>;
   finishReason: string | null;
   usage: { prompt_tokens?: number; completion_tokens?: number } | null;
   /**
@@ -97,6 +100,10 @@ async function consumeChatStream(
           if (tc.id) acc.id = tc.id;
           if (tc.function?.name) acc.name = tc.function.name;
           if (typeof tc.function?.arguments === "string") acc.arguments += tc.function.arguments;
+          // The gateway emits the provider signature on its own delta (keyed to
+          // the same index) after the argument deltas — capture it so we can echo
+          // it back verbatim next turn, or Gemini rejects the follow-up tool call.
+          if (typeof tc.thought_signature === "string") acc.thoughtSignature = tc.thought_signature;
           toolAcc.set(index, acc);
         }
         // Heartbeat for the tool currently streaming (the last one with a name) so
@@ -126,6 +133,7 @@ async function consumeChatStream(
       id: acc.id || `call_${index}`,
       name: acc.name || "",
       arguments: acc.arguments,
+      ...(acc.thoughtSignature ? { thoughtSignature: acc.thoughtSignature } : {}),
     }))
     .filter((tc) => tc.name);
 
@@ -173,6 +181,10 @@ export class Agent {
     // result so a host can distinguish a clean stop from an output-token-limit
     // truncation (`"length"`) and auto-recover (e.g. retry with a larger budget).
     let lastFinishReason: string | null = null;
+    // Usage totals across turns; `lastTurnInputTokens` tracks the final
+    // request's prompt size (= real context occupancy). Stays undefined when
+    // the gateway never emits usage, so the result omits the field entirely.
+    let usageTotal: RunAgentResult["usage"];
 
     for (let step = 0; step < maxSteps; step++) {
       if (signal.aborted)
@@ -180,6 +192,7 @@ export class Agent {
           ok: false,
           canceled: true,
           ...(resolvedModel ? { model: resolvedModel } : {}),
+          ...(usageTotal ? { usage: usageTotal } : {}),
           producedOutput,
           messages,
         };
@@ -208,6 +221,7 @@ export class Agent {
             ok: false,
             canceled: true,
             ...(resolvedModel ? { model: resolvedModel } : {}),
+            ...(usageTotal ? { usage: usageTotal } : {}),
             producedOutput,
             messages,
           };
@@ -216,6 +230,7 @@ export class Agent {
           error: err instanceof Error ? err.message : String(err),
           ...errorDetail(err),
           ...(resolvedModel ? { model: resolvedModel } : {}),
+          ...(usageTotal ? { usage: usageTotal } : {}),
           producedOutput,
           messages,
         };
@@ -234,6 +249,12 @@ export class Agent {
           usage.outputTokens = turn.usage.completion_tokens;
         }
         emit({ type: "usage", usage });
+        usageTotal ??= { inputTokens: 0, outputTokens: 0 };
+        usageTotal.inputTokens += turn.usage.prompt_tokens ?? 0;
+        usageTotal.outputTokens += turn.usage.completion_tokens ?? 0;
+        if (turn.usage.prompt_tokens !== undefined) {
+          usageTotal.lastTurnInputTokens = turn.usage.prompt_tokens;
+        }
       }
 
       const assistantMessage: ChatCompletionMessage = {
@@ -249,6 +270,9 @@ export class Agent {
                 // `JSON.parse` it on the follow-up turn — `""` is invalid JSON
                 // and 500s the next request, aborting the loop.
                 function: { name: tc.name, arguments: tc.arguments.trim() ? tc.arguments : "{}" },
+                // Echo the provider signature back so the gateway can re-attach it
+                // to the tool call for Gemini/Vertex on the next request.
+                ...(tc.thoughtSignature ? { thought_signature: tc.thoughtSignature } : {}),
               })),
             }
           : {}),
@@ -269,6 +293,7 @@ export class Agent {
               "The model's reply was cut off at the output-token limit before it produced any result — it likely spent the budget on internal reasoning. Retry, or switch to a different (non-reasoning) model.",
             errorCode: "response_truncated",
             ...(resolvedModel ? { model: resolvedModel } : {}),
+            ...(usageTotal ? { usage: usageTotal } : {}),
             producedOutput,
             messages,
           };
@@ -276,6 +301,7 @@ export class Agent {
         return {
           ok: true,
           ...(resolvedModel ? { model: resolvedModel } : {}),
+          ...(usageTotal ? { usage: usageTotal } : {}),
           ...(lastFinishReason ? { finishReason: lastFinishReason } : {}),
           producedOutput,
           messages,
@@ -290,6 +316,7 @@ export class Agent {
             ok: false,
             canceled: true,
             ...(resolvedModel ? { model: resolvedModel } : {}),
+            ...(usageTotal ? { usage: usageTotal } : {}),
             producedOutput,
             messages,
           };
@@ -329,6 +356,7 @@ export class Agent {
         ok: true,
         ...(resolvedModel ? { model: resolvedModel } : {}),
         ...(lastFinishReason ? { finishReason: lastFinishReason } : {}),
+        ...(usageTotal ? { usage: usageTotal } : {}),
         producedOutput,
         messages,
       };
@@ -336,6 +364,7 @@ export class Agent {
       ok: false,
       error: "Reached the tool-call limit without output.",
       ...(resolvedModel ? { model: resolvedModel } : {}),
+      ...(usageTotal ? { usage: usageTotal } : {}),
       producedOutput,
       messages,
     };

@@ -21,6 +21,11 @@ export interface Model {
   logo: string | null;
   model_author: ModelAuthor;
   is_custom?: boolean;
+  /**
+   * The model's context window in tokens, from the gateway's catalog. Null or
+   * absent when unknown (the `auto` router, custom backends, older gateways).
+   */
+  context_size?: number | null;
 }
 
 export interface ListModelsResponse {

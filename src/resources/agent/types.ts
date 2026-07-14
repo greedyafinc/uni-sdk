@@ -119,6 +119,17 @@ export interface RunAgentResult {
    * turn, or against a host bundling an older uni-sdk that doesn't capture it.
    */
   finishReason?: string;
+  /**
+   * Token usage aggregated across every streamed turn of the run, from the
+   * gateway's `stream_options.include_usage` chunks. `inputTokens`/
+   * `outputTokens` are run totals (input is per-request, so re-sent context is
+   * counted every turn). `lastTurnInputTokens` is the prompt size of the FINAL
+   * request — i.e. how many tokens of the model's context window the transcript
+   * actually occupied — which is what context-usage meters want. Absent when the
+   * gateway never emitted usage (e.g. an older gateway, or a run that failed
+   * before its first turn finished).
+   */
+  usage?: { inputTokens: number; outputTokens: number; lastTurnInputTokens?: number };
   /** Whether any assistant text or tool activity was produced. */
   producedOutput: boolean;
   /** The full transcript after the run — persist it to continue/refine later. */
