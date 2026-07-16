@@ -324,7 +324,12 @@ describe("sdk.sync — listWorkspaces (discovery)", () => {
     server.registerWorkspace("ws-team", { name: "Acme", kind: "team", role: "member" });
 
     const list = await makeSdk(server).sync.listWorkspaces();
-    expect(list).toContainEqual({ id: "ws-personal", name: "Personal", kind: "personal", role: "owner" });
+    expect(list).toContainEqual({
+      id: "ws-personal",
+      name: "Personal",
+      kind: "personal",
+      role: "owner",
+    });
     expect(list).toContainEqual({ id: "ws-team", name: "Acme", kind: "team", role: "member" });
     expect(list).toHaveLength(2);
   });

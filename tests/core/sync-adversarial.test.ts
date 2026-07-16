@@ -84,7 +84,8 @@ class GatedServer {
   }
 
   fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url =
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const method = (init?.method ?? "GET").toUpperCase();
     const isBootstrap = url.includes("/bootstrap") && method === "GET";
     const isApply = url.includes("/apply") && method === "POST";
@@ -141,7 +142,12 @@ describe("adversarial: crash mid-bootstrap", () => {
     const COUNT = 2001; // 5 pages @ PAGE_LIMIT=500
     server.inner.seed(
       "ws",
-      Array.from({ length: COUNT }, (_, i) => ({ ns: NS, collection: COL, id: `n${i}`, metadata: { i } })),
+      Array.from({ length: COUNT }, (_, i) => ({
+        ns: NS,
+        collection: COL,
+        id: `n${i}`,
+        metadata: { i },
+      })),
     );
 
     // Crash: pause the 3rd bootstrap page forever (2 pages = 1000 rows landed).
@@ -190,7 +196,10 @@ describe("adversarial: snapshot poisoning", () => {
     server.inner.seed("ws", [{ ns: NS, collection: COL, id: "a", metadata: { v: 1 } }]); // syncId 1, epoch 1
 
     // Snapshot whose cursor is absurdly AHEAD of the server counter.
-    backend.store.set("ws", encodeSnapshot("ws", fakeCursor(1, 999_999), [record("a", { v: 1 }, 1)], 0));
+    backend.store.set(
+      "ws",
+      encodeSnapshot("ws", fakeCursor(1, 999_999), [record("a", { v: 1 }, 1)], 0),
+    );
 
     const ws = makeSdk(server, backend).sync.workspace("ws");
     await ws.start(); // hydrates; cursor present → delta path (skips bootstrap)
@@ -218,12 +227,18 @@ describe("adversarial: snapshot poisoning", () => {
     ]);
 
     // Poisoned snapshot: an old epoch cursor + a GHOST row that no longer exists.
-    backend.store.set("ws", encodeSnapshot("ws", fakeCursor(1, 0), [record("ghost", { evil: true }, 1)], 0));
+    backend.store.set(
+      "ws",
+      encodeSnapshot("ws", fakeCursor(1, 0), [record("ghost", { evil: true }, 1)], 0),
+    );
     server.inner.bumpEpoch("ws"); // server now at epoch 2
 
     const ws = makeSdk(server, backend).sync.workspace("ws");
     await ws.start();
-    expect(ws.collection(NS, COL).get("ghost"), "stale snapshot served while revalidating").not.toBeNull();
+    expect(
+      ws.collection(NS, COL).get("ghost"),
+      "stale snapshot served while revalidating",
+    ).not.toBeNull();
 
     await ws.sync(); // delta → 409 cursor_epoch_mismatch → full reset + re-bootstrap
     expect(backend.clears).toBe(1);
@@ -245,7 +260,12 @@ describe("adversarial: apply during bootstrap", () => {
     const COUNT = 501; // 2 pages
     server.inner.seed(
       "ws",
-      Array.from({ length: COUNT }, (_, i) => ({ ns: NS, collection: COL, id: `n${i}`, metadata: { i } })),
+      Array.from({ length: COUNT }, (_, i) => ({
+        ns: NS,
+        collection: COL,
+        id: `n${i}`,
+        metadata: { i },
+      })),
     );
 
     server.pauseBootstrapAt(2); // pause 2nd page → engine is mid-bootstrap
@@ -265,7 +285,12 @@ describe("adversarial: apply during bootstrap", () => {
     const fresh = ws.collection(NS, COL).get("fresh");
     expect(fresh?.metadata.hello).toBe("world"); // not lost
     expect(fresh?.version).toBe(1); // applied exactly once (dedupe held) — no double-apply
-    expect(ws.collection(NS, COL).list().filter((r) => r.id === "fresh").length).toBe(1);
+    expect(
+      ws
+        .collection(NS, COL)
+        .list()
+        .filter((r) => r.id === "fresh").length,
+    ).toBe(1);
     expect(ws.collection(NS, COL).list().length).toBe(COUNT + 1); // full set + the new row
     expect(ws.collection(NS, COL).get("n0")?.metadata.i).toBe(0);
     expect(ws.collection(NS, COL).get("n500")?.metadata.i).toBe(500);
@@ -366,7 +391,10 @@ describe("adversarial: stale-row reconcile on full bootstrap", () => {
     expect(ws.collection(NS, COL).get("X")).not.toBeNull();
 
     await ws.sync(); // full bootstrap → complete → reconcile drops X
-    expect(ws.collection(NS, COL).get("X"), "X was deleted server-side → must be purged").toBeNull();
+    expect(
+      ws.collection(NS, COL).get("X"),
+      "X was deleted server-side → must be purged",
+    ).toBeNull();
     expect(ws.collection(NS, COL).get("Y")?.metadata.v).toBe(2); // Y survives (still live)
     expect(fires, "subscribers notified about the reconcile removal").toBeGreaterThanOrEqual(1);
     await ws.stop();
@@ -387,7 +415,10 @@ describe("adversarial: stale-row reconcile on full bootstrap", () => {
     expect(ws.collection(NS, COL).get("X")).not.toBeNull();
 
     await ws.sync(); // delta → 409 → full reset + re-bootstrap
-    expect(ws.collection(NS, COL).get("X"), "stale X gone after epoch-reset re-bootstrap").toBeNull();
+    expect(
+      ws.collection(NS, COL).get("X"),
+      "stale X gone after epoch-reset re-bootstrap",
+    ).toBeNull();
     expect(ws.collection(NS, COL).get("Z")?.metadata.v).toBe(9);
     await ws.stop();
   });

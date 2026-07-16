@@ -77,7 +77,10 @@ export class FakeSyncServer {
   private readonly shared: Set<string>;
   private readonly workspaces = new Map<string, WorkspaceState>();
   // Membership metadata for GET /sync/workspaces (id → {name, kind, role}).
-  private readonly meta = new Map<string, { name: string; kind: "personal" | "team"; role: "owner" | "member" }>();
+  private readonly meta = new Map<
+    string,
+    { name: string; kind: "personal" | "team"; role: "owner" | "member" }
+  >();
   private failApply = false;
   private offline = false;
   /** Number of requests served — for asserting no redundant round-trips. */

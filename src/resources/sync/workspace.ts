@@ -422,7 +422,9 @@ export class WorkspaceSync {
     // server-side while we were away — drop it once the whole snapshot is seen.
     // Rows created locally DURING the bootstrap (e.g. an optimistic apply, whose
     // syncId is above the snapshot ceiling) are NOT candidates and are kept.
-    const staleCandidates = new Set(this.allLiveRecords().map((r) => pkOf(r.ns, r.collection, r.id)));
+    const staleCandidates = new Set(
+      this.allLiveRecords().map((r) => pkOf(r.ns, r.collection, r.id)),
+    );
     const seenKeys = new Set<string>();
     let cursor: string | undefined;
     for (;;) {
@@ -457,7 +459,8 @@ export class WorkspaceSync {
     for (const rec of this.allLiveRecords()) {
       const key = pkOf(rec.ns, rec.collection, rec.id);
       if (candidates.has(key) && !seen.has(key)) {
-        if (this.removeRecord(rec.ns, rec.collection, rec.id)) touched.add(cpkOf(rec.ns, rec.collection));
+        if (this.removeRecord(rec.ns, rec.collection, rec.id))
+          touched.add(cpkOf(rec.ns, rec.collection));
         this.seenSyncId.delete(key);
       }
     }
