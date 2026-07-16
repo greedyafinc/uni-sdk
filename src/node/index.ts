@@ -77,6 +77,8 @@ export * from "../resources/models";
 export * from "../resources/responses";
 // Explicit /index: storage is a directory barrel (see src/index.ts note).
 export * from "../resources/storage/index";
+// Explicit /index: sync is a directory barrel (see src/index.ts note).
+export * from "../resources/sync/index";
 export * from "../resources/usage";
 export * from "../resources/videos";
 export * from "../resources/logos";

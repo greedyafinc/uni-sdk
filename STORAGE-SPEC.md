@@ -6,9 +6,11 @@
 > (there is no offline/local store). `MemoryBackend` remains for tests/injection only. The IndexedDB/OPFS
 > references below are retained as historical design context and no longer describe the shipped code.
 >
-> **Status:** Phases 1–2 implemented — Phase 1 (uni-sdk `sdk.storage` + IndexedDB backend + design-app migration);
-> Phase 2 (Tauri SQLite + file-blob backend in UnifiedApp2, injected via the host SDK). Phase 3 (cloud sync)
-> proposed · **Date:** 2026-06-22 · **Owner:** platform
+> **Status (corrected 2026-07-15):** Phase 1 (IndexedDB backend + design-app migration) was implemented and later
+> **removed** (see banner). **Phase 2 was never implemented** — no Tauri SQLite/file-blob backend exists in
+> UnifiedApp; `src-tauri` has no storage or fs modules. What shipped instead is the Supabase-only Cloud backend
+> (a variant of Phase 3). A native desktop cache is planned separately (Phase 0 sync engine, 2026-07) ·
+> **Date:** 2026-06-22 · **Owner:** platform
 > **Scope:** uni-sdk surface + `StorageBackend` contract + host (Tauri) backend + design-app migration.
 > **Decisions locked:** local-only (no cloud sync yet) · new `sdk.storage` resource (not an extension of `sdk.files`) ·
 > generic **typed collections** (`collection<T>`), not app-specific resources baked into the SDK · isolation by default,

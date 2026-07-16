@@ -94,6 +94,8 @@ export * from "./resources/responses";
 // reference ".../storage/index.js" (the dts-fixup would otherwise produce a
 // non-resolving ".../storage.js").
 export * from "./resources/storage/index";
+// Explicit /index: sync is a directory barrel (same dts-fixup reason as storage).
+export * from "./resources/sync/index";
 export * from "./resources/usage";
 export * from "./resources/videos";
 export * from "./resources/logos";

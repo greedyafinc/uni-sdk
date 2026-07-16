@@ -15,6 +15,7 @@ import { Projects } from "../resources/projects";
 import { References } from "../resources/references";
 import { Responses } from "../resources/responses";
 import { Storage } from "../resources/storage";
+import { Sync } from "../resources/sync";
 import { Usage } from "../resources/usage";
 import { Videos } from "../resources/videos";
 import { LruCache, cacheKey, resolveCacheConfig } from "./_internal/cache";
@@ -212,6 +213,14 @@ export class UnifiedAI extends Core {
    * an injected backend): there is no local browser fallback.
    */
   readonly fs: Fs = new Fs(this);
+
+  /**
+   * Per-workspace sync engine (`sdk.sync`, PROTOCOL.md "Sync"). `sync.workspace(id)`
+   * returns a live-first `WorkspaceSync` that hydrates from an optional injected
+   * `SnapshotBackend`, catches up (bootstrap → delta) against unified-api, polls
+   * deltas, and applies optimistic writes. One cached engine per workspace id.
+   */
+  readonly sync: Sync = new Sync(this);
 
   /**
    * Unopinionated tool-loop scaffolding (`docs/capability-platform.md`).
