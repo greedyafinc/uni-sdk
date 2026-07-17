@@ -1,0 +1,1990 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>@unifiedai/sdk &mdash; SDK reference</title>
+<style>
+  /* ── Tokens ─────────────────────────────────────────────────────────
+     Neutrals carry a slight cyan bias toward the teal accent, so they
+     read as chosen rather than inherited mid-grey. Ochre is semantic
+     only — it marks experimental surfaces and never decorates.        */
+  :root {
+    color-scheme: light dark;
+
+    --bg:        #FAFCFC;
+    --bg-sunk:   #F1F5F6;
+    --bg-raised: #FFFFFF;
+    --code-bg:   #F4F8F8;
+    --text:      #0F1A1E;
+    --text-mid:  #3E545C;
+    --text-dim:  #64777F;
+    --rule:      #DDE6E7;
+    --rule-firm: #C4D2D4;
+    --accent:    #0B6E6B;
+    --accent-lo: #E4F1F0;
+    --accent-hi: #084F4D;
+    --ochre:     #8A5200;
+    --ochre-lo:  #FBF1E2;
+    --shadow:    0 1px 2px rgb(15 26 30 / .05), 0 8px 24px -12px rgb(15 26 30 / .18);
+
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+    --rail: 15rem;
+    --measure: 43rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:        #090F11;
+      --bg-sunk:   #0C1417;
+      --bg-raised: #0F181B;
+      --code-bg:   #0C1518;
+      --text:      #E6EDEF;
+      --text-mid:  #A9BBC2;
+      --text-dim:  #7E939B;
+      --rule:      #1C282C;
+      --rule-firm: #2A3A40;
+      --accent:    #4FD1C5;
+      --accent-lo: #0D2523;
+      --accent-hi: #8AE8DE;
+      --ochre:     #E0A34A;
+      --ochre-lo:  #241A0B;
+      --shadow:    0 1px 2px rgb(0 0 0 / .4), 0 8px 24px -12px rgb(0 0 0 / .7);
+    }
+  }
+
+  /* Viewer's explicit toggle must win over the OS preference, both ways. */
+  :root[data-theme="dark"] {
+    --bg:        #090F11;
+    --bg-sunk:   #0C1417;
+    --bg-raised: #0F181B;
+    --code-bg:   #0C1518;
+    --text:      #E6EDEF;
+    --text-mid:  #A9BBC2;
+    --text-dim:  #7E939B;
+    --rule:      #1C282C;
+    --rule-firm: #2A3A40;
+    --accent:    #4FD1C5;
+    --accent-lo: #0D2523;
+    --accent-hi: #8AE8DE;
+    --ochre:     #E0A34A;
+    --ochre-lo:  #241A0B;
+    --shadow:    0 1px 2px rgb(0 0 0 / .4), 0 8px 24px -12px rgb(0 0 0 / .7);
+  }
+  :root[data-theme="light"] {
+    --bg:        #FAFCFC;
+    --bg-sunk:   #F1F5F6;
+    --bg-raised: #FFFFFF;
+    --code-bg:   #F4F8F8;
+    --text:      #0F1A1E;
+    --text-mid:  #3E545C;
+    --text-dim:  #64777F;
+    --rule:      #DDE6E7;
+    --rule-firm: #C4D2D4;
+    --accent:    #0B6E6B;
+    --accent-lo: #E4F1F0;
+    --accent-hi: #084F4D;
+    --ochre:     #8A5200;
+    --ochre-lo:  #FBF1E2;
+    --shadow:    0 1px 2px rgb(15 26 30 / .05), 0 8px 24px -12px rgb(15 26 30 / .18);
+  }
+
+  /* ── Base ───────────────────────────────────────────────────────── */
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  a { color: var(--accent); text-underline-offset: 2px; }
+  a:hover { color: var(--accent-hi); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+  /* ── Layout ─────────────────────────────────────────────────────── */
+  .wrap {
+    display: grid;
+    grid-template-columns: var(--rail) minmax(0, 1fr);
+    gap: 0;
+    max-width: 78rem;
+    margin: 0 auto;
+  }
+
+  .rail {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 2.25rem 1.25rem 3rem;
+    border-right: 1px solid var(--rule);
+  }
+
+  .main { min-width: 0; padding: 2.25rem 2.5rem 6rem; }
+  .col { max-width: var(--measure); }
+
+  /* ── Rail nav — mono, the page's own material ───────────────────── */
+  .brand {
+    font-family: var(--mono);
+    font-size: .8125rem;
+    font-weight: 700;
+    letter-spacing: -.01em;
+    color: var(--text);
+    text-decoration: none;
+    display: block;
+    margin-bottom: .25rem;
+  }
+  .brand-v {
+    font-family: var(--mono);
+    font-size: .6875rem;
+    color: var(--text-dim);
+    margin-bottom: 2rem;
+  }
+
+  .rail nav { display: flex; flex-direction: column; gap: .5rem; }
+  .rail h6 {
+    font-family: var(--mono);
+    font-size: .625rem;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin: 1.25rem 0 .375rem;
+  }
+  .rail h6:first-of-type { margin-top: 0; }
+  .rail ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .rail a.nav {
+    font-family: var(--mono);
+    font-size: .75rem;
+    color: var(--text-mid);
+    text-decoration: none;
+    padding: .25rem 0 .25rem .625rem;
+    border-left: 2px solid var(--rule);
+    transition: color .12s, border-color .12s;
+  }
+  .rail a.nav:hover { color: var(--accent); border-left-color: var(--rule-firm); }
+  .rail a.nav.on { color: var(--accent); border-left-color: var(--accent); font-weight: 600; }
+
+  /* ── Type scale ─────────────────────────────────────────────────── */
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .6875rem;
+    font-weight: 600;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 .625rem;
+  }
+
+  h1 {
+    font-family: var(--mono);
+    font-size: clamp(1.75rem, 1.2rem + 2vw, 2.5rem);
+    font-weight: 700;
+    letter-spacing: -.03em;
+    line-height: 1.1;
+    text-wrap: balance;
+    margin: 0 0 .75rem;
+  }
+
+  h2 {
+    font-family: var(--mono);
+    font-size: 1.3125rem;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    line-height: 1.25;
+    text-wrap: balance;
+    margin: 0 0 .5rem;
+    scroll-margin-top: 1.5rem;
+  }
+
+  h3 {
+    font-family: var(--mono);
+    font-size: .9375rem;
+    font-weight: 700;
+    letter-spacing: -.01em;
+    margin: 0 0 .375rem;
+    scroll-margin-top: 1.5rem;
+  }
+
+  p { margin: 0 0 1rem; color: var(--text-mid); }
+  .col > p, section > p { max-width: var(--measure); }
+  strong { color: var(--text); font-weight: 640; }
+
+  section { padding-top: 3.25rem; }
+  section > h2 + p { margin-top: 0; }
+
+  .lede { font-size: 1.0625rem; color: var(--text-mid); }
+
+  /* ── Code ───────────────────────────────────────────────────────── */
+  code {
+    font-family: var(--mono);
+    font-size: .8125em;
+    background: var(--bg-sunk);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: .1em .32em;
+    color: var(--text);
+    /* Inline code must wrap: a long signature quoted mid-sentence would
+       otherwise push the page wider than the viewport on narrow screens.
+       break-word breaks only when the token genuinely cannot fit. */
+    overflow-wrap: break-word;
+  }
+
+  pre {
+    margin: 0 0 1rem;
+    background: var(--code-bg);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: .9rem 1rem;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: .8125rem;
+    line-height: 1.6;
+  }
+  pre code {
+    background: none;
+    border: 0;
+    padding: 0;
+    font-size: inherit;
+    white-space: pre;
+  }
+
+  .snip { margin: 0 0 1.25rem; }
+  .snip-h {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    font-family: var(--mono);
+    font-size: .6875rem;
+    color: var(--text-dim);
+    padding: 0 .125rem .375rem;
+  }
+  .snip-h b { font-weight: 600; color: var(--text-mid); }
+  .copy {
+    font-family: var(--mono);
+    font-size: .6875rem;
+    color: var(--text-dim);
+    background: none;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: .1rem .4rem;
+    cursor: pointer;
+    transition: color .12s, border-color .12s;
+  }
+  .copy:hover { color: var(--accent); border-color: var(--accent); }
+  .copy[data-done] { color: var(--accent); border-color: var(--accent); }
+
+  /* Token colors — restrained; code is read, not decorated. */
+  .k  { color: var(--accent); }
+  .s  { color: var(--ochre); }
+  .c  { color: var(--text-dim); font-style: italic; }
+  .f  { color: var(--text); font-weight: 600; }
+  .n  { color: var(--text-mid); }
+
+  /* ── Callouts ───────────────────────────────────────────────────── */
+  .note {
+    border-left: 2px solid var(--accent);
+    background: var(--accent-lo);
+    padding: .75rem .9rem;
+    margin: 0 0 1.25rem;
+    border-radius: 0 4px 4px 0;
+  }
+  .note p:last-child { margin-bottom: 0; }
+  .note.warn { border-left-color: var(--ochre); background: var(--ochre-lo); }
+  .note-t {
+    font-family: var(--mono);
+    font-size: .625rem;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: block;
+    margin-bottom: .25rem;
+  }
+  .note.warn .note-t { color: var(--ochre); }
+
+  /* ── Tables ─────────────────────────────────────────────────────── */
+  .tw { overflow-x: auto; margin: 0 0 1.25rem; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: .8125rem;
+    font-variant-numeric: tabular-nums;
+  }
+  th, td {
+    text-align: left;
+    padding: .5rem .75rem;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  th {
+    font-family: var(--mono);
+    font-size: .625rem;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    border-bottom-color: var(--rule-firm);
+    white-space: nowrap;
+  }
+  td { color: var(--text-mid); }
+  td code { white-space: nowrap; }
+
+  /* ── Pills ──────────────────────────────────────────────────────── */
+  .pill {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: .5625rem;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    padding: .1rem .4rem;
+    border-radius: 3px;
+    border: 1px solid currentColor;
+    vertical-align: middle;
+  }
+  .pill.node  { color: var(--accent); }
+  .pill.exp   { color: var(--ochre); }
+</style>
+
+<style>
+  /* ── Hero ───────────────────────────────────────────────────────── */
+  .hero { padding-top: .5rem; }
+  .hero h1 { margin-bottom: .625rem; }
+  .hero .lede { max-width: 40rem; margin-bottom: 1.5rem; }
+
+  .wordmark {
+    display: inline-flex;
+    align-items: center;
+    gap: .5rem;
+    font-family: var(--mono);
+    font-size: .6875rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 1rem;
+  }
+  .wordmark .dot {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--accent);
+  }
+
+  /* Provider strip — the thesis: many providers, one call.
+     Logos come from the SDK's own getProviderLogo(), theme variants
+     and all, so the page is built out of the thing it documents.   */
+  .provstrip {
+    list-style: none;
+    margin: 0 0 1.75rem;
+    padding: 1rem 1.125rem;
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    background: var(--bg-raised);
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem 1.5rem;
+    align-items: center;
+    box-shadow: var(--shadow);
+  }
+  .prov {
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    font-family: var(--mono);
+    font-size: .6875rem;
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+  .prov img { width: 15px; height: 15px; object-fit: contain; display: block; }
+
+  /* Theme-aware logo swap, mirroring getProviderLogo(name, theme). */
+  .prov[data-dual] .lg-d { display: none; }
+  @media (prefers-color-scheme: dark) {
+    .prov[data-dual] .lg-l { display: none; }
+    .prov[data-dual] .lg-d { display: block; }
+  }
+  :root[data-theme="dark"] .prov[data-dual] .lg-l { display: none; }
+  :root[data-theme="dark"] .prov[data-dual] .lg-d { display: block; }
+  :root[data-theme="light"] .prov[data-dual] .lg-l { display: block; }
+  :root[data-theme="light"] .prov[data-dual] .lg-d { display: none; }
+
+  .provstrip .more {
+    font-family: var(--mono);
+    font-size: .625rem;
+    color: var(--text-dim);
+    opacity: .75;
+  }
+
+  /* ── Fact card ──────────────────────────────────────────────────── */
+  .card {
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    background: var(--bg-raised);
+    padding: .25rem 1.125rem;
+    margin: 0 0 1.5rem;
+    box-shadow: var(--shadow);
+  }
+  .card dl { margin: 0; }
+  .card div.row {
+    display: grid;
+    grid-template-columns: 8.5rem minmax(0, 1fr);
+    gap: 1rem;
+    padding: .625rem 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  .card div.row:last-child { border-bottom: 0; }
+  .card dt {
+    font-family: var(--mono);
+    font-size: .625rem;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    padding-top: .15rem;
+  }
+  .card dd { margin: 0; font-size: .875rem; color: var(--text-mid); }
+
+  /* ── Routing diagram ────────────────────────────────────────────── */
+  .diagram {
+    margin: 0 0 1.25rem;
+    padding: 1.25rem;
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    background: var(--bg-raised);
+    overflow-x: auto;
+    box-shadow: var(--shadow);
+  }
+  .dgrid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(9rem, 1fr));
+    gap: 0 .75rem;
+    align-items: stretch;
+    min-width: 34rem;
+  }
+  .node {
+    border: 1px solid var(--rule-firm);
+    border-radius: 5px;
+    padding: .6rem .7rem;
+    background: var(--bg);
+  }
+  .node.you { border-color: var(--accent); background: var(--accent-lo); }
+  .node b {
+    display: block;
+    font-family: var(--mono);
+    font-size: .75rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: .2rem;
+  }
+  .node span {
+    display: block;
+    font-family: var(--mono);
+    font-size: .625rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+  }
+  .dlabel {
+    font-family: var(--mono);
+    font-size: .5625rem;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    text-align: center;
+    padding: .3rem 0;
+    position: relative;
+  }
+  .dlabel::before {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; top: 50%;
+    border-top: 1px dashed var(--rule-firm);
+    z-index: 0;
+  }
+  .dlabel em {
+    position: relative;
+    z-index: 1;
+    background: var(--bg-raised);
+    padding: 0 .4rem;
+    font-style: normal;
+  }
+  .dstack { display: flex; flex-direction: column; gap: .5rem; justify-content: center; }
+
+  /* ── Feature reference disclosure ───────────────────────────────── */
+  details.feat {
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    margin: 0 0 .5rem;
+    background: var(--bg-raised);
+    overflow: hidden;
+  }
+  details.feat > summary {
+    cursor: pointer;
+    padding: .7rem .9rem;
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    list-style: none;
+    font-family: var(--mono);
+    font-size: .8125rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+  details.feat > summary::-webkit-details-marker { display: none; }
+  details.feat > summary::before {
+    content: "+";
+    font-family: var(--mono);
+    font-size: .8125rem;
+    color: var(--accent);
+    width: .75rem;
+    flex: none;
+  }
+  details.feat[open] > summary::before { content: "\2212"; }
+  details.feat > summary:hover { background: var(--bg-sunk); }
+  details.feat > summary .sub {
+    font-weight: 400;
+    font-size: .6875rem;
+    color: var(--text-dim);
+    margin-left: auto;
+    text-align: right;
+  }
+  .feat-body { padding: .25rem .9rem 1rem; border-top: 1px solid var(--rule); }
+  .feat-body > p:first-child { margin-top: .875rem; }
+
+  /* ── Footer ─────────────────────────────────────────────────────── */
+  .foot {
+    margin-top: 4rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--rule);
+    font-family: var(--mono);
+    font-size: .6875rem;
+    color: var(--text-dim);
+  }
+  .foot p { color: var(--text-dim); font-size: .6875rem; }
+
+  /* ── Mobile ─────────────────────────────────────────────────────── */
+  .railtoggle { display: none; }
+
+  @media (max-width: 60rem) {
+    .wrap { grid-template-columns: 1fr; }
+
+    /* The rail becomes a sticky horizontal tab strip. A stacked 13-item list
+       would push the first paragraph a full screen down; the group labels are
+       the affordance we spend to keep the nav one row tall. */
+    .rail {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      height: auto;
+      overflow: visible;
+      border-right: 0;
+      border-bottom: 1px solid var(--rule);
+      padding: .75rem 0 0;
+      background: var(--bg);
+      /* Without this the grid item's automatic minimum size is the nav's
+         min-content — all 13 links in one unbroken row — which widens the
+         column past the viewport and makes the whole page scroll sideways.
+         Zeroing it lets the nav's own overflow-x actually scroll. */
+      min-width: 0;
+    }
+    .brand, .brand-v { padding-left: 1.5rem; }
+    .brand-v { margin-bottom: .625rem; }
+    .rail h6 { display: none; }
+    .rail nav {
+      flex-direction: row;
+      gap: 0;
+      overflow-x: auto;
+      padding: 0 1.5rem;
+      scrollbar-width: none;
+    }
+    .rail nav::-webkit-scrollbar { display: none; }
+    .rail ul { flex-direction: row; gap: 0; }
+    .rail a.nav {
+      white-space: nowrap;
+      border-left: 0;
+      border-bottom: 2px solid transparent;
+      padding: .3rem .7rem .45rem;
+    }
+    .rail a.nav:hover { border-left: 0; border-bottom-color: var(--rule-firm); }
+    .rail a.nav.on { border-left: 0; border-bottom-color: var(--accent); }
+
+    .main { padding: 1.5rem 1.5rem 4rem; }
+    .dgrid { grid-template-columns: 1fr; gap: .5rem; min-width: 0; }
+    .dlabel::before { display: none; }
+    .dlabel { text-align: left; }
+    .dlabel em { background: none; padding: 0; }
+    .card div.row { grid-template-columns: 1fr; gap: .2rem; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  }
+
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+</style>
+
+<div class="wrap">
+  <aside class="rail">
+    <a class="brand" href="#overview">@unifiedai/sdk</a>
+    <div class="brand-v">v0.2.0 &middot; ESM &middot; node &ge;18</div>
+    <nav aria-label="Documentation sections">
+      <h6>Start</h6>
+      <ul>
+        <li><a class="nav" href="#overview">Overview</a></li>
+        <li><a class="nav" href="#ecosystem">Where it fits</a></li>
+        <li><a class="nav" href="#install">Install</a></li>
+        <li><a class="nav" href="#quickstart">Quickstart</a></li>
+      </ul>
+      <h6>Core</h6>
+      <ul>
+        <li><a class="nav" href="#auth">Auth</a></li>
+        <li><a class="nav" href="#client">Client options</a></li>
+        <li><a class="nav" href="#surfaces">Text surfaces</a></li>
+        <li><a class="nav" href="#streaming">Streaming</a></li>
+        <li><a class="nav" href="#errors">Errors</a></li>
+      </ul>
+      <h6>Reference</h6>
+      <ul>
+        <li><a class="nav" href="#reference">Feature reference</a></li>
+      </ul>
+      <h6>Deeper</h6>
+      <ul>
+        <li><a class="nav" href="#advanced">Advanced</a></li>
+        <li><a class="nav" href="#troubleshooting">Troubleshooting</a></li>
+        <li><a class="nav" href="#stability">Stability</a></li>
+      </ul>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <div class="col">
+
+      <!-- ══ OVERVIEW ══════════════════════════════════════════════ -->
+      <section id="overview" class="hero">
+        <div class="wordmark"><span class="dot"></span>UnifiedAI &middot; TypeScript SDK</div>
+        <h1>One SDK. Many models.</h1>
+        <p class="lede">
+          <code>@unifiedai/sdk</code> is the TypeScript client for the UnifiedAI platform. It brokers chat,
+          images, audio, video, embeddings and files across every provider in the catalog behind three
+          familiar wire shapes &mdash; and adds the ecosystem surface (artifacts, projects, memory, storage,
+          a jailed file workspace, an agent loop) that lets independent apps interoperate on a user&rsquo;s behalf.
+        </p>
+
+        <ul class="provstrip">
+        <li class="prov" data-dual><img class="lg-l" src="data:image/svg+xml;utf8,%3Csvg%20height%3D%222500%22%20viewBox%3D%22-1%20-.1%20949.1%20959.8%22%20width%3D%222474%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22m925.8%20456.3c10.4%2023.2%2017%2048%2019.7%2073.3%202.6%2025.3%201.3%2050.9-4.1%2075.8-5.3%2024.9-14.5%2048.8-27.3%2070.8-8.4%2014.7-18.3%2028.5-29.7%2041.2-11.3%2012.6-23.9%2024-37.6%2034-13.8%2010-28.5%2018.4-44.1%2025.3-15.5%206.8-31.7%2012-48.3%2015.4-7.8%2024.2-19.4%2047.1-34.4%2067.7-14.9%2020.6-33%2038.7-53.6%2053.6-20.6%2015-43.4%2026.6-67.6%2034.4-24.2%207.9-49.5%2011.8-75%2011.8-16.9.1-33.9-1.7-50.5-5.1-16.5-3.5-32.7-8.8-48.2-15.7s-30.2-15.5-43.9-25.5c-13.6-10-26.2-21.5-37.4-34.2-25%205.4-50.6%206.7-75.9%204.1-25.3-2.7-50.1-9.3-73.4-19.7-23.2-10.3-44.7-24.3-63.6-41.4s-35-37.1-47.7-59.1c-8.5-14.7-15.5-30.2-20.8-46.3s-8.8-32.7-10.6-49.6c-1.8-16.8-1.7-33.8.1-50.7%201.8-16.8%205.5-33.4%2010.8-49.5-17-18.9-31-40.4-41.4-63.6-10.3-23.3-17-48-19.6-73.3-2.7-25.3-1.3-50.9%204-75.8s14.5-48.8%2027.3-70.8c8.4-14.7%2018.3-28.6%2029.6-41.2s24-24%2037.7-34%2028.5-18.5%2044-25.3c15.6-6.9%2031.8-12%2048.4-15.4%207.8-24.3%2019.4-47.1%2034.3-67.7%2015-20.6%2033.1-38.7%2053.7-53.7%2020.6-14.9%2043.4-26.5%2067.6-34.4%2024.2-7.8%2049.5-11.8%2075-11.7%2016.9-.1%2033.9%201.6%2050.5%205.1s32.8%208.7%2048.3%2015.6c15.5%207%2030.2%2015.5%2043.9%2025.5%2013.7%2010.1%2026.3%2021.5%2037.5%2034.2%2024.9-5.3%2050.5-6.6%2075.8-4s50%209.3%2073.3%2019.6c23.2%2010.4%2044.7%2024.3%2063.6%2041.4%2018.9%2017%2035%2036.9%2047.7%2059%208.5%2014.6%2015.5%2030.1%2020.8%2046.3%205.3%2016.1%208.9%2032.7%2010.6%2049.6%201.8%2016.9%201.8%2033.9-.1%2050.8-1.8%2016.9-5.5%2033.5-10.8%2049.6%2017.1%2018.9%2031%2040.3%2041.4%2063.6zm-333.2%20426.9c21.8-9%2041.6-22.3%2058.3-39s30-36.5%2039-58.4c9-21.8%2013.7-45.2%2013.7-68.8v-223q-.1-.3-.2-.7-.1-.3-.3-.6-.2-.3-.5-.5-.3-.3-.6-.4l-80.7-46.6v269.4c0%202.7-.4%205.5-1.1%208.1-.7%202.7-1.7%205.2-3.1%207.6s-3%204.6-5%206.5a32.1%2032.1%200%200%201%20-6.5%205l-191.1%20110.3c-1.6%201-4.3%202.4-5.7%203.2%207.9%206.7%2016.5%2012.6%2025.5%2017.8%209.1%205.2%2018.5%209.6%2028.3%2013.2%209.8%203.5%2019.9%206.2%2030.1%208%2010.3%201.8%2020.7%202.7%2031.1%202.7%2023.6%200%2047-4.7%2068.8-13.8zm-455.1-151.4c11.9%2020.5%2027.6%2038.3%2046.3%2052.7%2018.8%2014.4%2040.1%2024.9%2062.9%2031s46.6%207.7%2070%204.6%2045.9-10.7%2066.4-22.5l193.2-111.5.5-.5q.2-.2.3-.6.2-.3.3-.6v-94l-233.2%20134.9c-2.4%201.4-4.9%202.4-7.5%203.2-2.7.7-5.4%201-8.2%201-2.7%200-5.4-.3-8.1-1-2.6-.8-5.2-1.8-7.6-3.2l-191.1-110.4c-1.7-1-4.2-2.5-5.6-3.4-1.8%2010.3-2.7%2020.7-2.7%2031.1s1%2020.8%202.8%2031.1c1.8%2010.2%204.6%2020.3%208.1%2030.1%203.6%209.8%208%2019.2%2013.2%2028.2zm-50.2-417c-11.8%2020.5-19.4%2043.1-22.5%2066.5s-1.5%2047.1%204.6%2070c6.1%2022.8%2016.6%2044.1%2031%2062.9%2014.4%2018.7%2032.3%2034.4%2052.7%2046.2l193.1%20111.6q.3.1.7.2h.7q.4%200%20.7-.2.3-.1.6-.3l81-46.8-233.2-134.6c-2.3-1.4-4.5-3.1-6.5-5a32.1%2032.1%200%200%201%20-5-6.5c-1.3-2.4-2.4-4.9-3.1-7.6-.7-2.6-1.1-5.3-1-8.1v-227.1c-9.8%203.6-19.3%208-28.3%2013.2-9%205.3-17.5%2011.3-25.5%2018-7.9%206.7-15.3%2014.1-22%2022.1-6.7%207.9-12.6%2016.5-17.8%2025.5zm663.3%20154.4c2.4%201.4%204.6%203%206.6%205%201.9%201.9%203.6%204.1%205%206.5%201.3%202.4%202.4%205%203.1%207.6.6%202.7%201%205.4.9%208.2v227.1c32.1-11.8%2060.1-32.5%2080.8-59.7%2020.8-27.2%2033.3-59.7%2036.2-93.7s-3.9-68.2-19.7-98.5-39.9-55.5-69.5-72.5l-193.1-111.6q-.3-.1-.7-.2h-.7q-.3.1-.7.2-.3.1-.6.3l-80.6%2046.6%20233.2%20134.7zm80.5-121h-.1v.1zm-.1-.1c5.8-33.6%201.9-68.2-11.3-99.7-13.1-31.5-35-58.6-63-78.2-28-19.5-61-30.7-95.1-32.2-34.2-1.4-68%206.9-97.6%2023.9l-193.1%20111.5q-.3.2-.5.5l-.4.6q-.1.3-.2.7-.1.3-.1.7v93.2l233.2-134.7c2.4-1.4%205-2.4%207.6-3.2%202.7-.7%205.4-1%208.1-1%202.8%200%205.5.3%208.2%201%202.6.8%205.1%201.8%207.5%203.2l191.1%20110.4c1.7%201%204.2%202.4%205.6%203.3zm-505.3-103.2c0-2.7.4-5.4%201.1-8.1.7-2.6%201.7-5.2%203.1-7.6%201.4-2.3%203-4.5%205-6.5%201.9-1.9%204.1-3.6%206.5-4.9l191.1-110.3c1.8-1.1%204.3-2.5%205.7-3.2-26.2-21.9-58.2-35.9-92.1-40.2-33.9-4.4-68.3%201-99.2%2015.5-31%2014.5-57.2%2037.6-75.5%2066.4-18.3%2028.9-28%2062.3-28%2096.5v223q.1.4.2.7.1.3.3.6.2.3.5.6.2.2.6.4l80.7%2046.6zm43.8%20294.7%20103.9%2060%20103.9-60v-119.9l-103.8-60-103.9%2060z%22%2F%3E%3C%2Fsvg%3E" alt="" aria-hidden="true"><img class="lg-d" src="data:image/svg+xml;utf8,%3Csvg%20fill%3D%22%23ffffff%22%20height%3D%222500%22%20viewBox%3D%22-1%20-.1%20949.1%20959.8%22%20width%3D%222474%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22m925.8%20456.3c10.4%2023.2%2017%2048%2019.7%2073.3%202.6%2025.3%201.3%2050.9-4.1%2075.8-5.3%2024.9-14.5%2048.8-27.3%2070.8-8.4%2014.7-18.3%2028.5-29.7%2041.2-11.3%2012.6-23.9%2024-37.6%2034-13.8%2010-28.5%2018.4-44.1%2025.3-15.5%206.8-31.7%2012-48.3%2015.4-7.8%2024.2-19.4%2047.1-34.4%2067.7-14.9%2020.6-33%2038.7-53.6%2053.6-20.6%2015-43.4%2026.6-67.6%2034.4-24.2%207.9-49.5%2011.8-75%2011.8-16.9.1-33.9-1.7-50.5-5.1-16.5-3.5-32.7-8.8-48.2-15.7s-30.2-15.5-43.9-25.5c-13.6-10-26.2-21.5-37.4-34.2-25%205.4-50.6%206.7-75.9%204.1-25.3-2.7-50.1-9.3-73.4-19.7-23.2-10.3-44.7-24.3-63.6-41.4s-35-37.1-47.7-59.1c-8.5-14.7-15.5-30.2-20.8-46.3s-8.8-32.7-10.6-49.6c-1.8-16.8-1.7-33.8.1-50.7%201.8-16.8%205.5-33.4%2010.8-49.5-17-18.9-31-40.4-41.4-63.6-10.3-23.3-17-48-19.6-73.3-2.7-25.3-1.3-50.9%204-75.8s14.5-48.8%2027.3-70.8c8.4-14.7%2018.3-28.6%2029.6-41.2s24-24%2037.7-34%2028.5-18.5%2044-25.3c15.6-6.9%2031.8-12%2048.4-15.4%207.8-24.3%2019.4-47.1%2034.3-67.7%2015-20.6%2033.1-38.7%2053.7-53.7%2020.6-14.9%2043.4-26.5%2067.6-34.4%2024.2-7.8%2049.5-11.8%2075-11.7%2016.9-.1%2033.9%201.6%2050.5%205.1s32.8%208.7%2048.3%2015.6c15.5%207%2030.2%2015.5%2043.9%2025.5%2013.7%2010.1%2026.3%2021.5%2037.5%2034.2%2024.9-5.3%2050.5-6.6%2075.8-4s50%209.3%2073.3%2019.6c23.2%2010.4%2044.7%2024.3%2063.6%2041.4%2018.9%2017%2035%2036.9%2047.7%2059%208.5%2014.6%2015.5%2030.1%2020.8%2046.3%205.3%2016.1%208.9%2032.7%2010.6%2049.6%201.8%2016.9%201.8%2033.9-.1%2050.8-1.8%2016.9-5.5%2033.5-10.8%2049.6%2017.1%2018.9%2031%2040.3%2041.4%2063.6zm-333.2%20426.9c21.8-9%2041.6-22.3%2058.3-39s30-36.5%2039-58.4c9-21.8%2013.7-45.2%2013.7-68.8v-223q-.1-.3-.2-.7-.1-.3-.3-.6-.2-.3-.5-.5-.3-.3-.6-.4l-80.7-46.6v269.4c0%202.7-.4%205.5-1.1%208.1-.7%202.7-1.7%205.2-3.1%207.6s-3%204.6-5%206.5a32.1%2032.1%200%200%201%20-6.5%205l-191.1%20110.3c-1.6%201-4.3%202.4-5.7%203.2%207.9%206.7%2016.5%2012.6%2025.5%2017.8%209.1%205.2%2018.5%209.6%2028.3%2013.2%209.8%203.5%2019.9%206.2%2030.1%208%2010.3%201.8%2020.7%202.7%2031.1%202.7%2023.6%200%2047-4.7%2068.8-13.8zm-455.1-151.4c11.9%2020.5%2027.6%2038.3%2046.3%2052.7%2018.8%2014.4%2040.1%2024.9%2062.9%2031s46.6%207.7%2070%204.6%2045.9-10.7%2066.4-22.5l193.2-111.5.5-.5q.2-.2.3-.6.2-.3.3-.6v-94l-233.2%20134.9c-2.4%201.4-4.9%202.4-7.5%203.2-2.7.7-5.4%201-8.2%201-2.7%200-5.4-.3-8.1-1-2.6-.8-5.2-1.8-7.6-3.2l-191.1-110.4c-1.7-1-4.2-2.5-5.6-3.4-1.8%2010.3-2.7%2020.7-2.7%2031.1s1%2020.8%202.8%2031.1c1.8%2010.2%204.6%2020.3%208.1%2030.1%203.6%209.8%208%2019.2%2013.2%2028.2zm-50.2-417c-11.8%2020.5-19.4%2043.1-22.5%2066.5s-1.5%2047.1%204.6%2070c6.1%2022.8%2016.6%2044.1%2031%2062.9%2014.4%2018.7%2032.3%2034.4%2052.7%2046.2l193.1%20111.6q.3.1.7.2h.7q.4%200%20.7-.2.3-.1.6-.3l81-46.8-233.2-134.6c-2.3-1.4-4.5-3.1-6.5-5a32.1%2032.1%200%200%201%20-5-6.5c-1.3-2.4-2.4-4.9-3.1-7.6-.7-2.6-1.1-5.3-1-8.1v-227.1c-9.8%203.6-19.3%208-28.3%2013.2-9%205.3-17.5%2011.3-25.5%2018-7.9%206.7-15.3%2014.1-22%2022.1-6.7%207.9-12.6%2016.5-17.8%2025.5zm663.3%20154.4c2.4%201.4%204.6%203%206.6%205%201.9%201.9%203.6%204.1%205%206.5%201.3%202.4%202.4%205%203.1%207.6.6%202.7%201%205.4.9%208.2v227.1c32.1-11.8%2060.1-32.5%2080.8-59.7%2020.8-27.2%2033.3-59.7%2036.2-93.7s-3.9-68.2-19.7-98.5-39.9-55.5-69.5-72.5l-193.1-111.6q-.3-.1-.7-.2h-.7q-.3.1-.7.2-.3.1-.6.3l-80.6%2046.6%20233.2%20134.7zm80.5-121h-.1v.1zm-.1-.1c5.8-33.6%201.9-68.2-11.3-99.7-13.1-31.5-35-58.6-63-78.2-28-19.5-61-30.7-95.1-32.2-34.2-1.4-68%206.9-97.6%2023.9l-193.1%20111.5q-.3.2-.5.5l-.4.6q-.1.3-.2.7-.1.3-.1.7v93.2l233.2-134.7c2.4-1.4%205-2.4%207.6-3.2%202.7-.7%205.4-1%208.1-1%202.8%200%205.5.3%208.2%201%202.6.8%205.1%201.8%207.5%203.2l191.1%20110.4c1.7%201%204.2%202.4%205.6%203.3zm-505.3-103.2c0-2.7.4-5.4%201.1-8.1.7-2.6%201.7-5.2%203.1-7.6%201.4-2.3%203-4.5%205-6.5%201.9-1.9%204.1-3.6%206.5-4.9l191.1-110.3c1.8-1.1%204.3-2.5%205.7-3.2-26.2-21.9-58.2-35.9-92.1-40.2-33.9-4.4-68.3%201-99.2%2015.5-31%2014.5-57.2%2037.6-75.5%2066.4-18.3%2028.9-28%2062.3-28%2096.5v223q.1.4.2.7.1.3.3.6.2.3.5.6.2.2.6.4l80.7%2046.6zm43.8%20294.7%20103.9%2060%20103.9-60v-119.9l-103.8-60-103.9%2060z%22%2F%3E%3C%2Fsvg%3E" alt="" aria-hidden="true"><span>OpenAI</span></li>
+        <li class="prov" data-dual><img class="lg-l" src="data:image/svg+xml;utf8,%3Csvg%20version%3D%221.1%22%20id%3D%22Layer_1%22%20xmlns%3Ax%3D%22ns_extend%3B%22%20xmlns%3Ai%3D%22ns_ai%3B%22%20xmlns%3Agraph%3D%22ns_graphs%3B%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20xmlns%3Axlink%3D%22http%3A%2F%2Fwww.w3.org%2F1999%2Fxlink%22%20x%3D%220px%22%20y%3D%220px%22%20viewBox%3D%220%200%2092.2%2065%22%20style%3D%22enable-background%3Anew%200%200%2092.2%2065%3B%22%20xml%3Aspace%3D%22preserve%22%3E%0A%20%3Cstyle%20type%3D%22text%2Fcss%22%3E%0A%20%20.st0%7Bfill%3A%23181818%3B%7D%0A%20%3C%2Fstyle%3E%0A%20%3Cmetadata%3E%0A%20%20%3Csfw%20xmlns%3D%22ns_sfw%3B%22%3E%0A%20%20%20%3Cslices%3E%0A%20%20%20%3C%2Fslices%3E%0A%20%20%20%3CsliceSourceBounds%20bottomLeftOrigin%3D%22true%22%20height%3D%2265%22%20width%3D%2292.2%22%20x%3D%22-43.7%22%20y%3D%22-98%22%3E%0A%20%20%20%3C%2FsliceSourceBounds%3E%0A%20%20%3C%2Fsfw%3E%0A%20%3C%2Fmetadata%3E%0A%20%3Cpath%20class%3D%22st0%22%20d%3D%22M66.5%2C0H52.4l25.7%2C65h14.1L66.5%2C0z%20M25.7%2C0L0%2C65h14.4l5.3-13.6h26.9L51.8%2C65h14.4L40.5%2C0C40.5%2C0%2C25.7%2C0%2C25.7%2C0z%0A%09%20M24.3%2C39.3l8.8-22.8l8.8%2C22.8H24.3z%22%3E%0A%20%3C%2Fpath%3E%0A%3C%2Fsvg%3E" alt="" aria-hidden="true"><img class="lg-d" src="data:image/svg+xml;utf8,%3Csvg%20version%3D%221.1%22%20id%3D%22Layer_1%22%20xmlns%3Ax%3D%22ns_extend%3B%22%20xmlns%3Ai%3D%22ns_ai%3B%22%20xmlns%3Agraph%3D%22ns_graphs%3B%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20xmlns%3Axlink%3D%22http%3A%2F%2Fwww.w3.org%2F1999%2Fxlink%22%20x%3D%220px%22%20y%3D%220px%22%20viewBox%3D%220%200%2092.2%2065%22%20style%3D%22enable-background%3Anew%200%200%2092.2%2065%3B%22%20xml%3Aspace%3D%22preserve%22%3E%0A%20%3Cstyle%20type%3D%22text%2Fcss%22%3E%0A%20%20.st0%7Bfill%3A%23ffffff%3B%7D%0A%20%3C%2Fstyle%3E%0A%20%3Cmetadata%3E%0A%20%20%3Csfw%20xmlns%3D%22ns_sfw%3B%22%3E%0A%20%20%20%3Cslices%3E%0A%20%20%20%3C%2Fslices%3E%0A%20%20%20%3CsliceSourceBounds%20bottomLeftOrigin%3D%22true%22%20height%3D%2265%22%20width%3D%2292.2%22%20x%3D%22-43.7%22%20y%3D%22-98%22%3E%0A%20%20%20%3C%2FsliceSourceBounds%3E%0A%20%20%3C%2Fsfw%3E%0A%20%3C%2Fmetadata%3E%0A%20%3Cpath%20class%3D%22st0%22%20d%3D%22M66.5%2C0H52.4l25.7%2C65h14.1L66.5%2C0z%20M25.7%2C0L0%2C65h14.4l5.3-13.6h26.9L51.8%2C65h14.4L40.5%2C0C40.5%2C0%2C25.7%2C0%2C25.7%2C0z%0A%09%20M24.3%2C39.3l8.8-22.8l8.8%2C22.8H24.3z%22%3E%0A%20%3C%2Fpath%3E%0A%3C%2Fsvg%3E" alt="" aria-hidden="true"><span>Anthropic</span></li>
+        <li class="prov"><img src="data:image/svg+xml;utf8,%3Csvg%20fill%3D%22none%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2065%2065%22%3E%3Cmask%20id%3D%22maskme%22%20style%3D%22mask-type%3Aalpha%22%20maskUnits%3D%22userSpaceOnUse%22%20x%3D%220%22%20y%3D%220%22%20width%3D%2265%22%20height%3D%2265%22%3E%3Cpath%20d%3D%22M32.447%200c.68%200%201.273.465%201.439%201.125a38.904%2038.904%200%20001.999%205.905c2.152%205%205.105%209.376%208.854%2013.125%203.751%203.75%208.126%206.703%2013.125%208.855a38.98%2038.98%200%20005.906%201.999c.66.166%201.124.758%201.124%201.438%200%20.68-.464%201.273-1.125%201.439a38.902%2038.902%200%2000-5.905%201.999c-5%202.152-9.375%205.105-13.125%208.854-3.749%203.751-6.702%208.126-8.854%2013.125a38.973%2038.973%200%2000-2%205.906%201.485%201.485%200%2001-1.438%201.124c-.68%200-1.272-.464-1.438-1.125a38.913%2038.913%200%2000-2-5.905c-2.151-5-5.103-9.375-8.854-13.125-3.75-3.749-8.125-6.702-13.125-8.854a38.973%2038.973%200%2000-5.905-2A1.485%201.485%200%20010%2032.448c0-.68.465-1.272%201.125-1.438a38.903%2038.903%200%20005.905-2c5-2.151%209.376-5.104%2013.125-8.854%203.75-3.749%206.703-8.125%208.855-13.125a38.972%2038.972%200%20001.999-5.905A1.485%201.485%200%200132.447%200z%22%20fill%3D%22%23000%22%2F%3E%3Cpath%20d%3D%22M32.447%200c.68%200%201.273.465%201.439%201.125a38.904%2038.904%200%20001.999%205.905c2.152%205%205.105%209.376%208.854%2013.125%203.751%203.75%208.126%206.703%2013.125%208.855a38.98%2038.98%200%20005.906%201.999c.66.166%201.124.758%201.124%201.438%200%20.68-.464%201.273-1.125%201.439a38.902%2038.902%200%2000-5.905%201.999c-5%202.152-9.375%205.105-13.125%208.854-3.749%203.751-6.702%208.126-8.854%2013.125a38.973%2038.973%200%2000-2%205.906%201.485%201.485%200%2001-1.438%201.124c-.68%200-1.272-.464-1.438-1.125a38.913%2038.913%200%2000-2-5.905c-2.151-5-5.103-9.375-8.854-13.125-3.75-3.749-8.125-6.702-13.125-8.854a38.973%2038.973%200%2000-5.905-2A1.485%201.485%200%20010%2032.448c0-.68.465-1.272%201.125-1.438a38.903%2038.903%200%20005.905-2c5-2.151%209.376-5.104%2013.125-8.854%203.75-3.749%206.703-8.125%208.855-13.125a38.972%2038.972%200%20001.999-5.905A1.485%201.485%200%200132.447%200z%22%20fill%3D%22url(%23prefix__paint0_linear_2001_67)%22%2F%3E%3C%2Fmask%3E%3Cg%20mask%3D%22url(%23maskme)%22%3E%3Cg%20filter%3D%22url(%23prefix__filter0_f_2001_67)%22%3E%3Cpath%20d%3D%22M-5.859%2050.734c7.498%202.663%2016.116-2.33%2019.249-11.152%203.133-8.821-.406-18.131-7.904-20.794-7.498-2.663-16.116%202.33-19.25%2011.151-3.132%208.822.407%2018.132%207.905%2020.795z%22%20fill%3D%22%23FFE432%22%2F%3E%3C%2Fg%3E%3Cg%20filter%3D%22url(%23prefix__filter1_f_2001_67)%22%3E%3Cpath%20d%3D%22M27.433%2021.649c10.3%200%2018.651-8.535%2018.651-19.062%200-10.528-8.35-19.062-18.651-19.062S8.78-7.94%208.78%202.587c0%2010.527%208.35%2019.062%2018.652%2019.062z%22%20fill%3D%22%23FC413D%22%2F%3E%3C%2Fg%3E%3Cg%20filter%3D%22url(%23prefix__filter2_f_2001_67)%22%3E%3Cpath%20d%3D%22M20.184%2082.608c10.753-.525%2018.918-12.244%2018.237-26.174-.68-13.93-9.95-24.797-20.703-24.271C6.965%2032.689-1.2%2044.407-.519%2058.337c.681%2013.93%209.95%2024.797%2020.703%2024.271z%22%20fill%3D%22%2300B95C%22%2F%3E%3C%2Fg%3E%3Cg%20filter%3D%22url(%23prefix__filter3_f_2001_67)%22%3E%3Cpath%20d%3D%22M20.184%2082.608c10.753-.525%2018.918-12.244%2018.237-26.174-.68-13.93-9.95-24.797-20.703-24.271C6.965%2032.689-1.2%2044.407-.519%2058.337c.681%2013.93%209.95%2024.797%2020.703%2024.271z%22%20fill%3D%22%2300B95C%22%2F%3E%3C%2Fg%3E%3Cg%20filter%3D%22url(%23prefix__filter4_f_2001_67)%22%3E%3Cpath%20d%3D%22M30.954%2074.181c9.014-5.485%2011.427-17.976%205.389-27.9-6.038-9.925-18.241-13.524-27.256-8.04-9.015%205.486-11.428%2017.977-5.39%2027.902%206.04%209.924%2018.242%2013.523%2027.257%208.038z%22%20fill%3D%22%2300B95C%22%2F%3E%3C%2Fg%3E%3Cg%20filter%3D%22url(%23prefix__filter5_f_2001_67)%22%3E%3Cpath%20d%3D%22M67.391%2042.993c10.132%200%2018.346-7.91%2018.346-17.666%200-9.757-8.214-17.667-18.346-17.667s-18.346%207.91-18.346%2017.667c0%209.757%208.214%2017.666%2018.346%2017.666z%22%20fill%3D%22%233186FF%22%2F%3E%3C%2Fg%3E%3Cg%20filter%3D%22url(%23prefix__filter6_f_2001_67)%22%3E%3Cpath%20d%3D%22M-13.065%2040.944c9.33%207.094%2022.959%204.869%2030.442-4.972%207.483-9.84%205.987-23.569-3.343-30.663C4.704-1.786-8.924.439-16.408%2010.28c-7.483%209.84-5.986%2023.57%203.343%2030.664z%22%20fill%3D%22%23FBBC04%22%2F%3E%3C%2Fg%3E%3Cg%20filter%3D%22url(%23prefix__filter7_f_2001_67)%22%3E%3Cpath%20d%3D%22M34.74%2051.43c11.135%207.656%2025.896%205.524%2032.968-4.764%207.073-10.287%203.779-24.832-7.357-32.488C49.215%206.52%2034.455%208.654%2027.382%2018.94c-7.072%2010.288-3.779%2024.833%207.357%2032.49z%22%20fill%3D%22%233186FF%22%2F%3E%3C%2Fg%3E%3Cg%20filter%3D%22url(%23prefix__filter8_f_2001_67)%22%3E%3Cpath%20d%3D%22M54.984-2.336c2.833%203.852-.808%2011.34-8.131%2016.727-7.324%205.387-15.557%206.631-18.39%202.78-2.833-3.853.807-11.342%208.13-16.728%207.324-5.387%2015.558-6.631%2018.39-2.78z%22%20fill%3D%22%23749BFF%22%2F%3E%3C%2Fg%3E%3Cg%20filter%3D%22url(%23prefix__filter9_f_2001_67)%22%3E%3Cpath%20d%3D%22M31.727%2016.104C43.053%205.598%2046.94-8.626%2040.41-15.666c-6.53-7.04-21.006-4.232-32.332%206.274s-15.214%2024.73-8.683%2031.77c6.53%207.04%2021.006%204.232%2032.332-6.274z%22%20fill%3D%22%23FC413D%22%2F%3E%3C%2Fg%3E%3Cg%20filter%3D%22url(%23prefix__filter10_f_2001_67)%22%3E%3Cpath%20d%3D%22M8.51%2053.838c6.732%204.818%2014.46%205.55%2017.262%201.636%202.802-3.915-.384-10.994-7.116-15.812-6.731-4.818-14.46-5.55-17.261-1.636-2.802%203.915.383%2010.994%207.115%2015.812z%22%20fill%3D%22%23FFEE48%22%2F%3E%3C%2Fg%3E%3C%2Fg%3E%3Cdefs%3E%3Cfilter%20id%3D%22prefix__filter0_f_2001_67%22%20x%3D%22-19.824%22%20y%3D%2213.152%22%20width%3D%2239.274%22%20height%3D%2243.217%22%20filterUnits%3D%22userSpaceOnUse%22%20color-interpolation-filters%3D%22sRGB%22%3E%3CfeFlood%20flood-opacity%3D%220%22%20result%3D%22BackgroundImageFix%22%2F%3E%3CfeBlend%20in%3D%22SourceGraphic%22%20in2%3D%22BackgroundImageFix%22%20result%3D%22shape%22%2F%3E%3CfeGaussianBlur%20stdDeviation%3D%222.46%22%20result%3D%22effect1_foregroundBlur_2001_67%22%2F%3E%3C%2Ffilter%3E%3Cfilter%20id%3D%22prefix__filter1_f_2001_67%22%20x%3D%22-15.001%22%20y%3D%22-40.257%22%20width%3D%2284.868%22%20height%3D%2285.688%22%20filterUnits%3D%22userSpaceOnUse%22%20color-interpolation-filters%3D%22sRGB%22%3E%3CfeFlood%20flood-opacity%3D%220%22%20result%3D%22BackgroundImageFix%22%2F%3E%3CfeBlend%20in%3D%22SourceGraphic%22%20in2%3D%22BackgroundImageFix%22%20result%3D%22shape%22%2F%3E%3CfeGaussianBlur%20stdDeviation%3D%2211.891%22%20result%3D%22effect1_foregroundBlur_2001_67%22%2F%3E%3C%2Ffilter%3E%3Cfilter%20id%3D%22prefix__filter2_f_2001_67%22%20x%3D%22-20.776%22%20y%3D%2211.927%22%20width%3D%2279.454%22%20height%3D%2290.916%22%20filterUnits%3D%22userSpaceOnUse%22%20color-interpolation-filters%3D%22sRGB%22%3E%3CfeFlood%20flood-opacity%3D%220%22%20result%3D%22BackgroundImageFix%22%2F%3E%3CfeBlend%20in%3D%22SourceGraphic%22%20in2%3D%22BackgroundImageFix%22%20result%3D%22shape%22%2F%3E%3CfeGaussianBlur%20stdDeviation%3D%2210.109%22%20result%3D%22effect1_foregroundBlur_2001_67%22%2F%3E%3C%2Ffilter%3E%3Cfilter%20id%3D%22prefix__filter3_f_2001_67%22%20x%3D%22-20.776%22%20y%3D%2211.927%22%20width%3D%2279.454%22%20height%3D%2290.916%22%20filterUnits%3D%22userSpaceOnUse%22%20color-interpolation-filters%3D%22sRGB%22%3E%3CfeFlood%20flood-opacity%3D%220%22%20result%3D%22BackgroundImageFix%22%2F%3E%3CfeBlend%20in%3D%22SourceGraphic%22%20in2%3D%22BackgroundImageFix%22%20result%3D%22shape%22%2F%3E%3CfeGaussianBlur%20stdDeviation%3D%2210.109%22%20result%3D%22effect1_foregroundBlur_2001_67%22%2F%3E%3C%2Ffilter%3E%3Cfilter%20id%3D%22prefix__filter4_f_2001_67%22%20x%3D%22-19.845%22%20y%3D%2215.459%22%20width%3D%2279.731%22%20height%3D%2281.505%22%20filterUnits%3D%22userSpaceOnUse%22%20color-interpolation-filters%3D%22sRGB%22%3E%3CfeFlood%20flood-opacity%3D%220%22%20result%3D%22BackgroundImageFix%22%2F%3E%3CfeBlend%20in%3D%22SourceGraphic%22%20in2%3D%22BackgroundImageFix%22%20result%3D%22shape%22%2F%3E%3CfeGaussianBlur%20stdDeviation%3D%2210.109%22%20result%3D%22effect1_foregroundBlur_2001_67%22%2F%3E%3C%2Ffilter%3E%3Cfilter%20id%3D%22prefix__filter5_f_2001_67%22%20x%3D%2229.832%22%20y%3D%22-11.552%22%20width%3D%2275.117%22%20height%3D%2273.758%22%20filterUnits%3D%22userSpaceOnUse%22%20color-interpolation-filters%3D%22sRGB%22%3E%3CfeFlood%20flood-opacity%3D%220%22%20result%3D%22BackgroundImageFix%22%2F%3E%3CfeBlend%20in%3D%22SourceGraphic%22%20in2%3D%22BackgroundImageFix%22%20result%3D%22shape%22%2F%3E%3CfeGaussianBlur%20stdDeviation%3D%229.606%22%20result%3D%22effect1_foregroundBlur_2001_67%22%2F%3E%3C%2Ffilter%3E%3Cfilter%20id%3D%22prefix__filter6_f_2001_67%22%20x%3D%22-38.583%22%20y%3D%22-16.253%22%20width%3D%2278.135%22%20height%3D%2278.758%22%20filterUnits%3D%22userSpaceOnUse%22%20color-interpolation-filters%3D%22sRGB%22%3E%3CfeFlood%20flood-opacity%3D%220%22%20result%3D%22BackgroundImageFix%22%2F%3E%3CfeBlend%20in%3D%22SourceGraphic%22%20in2%3D%22BackgroundImageFix%22%20result%3D%22shape%22%2F%3E%3CfeGaussianBlur%20stdDeviation%3D%228.706%22%20result%3D%22effect1_foregroundBlur_2001_67%22%2F%3E%3C%2Ffilter%3E%3Cfilter%20id%3D%22prefix__filter7_f_2001_67%22%20x%3D%228.107%22%20y%3D%22-5.966%22%20width%3D%2278.877%22%20height%3D%2277.539%22%20filterUnits%3D%22userSpaceOnUse%22%20color-interpolation-filters%3D%22sRGB%22%3E%3CfeFlood%20flood-opacity%3D%220%22%20result%3D%22BackgroundImageFix%22%2F%3E%3CfeBlend%20in%3D%22SourceGraphic%22%20in2%3D%22BackgroundImageFix%22%20result%3D%22shape%22%2F%3E%3CfeGaussianBlur%20stdDeviation%3D%227.775%22%20result%3D%22effect1_foregroundBlur_2001_67%22%2F%3E%3C%2Ffilter%3E%3Cfilter%20id%3D%22prefix__filter8_f_2001_67%22%20x%3D%2213.587%22%20y%3D%22-18.488%22%20width%3D%2256.272%22%20height%3D%2251.81%22%20filterUnits%3D%22userSpaceOnUse%22%20color-interpolation-filters%3D%22sRGB%22%3E%3CfeFlood%20flood-opacity%3D%220%22%20result%3D%22BackgroundImageFix%22%2F%3E%3CfeBlend%20in%3D%22SourceGraphic%22%20in2%3D%22BackgroundImageFix%22%20result%3D%22shape%22%2F%3E%3CfeGaussianBlur%20stdDeviation%3D%226.957%22%20result%3D%22effect1_foregroundBlur_2001_67%22%2F%3E%3C%2Ffilter%3E%3Cfilter%20id%3D%22prefix__filter9_f_2001_67%22%20x%3D%22-15.526%22%20y%3D%22-31.297%22%20width%3D%2270.856%22%20height%3D%2269.306%22%20filterUnits%3D%22userSpaceOnUse%22%20color-interpolation-filters%3D%22sRGB%22%3E%3CfeFlood%20flood-opacity%3D%220%22%20result%3D%22BackgroundImageFix%22%2F%3E%3CfeBlend%20in%3D%22SourceGraphic%22%20in2%3D%22BackgroundImageFix%22%20result%3D%22shape%22%2F%3E%3CfeGaussianBlur%20stdDeviation%3D%225.876%22%20result%3D%22effect1_foregroundBlur_2001_67%22%2F%3E%3C%2Ffilter%3E%3Cfilter%20id%3D%22prefix__filter10_f_2001_67%22%20x%3D%22-14.168%22%20y%3D%2220.964%22%20width%3D%2255.501%22%20height%3D%2251.571%22%20filterUnits%3D%22userSpaceOnUse%22%20color-interpolation-filters%3D%22sRGB%22%3E%3CfeFlood%20flood-opacity%3D%220%22%20result%3D%22BackgroundImageFix%22%2F%3E%3CfeBlend%20in%3D%22SourceGraphic%22%20in2%3D%22BackgroundImageFix%22%20result%3D%22shape%22%2F%3E%3CfeGaussianBlur%20stdDeviation%3D%227.273%22%20result%3D%22effect1_foregroundBlur_2001_67%22%2F%3E%3C%2Ffilter%3E%3ClinearGradient%20id%3D%22prefix__paint0_linear_2001_67%22%20x1%3D%2218.447%22%20y1%3D%2243.42%22%20x2%3D%2252.153%22%20y2%3D%2215.004%22%20gradientUnits%3D%22userSpaceOnUse%22%3E%3Cstop%20stop-color%3D%22%234893FC%22%2F%3E%3Cstop%20offset%3D%22.27%22%20stop-color%3D%22%234893FC%22%2F%3E%3Cstop%20offset%3D%22.777%22%20stop-color%3D%22%23969DFF%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23BD99FE%22%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3C%2Fsvg%3E" alt="" aria-hidden="true"><span>Google</span></li>
+        <li class="prov"><img src="data:image/svg+xml;utf8,%3C%3Fxml%20version%3D%221.0%22%20encoding%3D%22UTF-8%22%3F%3E%3Csvg%20width%3D%22290%22%20height%3D%22191%22%20viewBox%3D%220%200%20290%20191%22%20xmlns%3Ardf%3D%22http%3A%2F%2Fwww.w3.org%2F1999%2F02%2F22-rdf-syntax-ns%23%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20xmlns%3Axlink%3D%22http%3A%2F%2Fwww.w3.org%2F1999%2Fxlink%22%20xmlns%3Acc%3D%22http%3A%2F%2Fcreativecommons.org%2Fns%23%22%3E%0A%3Cdesc%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3ELogo%20of%20Meta%20Platforms%20--%20Graphic%20created%20by%20Detmar%20Owen%3C%2Fdesc%3E%0A%3Cdefs%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%0A%3ClinearGradient%20id%3D%22Grad_Logo1%22%20x1%3D%2261%22%20y1%3D%22117%22%20x2%3D%22259%22%20y2%3D%22127%22%20gradientUnits%3D%22userSpaceOnUse%22%3E%0A%3Cstop%20style%3D%22stop-color%3A%230064e1%22%20offset%3D%220%22%2F%3E%0A%3Cstop%20style%3D%22stop-color%3A%230064e1%22%20offset%3D%220.4%22%2F%3E%0A%3Cstop%20style%3D%22stop-color%3A%230073ee%22%20offset%3D%220.83%22%2F%3E%0A%3Cstop%20style%3D%22stop-color%3A%230082fb%22%20offset%3D%221%22%2F%3E%0A%3C%2FlinearGradient%3E%0A%3ClinearGradient%20id%3D%22Grad_Logo2%22%20x1%3D%2245%22%20y1%3D%22139%22%20x2%3D%2245%22%20y2%3D%2266%22%20gradientUnits%3D%22userSpaceOnUse%22%3E%0A%3Cstop%20style%3D%22stop-color%3A%230082fb%22%20offset%3D%220%22%2F%3E%0A%3Cstop%20style%3D%22stop-color%3A%230064e0%22%20offset%3D%221%22%2F%3E%0A%3C%2FlinearGradient%3E%0A%3C%2Fdefs%3E%0A%3Cpath%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20id%3D%22Logo0%22%20style%3D%22fill%3A%230081fb%22%20d%3D%22m31.06%2C125.96c0%2C10.98%202.41%2C19.41%205.56%2C24.51%204.13%2C6.68%2010.29%2C9.51%2016.57%2C9.51%208.1%2C0%2015.51-2.01%2029.79-21.76%2011.44-15.83%2024.92-38.05%2033.99-51.98l15.36-23.6c10.67-16.39%2023.02-34.61%2037.18-46.96%2011.56-10.08%2024.03-15.68%2036.58-15.68%2021.07%2C0%2041.14%2C12.21%2056.5%2C35.11%2016.81%2C25.08%2024.97%2C56.67%2024.97%2C89.27%200%2C19.38-3.82%2C33.62-10.32%2C44.87-6.28%2C10.88-18.52%2C21.75-39.11%2C21.75l0-31.02c17.63%2C0%2022.03-16.2%2022.03-34.74%200-26.42-6.16-55.74-19.73-76.69-9.63-14.86-22.11-23.94-35.84-23.94-14.85%2C0-26.8%2C11.2-40.23%2C31.17-7.14%2C10.61-14.47%2C23.54-22.7%2C38.13l-9.06%2C16.05c-18.2%2C32.27-22.81%2C39.62-31.91%2C51.75-15.95%2C21.24-29.57%2C29.29-47.5%2C29.29-21.27%2C0-34.72-9.21-43.05-23.09-6.8-11.31-10.14-26.15-10.14-43.06z%22%2F%3E%0A%3Cpath%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20id%3D%22Logo1%22%20style%3D%22fill%3Aurl(%23Grad_Logo1)%22%20d%3D%22m24.49%2C37.3c14.24-21.95%2034.79-37.3%2058.36-37.3%2013.65%2C0%2027.22%2C4.04%2041.39%2C15.61%2015.5%2C12.65%2032.02%2C33.48%2052.63%2C67.81l7.39%2C12.32c17.84%2C29.72%2027.99%2C45.01%2033.93%2C52.22%207.64%2C9.26%2012.99%2C12.02%2019.94%2C12.02%2017.63%2C0%2022.03-16.2%2022.03-34.74l27.4-.86c0%2C19.38-3.82%2C33.62-10.32%2C44.87-6.28%2C10.88-18.52%2C21.75-39.11%2C21.75-12.8%2C0-24.14-2.78-36.68-14.61-9.64-9.08-20.91-25.21-29.58-39.71l-25.79-43.08c-12.94-21.62-24.81-37.74-31.68-45.04-7.39-7.85-16.89-17.33-32.05-17.33-12.27%2C0-22.69%2C8.61-31.41%2C21.78z%22%2F%3E%0A%3Cpath%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20id%3D%22Logo2%22%20style%3D%22fill%3Aurl(%23Grad_Logo2)%22%20d%3D%22m82.35%2C31.23c-12.27%2C0-22.69%2C8.61-31.41%2C21.78-12.33%2C18.61-19.88%2C46.33-19.88%2C72.95%200%2C10.98%202.41%2C19.41%205.56%2C24.51l-26.48%2C17.44c-6.8-11.31-10.14-26.15-10.14-43.06%200-30.75%208.44-62.8%2024.49-87.55%2014.24-21.95%2034.79-37.3%2058.36-37.3z%22%2F%3E%0A%3Cpath%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20id%3D%22Text%22%20style%3D%22fill%3A%23192830%22%20d%3D%22m347.94%2C6.04h35.93l61.09%2C110.52%2061.1-110.52h35.15v181.6h-29.31v-139.18l-53.58%2C96.38h-27.5l-53.57-96.38v139.18h-29.31z%20m285.11%2C67.71c-21.02%2C0-33.68%2C15.82-36.71%2C35.41h71.34c-1.47-20.18-13.11-35.41-34.63-35.41z%20m-65.77%2C46.57c0-41.22%2026.64-71.22%2066.28-71.22%2038.99%2C0%2062.27%2C29.62%2062.27%2C73.42v8.05h-99.49c3.53%2C21.31%2017.67%2C35.67%2040.47%2C35.67%2018.19%2C0%2029.56-5.55%2040.34-15.7l15.57%2C19.07c-14.67%2C13.49-33.33%2C21.27-56.95%2C21.27-42.91%2C0-68.49-31.29-68.49-70.56z%20m164.09-43.97h-26.98v-24h26.98v-39.69h28.28v39.69h40.99v24h-40.99v60.83c0%2C20.77%206.64%2C28.15%2022.96%2C28.15%207.45%2C0%2011.72-.64%2018.03-1.69v23.74c-7.86%2C2.22-15.36%2C3.24-23.48%2C3.24-30.53%2C0-45.79-16.68-45.79-50.07z%20m188.35%2C23.34c-5.68-14.34-18.35-24.9-36.97-24.9-24.2%2C0-39.69%2C17.17-39.69%2C45.14%200%2C27.27%2014.26%2C45.27%2038.53%2C45.27%2019.08%2C0%2032.7-11.1%2038.13-24.91z%20m28.28%2C87.95h-27.76v-18.94c-7.76%2C11.15-21.88%2C22.18-44.75%2C22.18-36.78%2C0-61.36-30.79-61.36-70.95%200-40.54%2025.17-70.83%2062.92-70.83%2018.66%2C0%2033.3%2C7.46%2043.19%2C20.63v-17.38h27.76z%22%2F%3E%0A%3C%2Fsvg%3E" alt="" aria-hidden="true"><span>Meta</span></li>
+        <li class="prov"><img src="data:image/svg+xml;utf8,%3C%3Fxml%20version%3D%221.0%22%20encoding%3D%22UTF-8%22%20standalone%3D%22no%22%3F%3E%3C!DOCTYPE%20svg%20PUBLIC%20%22-%2F%2FW3C%2F%2FDTD%20SVG%201.1%2F%2FEN%22%20%22http%3A%2F%2Fwww.w3.org%2FGraphics%2FSVG%2F1.1%2FDTD%2Fsvg11.dtd%22%3E%3Csvg%20width%3D%22100%25%22%20height%3D%22100%25%22%20viewBox%3D%220%200%20129%2091%22%20version%3D%221.1%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20xmlns%3Axlink%3D%22http%3A%2F%2Fwww.w3.org%2F1999%2Fxlink%22%20xml%3Aspace%3D%22preserve%22%20xmlns%3Aserif%3D%22http%3A%2F%2Fwww.serif.com%2F%22%20style%3D%22fill-rule%3Aevenodd%3Bclip-rule%3Aevenodd%3Bstroke-linejoin%3Around%3Bstroke-miterlimit%3A2%3B%22%3E%3Cg%3E%3Crect%20x%3D%2218.292%22%20y%3D%220%22%20width%3D%2218.293%22%20height%3D%2218.123%22%20style%3D%22fill%3A%23ffd800%3Bfill-rule%3Anonzero%3B%22%2F%3E%3Crect%20x%3D%2291.473%22%20y%3D%220%22%20width%3D%2218.293%22%20height%3D%2218.123%22%20style%3D%22fill%3A%23ffd800%3Bfill-rule%3Anonzero%3B%22%2F%3E%3Crect%20x%3D%2218.292%22%20y%3D%2218.121%22%20width%3D%2236.586%22%20height%3D%2218.123%22%20style%3D%22fill%3A%23ffaf00%3Bfill-rule%3Anonzero%3B%22%2F%3E%3Crect%20x%3D%2273.181%22%20y%3D%2218.121%22%20width%3D%2236.586%22%20height%3D%2218.123%22%20style%3D%22fill%3A%23ffaf00%3Bfill-rule%3Anonzero%3B%22%2F%3E%3Crect%20x%3D%2218.292%22%20y%3D%2236.243%22%20width%3D%2291.476%22%20height%3D%2218.122%22%20style%3D%22fill%3A%23ff8205%3Bfill-rule%3Anonzero%3B%22%2F%3E%3Crect%20x%3D%2218.292%22%20y%3D%2254.37%22%20width%3D%2218.293%22%20height%3D%2218.123%22%20style%3D%22fill%3A%23fa500f%3Bfill-rule%3Anonzero%3B%22%2F%3E%3Crect%20x%3D%2254.883%22%20y%3D%2254.37%22%20width%3D%2218.293%22%20height%3D%2218.123%22%20style%3D%22fill%3A%23fa500f%3Bfill-rule%3Anonzero%3B%22%2F%3E%3Crect%20x%3D%2291.473%22%20y%3D%2254.37%22%20width%3D%2218.293%22%20height%3D%2218.123%22%20style%3D%22fill%3A%23fa500f%3Bfill-rule%3Anonzero%3B%22%2F%3E%3Crect%20x%3D%220%22%20y%3D%2272.504%22%20width%3D%2254.89%22%20height%3D%2218.123%22%20style%3D%22fill%3A%23e10500%3Bfill-rule%3Anonzero%3B%22%2F%3E%3Crect%20x%3D%2273.181%22%20y%3D%2272.504%22%20width%3D%2254.89%22%20height%3D%2218.123%22%20style%3D%22fill%3A%23e10500%3Bfill-rule%3Anonzero%3B%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E" alt="" aria-hidden="true"><span>Mistral</span></li>
+        <li class="prov" data-dual><img class="lg-l" src="data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%22226.69000244140625%20196.85000610351562%20546.6199951171875%20606.300048828125%22%3E%3Cg%3E%3Cpolygon%20fill%3D%22%23000%22%20points%3D%22226.83%20411.15%20501.31%20803.15%20623.31%20803.15%20348.82%20411.15%20226.83%20411.15%22%3E%3C%2Fpolygon%3E%3Cpolygon%20fill%3D%22%23000%22%20points%3D%22348.72%20628.87%20226.69%20803.15%20348.77%20803.15%20409.76%20716.05%20348.72%20628.87%22%3E%3C%2Fpolygon%3E%3Cpolygon%20fill%3D%22%23000%22%20points%3D%22651.23%20196.85%20440.28%20498.12%20501.32%20585.29%20773.31%20196.85%20651.23%20196.85%22%3E%3C%2Fpolygon%3E%3Cpolygon%20fill%3D%22%23000%22%20points%3D%22673.31%20383.25%20673.31%20803.15%20773.31%20803.15%20773.31%20240.44%20673.31%20383.25%22%3E%3C%2Fpolygon%3E%3C%2Fg%3E%3C%2Fsvg%3E" alt="" aria-hidden="true"><img class="lg-d" src="data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%22226.69000244140625%20196.85000610351562%20546.6199951171875%20606.300048828125%22%3E%3Cg%3E%3Cpolygon%20fill%3D%22%23ffffff%22%20points%3D%22226.83%20411.15%20501.31%20803.15%20623.31%20803.15%20348.82%20411.15%20226.83%20411.15%22%3E%3C%2Fpolygon%3E%3Cpolygon%20fill%3D%22%23ffffff%22%20points%3D%22348.72%20628.87%20226.69%20803.15%20348.77%20803.15%20409.76%20716.05%20348.72%20628.87%22%3E%3C%2Fpolygon%3E%3Cpolygon%20fill%3D%22%23ffffff%22%20points%3D%22651.23%20196.85%20440.28%20498.12%20501.32%20585.29%20773.31%20196.85%20651.23%20196.85%22%3E%3C%2Fpolygon%3E%3Cpolygon%20fill%3D%22%23ffffff%22%20points%3D%22673.31%20383.25%20673.31%20803.15%20773.31%20803.15%20773.31%20240.44%20673.31%20383.25%22%3E%3C%2Fpolygon%3E%3C%2Fg%3E%3C%2Fsvg%3E" alt="" aria-hidden="true"><span>xAI</span></li>
+        <li class="prov"><img src="data:image/svg+xml;utf8,%3Csvg%20height%3D%221em%22%20style%3D%22flex%3Anone%3Bline-height%3A1%22%20viewBox%3D%220%200%2024%2024%22%20width%3D%221em%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Ctitle%3EDeepSeek%3C%2Ftitle%3E%3Cpath%20d%3D%22M23.748%204.482c-.254-.124-.364.113-.512.234-.051.039-.094.09-.137.136-.372.397-.806.657-1.373.626-.829-.046-1.537.214-2.163.848-.133-.782-.575-1.248-1.247-1.548-.352-.156-.708-.311-.955-.65-.172-.241-.219-.51-.305-.774-.055-.16-.11-.323-.293-.35-.2-.031-.278.136-.356.276-.313.572-.434%201.202-.422%201.84.027%201.436.633%202.58%201.838%203.393.137.093.172.187.129.323-.082.28-.18.552-.266.833-.055.179-.137.217-.329.14a5.526%205.526%200%2001-1.736-1.18c-.857-.828-1.631-1.742-2.597-2.458a11.365%2011.365%200%2000-.689-.471c-.985-.957.13-1.743.388-1.836.27-.098.093-.432-.779-.428-.872.004-1.67.295-2.687.684a3.055%203.055%200%2001-.465.137%209.597%209.597%200%2000-2.883-.102c-1.885.21-3.39%201.102-4.497%202.623C.082%208.606-.231%2010.684.152%2012.85c.403%202.284%201.569%204.175%203.36%205.653%201.858%201.533%203.997%202.284%206.438%202.14%201.482-.085%203.133-.284%204.994-1.86.47.234.962.327%201.78.397.63.059%201.236-.03%201.705-.128.735-.156.684-.837.419-.961-2.155-1.004-1.682-.595-2.113-.926%201.096-1.296%202.746-2.642%203.392-7.003.05-.347.007-.565%200-.845-.004-.17.035-.237.23-.256a4.173%204.173%200%20001.545-.475c1.396-.763%201.96-2.015%202.093-3.517.02-.23-.004-.467-.247-.588zM11.581%2018c-2.089-1.642-3.102-2.183-3.52-2.16-.392.024-.321.471-.235.763.09.288.207.486.371.739.114.167.192.416-.113.603-.673.416-1.842-.14-1.897-.167-1.361-.802-2.5-1.86-3.301-3.307-.774-1.393-1.224-2.887-1.298-4.482-.02-.386.093-.522.477-.592a4.696%204.696%200%20011.529-.039c2.132.312%203.946%201.265%205.468%202.774.868.86%201.525%201.887%202.202%202.891.72%201.066%201.494%202.082%202.48%202.914.348.292.625.514.891.677-.802.09-2.14.11-3.054-.614zm1-6.44a.306.306%200%2001.415-.287.302.302%200%2001.2.288.306.306%200%2001-.31.307.303.303%200%2001-.304-.308zm3.11%201.596c-.2.081-.399.151-.59.16a1.245%201.245%200%2001-.798-.254c-.274-.23-.47-.358-.552-.758a1.73%201.73%200%2001.016-.588c.07-.327-.008-.537-.239-.727-.187-.156-.426-.199-.688-.199a.559.559%200%2001-.254-.078c-.11-.054-.2-.19-.114-.358.028-.054.16-.186.192-.21.356-.202.767-.136%201.146.016.352.144.618.408%201.001.782.391.451.462.576.685.914.176.265.336.537.445.848.067.195-.019.354-.25.452z%22%20fill%3D%22%234D6BFE%22%3E%3C%2Fpath%3E%3C%2Fsvg%3E" alt="" aria-hidden="true"><span>DeepSeek</span></li>
+        <li class="prov"><img src="data:image/svg+xml;utf8,%3Csvg%20height%3D%221em%22%20style%3D%22flex%3Anone%3Bline-height%3A1%22%20viewBox%3D%220%200%2024%2024%22%20width%3D%221em%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Ctitle%3EQwen%3C%2Ftitle%3E%3Cpath%20d%3D%22M12.604%201.34c.393.69.784%201.382%201.174%202.075a.18.18%200%2000.157.091h5.552c.174%200%20.322.11.446.327l1.454%202.57c.19.337.24.478.024.837-.26.43-.513.864-.76%201.3l-.367.658c-.106.196-.223.28-.04.512l2.652%204.637c.172.301.111.494-.043.77-.437.785-.882%201.564-1.335%202.34-.159.272-.352.375-.68.37-.777-.016-1.552-.01-2.327.016a.099.099%200%2000-.081.05%20575.097%20575.097%200%2001-2.705%204.74c-.169.293-.38.363-.725.364-.997.003-2.002.004-3.017.002a.537.537%200%2001-.465-.271l-1.335-2.323a.09.09%200%2000-.083-.049H4.982c-.285.03-.553-.001-.805-.092l-1.603-2.77a.543.543%200%2001-.002-.54l1.207-2.12a.198.198%200%20000-.197%20550.951%20550.951%200%2001-1.875-3.272l-.79-1.395c-.16-.31-.173-.496.095-.965.465-.813.927-1.625%201.387-2.436.132-.234.304-.334.584-.335a338.3%20338.3%200%20012.589-.001.124.124%200%2000.107-.063l2.806-4.895a.488.488%200%2001.422-.246c.524-.001%201.053%200%201.583-.006L11.704%201c.341-.003.724.032.9.34zm-3.432.403a.06.06%200%2000-.052.03L6.254%206.788a.157.157%200%2001-.135.078H3.253c-.056%200-.07.025-.041.074l5.81%2010.156c.025.042.013.062-.034.063l-2.795.015a.218.218%200%2000-.2.116l-1.32%202.31c-.044.078-.021.118.068.118l5.716.008c.046%200%20.08.02.104.061l1.403%202.454c.046.081.092.082.139%200l5.006-8.76.783-1.382a.055.055%200%2001.096%200l1.424%202.53a.122.122%200%2000.107.062l2.763-.02a.04.04%200%2000.035-.02.041.041%200%20000-.04l-2.9-5.086a.108.108%200%20010-.113l.293-.507%201.12-1.977c.024-.041.012-.062-.035-.062H9.2c-.059%200-.073-.026-.043-.077l1.434-2.505a.107.107%200%20000-.114L9.225%201.774a.06.06%200%2000-.053-.031zm6.29%208.02c.046%200%20.058.02.034.06l-.832%201.465-2.613%204.585a.056.056%200%2001-.05.029.058.058%200%2001-.05-.029L8.498%209.841c-.02-.034-.01-.052.028-.054l.216-.012%206.722-.012z%22%20fill%3D%22url(%23lobe-icons-qwen-fill)%22%20fill-rule%3D%22nonzero%22%3E%3C%2Fpath%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22lobe-icons-qwen-fill%22%20x1%3D%220%25%22%20x2%3D%22100%25%22%20y1%3D%220%25%22%20y2%3D%220%25%22%3E%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%236336E7%22%20stop-opacity%3D%22.84%22%3E%3C%2Fstop%3E%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%236F69F7%22%20stop-opacity%3D%22.84%22%3E%3C%2Fstop%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3C%2Fsvg%3E" alt="" aria-hidden="true"><span>Qwen</span></li>
+        <li class="prov"><img src="data:image/svg+xml;utf8,%3Csvg%20viewBox%3D%220%200%20271.7%20179.7%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%222500%22%20height%3D%221653%22%3E%3Cpath%20d%3D%22M101.3%2053.6V37.4c1.6-.1%203.2-.2%204.8-.2%2044.4-1.4%2073.5%2038.2%2073.5%2038.2S148.2%20119%20114.5%20119c-4.5%200-8.9-.7-13.1-2.1V67.7c17.3%202.1%2020.8%209.7%2031.1%2027l23.1-19.4s-16.9-22.1-45.3-22.1c-3-.1-6%20.1-9%20.4m0-53.6v24.2l4.8-.3c61.7-2.1%20102%2050.6%20102%2050.6s-46.2%2056.2-94.3%2056.2c-4.2%200-8.3-.4-12.4-1.1v15c3.4.4%206.9.7%2010.3.7%2044.8%200%2077.2-22.9%20108.6-49.9%205.2%204.2%2026.5%2014.3%2030.9%2018.7-29.8%2025-99.3%2045.1-138.7%2045.1-3.8%200-7.4-.2-11-.6v21.1h170.2V0H101.3zm0%20116.9v12.8c-41.4-7.4-52.9-50.5-52.9-50.5s19.9-22%2052.9-25.6v14h-.1c-17.3-2.1-30.9%2014.1-30.9%2014.1s7.7%2027.3%2031%2035.2M27.8%2077.4s24.5-36.2%2073.6-40V24.2C47%2028.6%200%2074.6%200%2074.6s26.6%2077%20101.3%2084v-14c-54.8-6.8-73.5-67.2-73.5-67.2z%22%20fill%3D%22%2376b900%22%2F%3E%3C%2Fsvg%3E" alt="" aria-hidden="true"><span>NVIDIA</span></li>
+        <li class="prov"><img src="data:image/svg+xml;utf8,%3C%3Fxml%20version%3D%221.0%22%20encoding%3D%22utf-8%22%3F%3E%3Csvg%20version%3D%221.1%22%20id%3D%22Layer_1%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20xmlns%3Axlink%3D%22http%3A%2F%2Fwww.w3.org%2F1999%2Fxlink%22%20x%3D%220px%22%20y%3D%220px%22%20viewBox%3D%220%200%20122.879%20111.709%22%20enable-background%3D%22new%200%200%20122.879%20111.709%22%20xml%3Aspace%3D%22preserve%22%3E%3Cg%3E%3Cpath%20d%3D%22M33.848%2C54.85c0-5.139%2C1.266-9.533%2C3.798-13.182c2.532-3.649%2C5.995-6.404%2C10.389-8.266%20c4.021-1.713%2C8.974-2.941%2C14.858-3.687c2.01-0.223%2C5.287-0.521%2C9.83-0.894v-1.899c0-4.766-0.521-7.968-1.564-9.607%20c-1.564-2.235-4.021-3.351-7.373-3.351h-0.893c-2.458%2C0.223-4.581%2C1.005-6.368%2C2.345c-1.787%2C1.341-2.942%2C3.202-3.463%2C5.586%20c-0.298%2C1.489-1.042%2C2.345-2.234%2C2.569l-12.847-1.564c-1.266-0.298-1.899-0.968-1.899-2.011c0-0.223%2C0.037-0.484%2C0.111-0.781%20c1.266-6.628%2C4.375-11.543%2C9.328-14.746C50.473%2C2.161%2C56.264%2C0.373%2C62.893%2C0h2.793c8.488%2C0%2C15.117%2C2.197%2C19.885%2C6.591%20c0.746%2C0.748%2C1.438%2C1.55%2C2.066%2C2.401c0.631%2C0.856%2C1.135%2C1.62%2C1.506%2C2.29c0.373%2C0.67%2C0.709%2C1.639%2C1.006%2C2.904%20c0.299%2C1.267%2C0.521%2C2.142%2C0.672%2C2.625c0.148%2C0.484%2C0.26%2C1.527%2C0.334%2C3.129c0.074%2C1.601%2C0.111%2C2.55%2C0.111%2C2.848v27.034%20c0%2C1.936%2C0.279%2C3.705%2C0.838%2C5.306c0.559%2C1.602%2C1.1%2C2.756%2C1.619%2C3.463c0.521%2C0.707%2C1.379%2C1.844%2C2.57%2C3.406%20c0.447%2C0.672%2C0.67%2C1.268%2C0.67%2C1.789c0%2C0.596-0.297%2C1.115-0.895%2C1.563c-6.18%2C5.363-9.531%2C8.268-10.053%2C8.715%20c-0.893%2C0.67-1.973%2C0.744-3.24%2C0.223c-1.041-0.895-1.953-1.75-2.736-2.57c-0.781-0.818-1.34-1.414-1.676-1.787%20c-0.334-0.371-0.875-1.098-1.619-2.178s-1.268-1.807-1.564-2.178c-4.17%2C4.543-8.266%2C7.373-12.287%2C8.49%20c-2.533%2C0.744-5.661%2C1.117-9.384%2C1.117c-5.735%2C0-10.445-1.77-14.131-5.307C35.691%2C66.336%2C33.848%2C61.328%2C33.848%2C54.85L33.848%2C54.85z%20M53.062%2C52.615c0%2C2.905%2C0.727%2C5.232%2C2.178%2C6.982c1.453%2C1.75%2C3.407%2C2.625%2C5.865%2C2.625c0.224%2C0%2C0.54-0.037%2C0.95-0.111%20c0.408-0.076%2C0.688-0.113%2C0.838-0.113c3.127-0.818%2C5.547-2.828%2C7.26-6.031c0.82-1.415%2C1.434-2.96%2C1.844-4.636%20c0.41-1.675%2C0.633-3.035%2C0.67-4.078c0.037-1.042%2C0.057-2.755%2C0.057-5.138v-2.793c-4.32%2C0-7.596%2C0.298-9.83%2C0.894%20C56.338%2C42.077%2C53.062%2C46.21%2C53.062%2C52.615L53.062%2C52.615z%22%2F%3E%3Cpath%20fill%3D%22%23FF9900%22%20d%3D%22M99.979%2C88.586c0.15-0.299%2C0.373-0.596%2C0.672-0.895c1.861-1.266%2C3.648-2.121%2C5.361-2.568%20c2.83-0.744%2C5.586-1.154%2C8.266-1.229c0.746-0.076%2C1.453-0.037%2C2.123%2C0.111c3.352%2C0.297%2C5.361%2C0.857%2C6.033%2C1.676%20c0.297%2C0.447%2C0.445%2C1.117%2C0.445%2C2.01v0.783c0%2C2.605-0.707%2C5.678-2.121%2C9.215c-1.416%2C3.537-3.389%2C6.387-5.922%2C8.547%20c-0.371%2C0.297-0.707%2C0.445-1.004%2C0.445c-0.15%2C0-0.299-0.037-0.447-0.111c-0.447-0.223-0.559-0.633-0.336-1.229%20c2.756-6.479%2C4.133-10.984%2C4.133-13.518c0-0.818-0.148-1.414-0.445-1.787c-0.746-0.893-2.83-1.34-6.256-1.34%20c-1.268%2C0-2.756%2C0.074-4.469%2C0.223c-1.861%2C0.225-3.574%2C0.447-5.139%2C0.672c-0.447%2C0-0.744-0.076-0.895-0.225%20c-0.148-0.148-0.186-0.297-0.111-0.447C99.867%2C88.846%2C99.904%2C88.734%2C99.979%2C88.586L99.979%2C88.586z%20M0.223%2C86.688%20c0.373-0.596%2C0.968-0.633%2C1.788-0.113c18.618%2C10.799%2C38.875%2C16.199%2C60.769%2C16.199c14.598%2C0%2C29.008-2.719%2C43.232-8.156%20c0.371-0.148%2C0.912-0.371%2C1.619-0.67c0.709-0.297%2C1.211-0.521%2C1.508-0.67c1.117-0.447%2C1.992-0.223%2C2.625%2C0.67%20c0.635%2C0.895%2C0.43%2C1.713-0.613%2C2.457c-1.342%2C0.969-3.055%2C2.086-5.139%2C3.352c-6.404%2C3.799-13.555%2C6.74-21.449%2C8.826%20c-7.893%2C2.086-15.602%2C3.127-23.123%2C3.127c-11.618%2C0-22.603-2.029-32.954-6.088C18.134%2C101.563%2C8.862%2C95.846%2C0.67%2C88.475%20C0.223%2C88.102%2C0%2C87.729%2C0%2C87.357C0%2C87.133%2C0.074%2C86.91%2C0.223%2C86.688L0.223%2C86.688z%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E" alt="" aria-hidden="true"><span>Amazon</span></li>
+          <li class="more">&hellip; and every other author in the catalog</li>
+        </ul>
+
+        <p>
+          The logos above are rendered by the SDK&rsquo;s own <code>getProviderLogo()</code> &mdash; inline
+          data URIs, light and dark variants, no bundler config. This page is built out of the thing it documents.
+        </p>
+
+        <div class="card">
+          <dl>
+            <div class="row">
+              <dt>Install</dt>
+              <dd><strong>Not on npm.</strong> Install from GitHub &mdash; and <code>trustedDependencies</code> is load-bearing. <a href="#install">See Install</a>.</dd>
+            </div>
+            <div class="row">
+              <dt>Entries</dt>
+              <dd>Two entry points, <strong>one class name</strong>. <code>@unifiedai/sdk</code> is browser-safe; <code>@unifiedai/sdk/node</code> adds OAuth.</dd>
+            </div>
+            <div class="row">
+              <dt>Auth</dt>
+              <dd>The <code>token</code> option is the whole switch. There is <strong>no <code>apiKey</code> option</strong> &mdash; a <code>uapi_</code> key is just a bearer token.</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <!-- ══ ECOSYSTEM ═════════════════════════════════════════════ -->
+      <section id="ecosystem">
+        <p class="eyebrow">Context</p>
+        <h2>Where the SDK fits</h2>
+        <p>
+          The SDK talks to <strong>two backends</strong>, and knowing which is which explains almost every URL
+          you will see. <strong>unified-api</strong> is the model gateway: every model call, every file, the
+          ecosystem surface, plus the OAuth <em>token</em> and <em>revoke</em> endpoints.
+          <strong>base-api</strong> owns identity: login, accounts, and the OAuth <em>authorize</em> page.
+        </p>
+        <p>
+          In practice the SDK points at unified-api for everything and only touches base-api during the
+          browser leg of an OAuth sign-in.
+        </p>
+
+        <figure class="diagram">
+          <div class="dgrid">
+            <div class="dstack">
+              <div class="node you">
+                <b>Your app</b>
+                <span>@unifiedai/sdk<br>browser &middot; node &middot; edge</span>
+              </div>
+            </div>
+            <div class="dstack">
+              <div class="dlabel"><em>authorize leg only</em></div>
+              <div class="node">
+                <b>base-api</b>
+                <span>identity &middot; accounts<br>OAuth <b style="display:inline">authorize</b></span>
+              </div>
+              <div class="dlabel"><em>everything else</em></div>
+              <div class="node">
+                <b>unified-api</b>
+                <span>model gateway<br>OAuth token &middot; revoke<br>files &middot; storage &middot; fs &middot; ecosystem</span>
+              </div>
+            </div>
+            <div class="dstack">
+              <div class="node">
+                <b>Providers</b>
+                <span>routed server-side<br>by the gateway</span>
+              </div>
+            </div>
+          </div>
+        </figure>
+
+        <div class="tw">
+          <table>
+            <caption class="visually-hidden"></caption>
+            <thead>
+              <tr><th>Endpoint</th><th>Default host</th><th>Owned by</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>/oauth/authorize</code></td><td><code>web.unifiedai.app</code></td><td>base-api</td></tr>
+              <tr><td><code>/oauth/token</code></td><td><code>api.unifiedai.app</code></td><td>unified-api</td></tr>
+              <tr><td><code>/oauth/revoke</code></td><td><code>api.unifiedai.app</code></td><td>unified-api</td></tr>
+              <tr><td><code>/api/v1/*</code> &mdash; models, chat, files, storage, fs, ecosystem</td><td><code>api.unifiedai.app</code></td><td>unified-api</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="note">
+          <span class="note-t">Why you care</span>
+          <p>
+            The only consumer-visible consequence is that the sign-in page lives on a
+            <strong>different host</strong> than the API. Everything else is one base URL.
+          </p>
+        </div>
+      </section>
+
+      <!-- ══ INSTALL ═══════════════════════════════════════════════ -->
+      <section id="install">
+        <p class="eyebrow">Step 1</p>
+        <h2>Install</h2>
+
+        <div class="note warn">
+          <span class="note-t">Not published to npm</span>
+          <p>
+            <code>bun add @unifiedai/sdk</code> returns a <strong>404</strong> &mdash; the package name is
+            unclaimed on the public registry. Install from GitHub or a local path instead.
+          </p>
+        </div>
+
+        <div class="snip">
+          <div class="snip-h"><b>Install from GitHub</b><button class="copy" type="button">copy</button></div>
+          <pre><code class="lang-sh">bun add @unifiedai/sdk@github:greedyafinc/uni-sdk#main
+
+# Or pin a commit — the version field moves slower than main.
+bun add @unifiedai/sdk@github:greedyafinc/uni-sdk#&lt;sha&gt;</code></pre>
+        </div>
+
+        <p>
+          The package ships no build output: <code>dist/</code> is gitignored and produced by the
+          <code>prepare</code> script at install time. Bun blocks lifecycle scripts by default, so
+          <strong>you must trust the dependency</strong> or <code>dist/</code> is never built and every
+          import fails to resolve.
+        </p>
+
+        <div class="snip">
+          <div class="snip-h"><b>package.json — required</b><button class="copy" type="button">copy</button></div>
+          <pre><code class="lang-ts">{
+  "dependencies": {
+    "@unifiedai/sdk": "github:greedyafinc/uni-sdk#main"
+  },
+  "trustedDependencies": ["@unifiedai/sdk"]
+}</code></pre>
+        </div>
+
+        <p>
+          Inside this workspace, apps use a <code>file:</code> reference instead
+          (<code>"@unifiedai/sdk": "file:../../uni-sdk"</code>) so local SDK edits are picked up without a
+          publish step.
+        </p>
+
+        <h3>Which entry?</h3>
+        <div class="snip">
+          <div class="snip-h"><b>Two entries, one class name</b><button class="copy" type="button">copy</button></div>
+          <pre><code class="lang-ts">// Browser, Tauri WebViews, Workers, edge, server-side trusted hosts.
+// Zero node:* specifiers — bundles without polyfills.
+import { UnifiedAI } from "@unifiedai/sdk";
+
+// Node CLIs and desktop apps: adds OAuth (PKCE + loopback + OS keychain).
+import { UnifiedAI } from "@unifiedai/sdk/node";</code></pre>
+        </div>
+
+        <p>
+          The node entry is a <strong>runtime superset</strong> &mdash; same class name, same resources, plus
+          <code>bootstrap()</code>. Pulling it into a browser bundle drags in <code>node:*</code> and the
+          native <code>@napi-rs/keyring</code>, which fails the build. The SDK&rsquo;s own build enforces the
+          reverse direction: a structural check fails if the browser bundle ever picks up either.
+        </p>
+
+        <div class="note warn">
+          <span class="note-t">Type-export asymmetry</span>
+          <p>
+            <code>src/node/index.ts</code> re-exports resources explicitly and <strong>omits</strong> the
+            <code>agent</code>, <code>actions</code>, <code>fs</code>, <code>artifacts</code>,
+            <code>memory</code>, <code>projects</code> and <code>references</code> barrels. Those properties
+            still <em>work at runtime</em> from the node entry (the node class extends the browser one), but
+            their <strong>named type exports are unavailable</strong>. Import those types from
+            <code>@unifiedai/sdk/browser</code>.
+          </p>
+        </div>
+      </section>
+
+      <!-- ══ QUICKSTART ════════════════════════════════════════════ -->
+      <section id="quickstart">
+        <p class="eyebrow">Step 2</p>
+        <h2>Quickstart</h2>
+        <p>A working call, start to finish. This is the whole surface in miniature: construct with a token, pick a wire shape, read the result.</p>
+
+        <div class="snip">
+          <div class="snip-h"><b>First call</b><button class="copy" type="button">copy</button></div>
+          <pre><code class="lang-ts">import { UnifiedAI } from "@unifiedai/sdk";
+
+const sdk = new UnifiedAI({ token: process.env.UNIFIED_TOKEN });
+
+const res = await sdk.chat.completions.create({
+  model: "gpt-4o",
+  messages: [
+    { role: "system", content: "You are terse." },
+    { role: "user", content: "Why is the sky blue?" },
+  ],
+  max_tokens: 300,
+});
+
+console.log(res.choices[0]?.message.content);
+console.log(res.usage.total_tokens);</code></pre>
+        </div>
+
+        <p>Streaming is the same call with one option &mdash; and no <code>await</code>:</p>
+
+        <div class="snip">
+          <div class="snip-h"><b>Streaming</b><button class="copy" type="button">copy</button></div>
+          <pre><code class="lang-ts">const stream = sdk.chat.completions.create({
+  model: "gpt-4o",
+  messages: [{ role: "user", content: "Write a haiku about TCP." }],
+  stream: true,
+  stream_options: { include_usage: true },
+});
+
+for await (const chunk of stream) {
+  process.stdout.write(chunk.choices[0]?.delta.content ?? "");
+}
+
+// Populated once the stream drains and a usage-bearing chunk arrived.
+console.log(stream.usage?.tokens_per_second);</code></pre>
+        </div>
+
+        <div class="note">
+          <span class="note-t">stream: true returns synchronously</span>
+          <p>
+            The overloads key off the <em>literal</em> type. <code>stream: true</code> returns the
+            <code>UnifiedStream</code> directly &mdash; there is no promise to await. Passing a variable typed
+            <code>boolean</code> matches <strong>neither</strong> overload and is a compile error
+            (<code>TS2769</code>); you do not get a union back. Branch at the call site instead.
+          </p>
+        </div>
+      </section>
+
+      <!-- ══ AUTH ══════════════════════════════════════════════════ -->
+      <section id="auth">
+        <p class="eyebrow">Concepts</p>
+        <h2>Auth</h2>
+        <p>
+          There are exactly <strong>two modes</strong>, and the <code>token</code> option decides which one you
+          get. Everything else &mdash; API keys, OAuth tokens, host-supplied bearers &mdash; is a variation on
+          these two.
+        </p>
+
+        <div class="tw">
+          <table>
+            <thead><tr><th>Mode</th><th>Trigger</th><th>Available on</th><th>For</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><strong>Trusted-token</strong></td>
+                <td>Set <code>token</code></td>
+                <td>Both entries</td>
+                <td>Hosts that already have a bearer: web/desktop shells, servers, <code>uapi_</code> keys</td>
+              </tr>
+              <tr>
+                <td><strong>OAuth (PKCE)</strong></td>
+                <td>Omit <code>token</code>, set <code>appId</code>, call <code>bootstrap()</code></td>
+                <td><code>/node</code> only</td>
+                <td>CLIs and installed marketplace apps signing in as the user</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="note warn">
+          <span class="note-t">There is no apiKey option</span>
+          <p>
+            <code>UnifiedAIOptions</code> has no <code>apiKey</code> and no <code>baseURL</code>. Passing
+            either in an object literal is a <strong>compile error</strong> (TypeScript&rsquo;s excess-property
+            check), not a silent misconfiguration. A <code>uapi_</code> API key is simply a bearer credential
+            &mdash; pass it as <code>token</code>.
+          </p>
+        </div>
+
+        <h3>Trusted-token mode</h3>
+        <p>
+          <code>token</code> takes a string <em>or</em> an async callback. The SDK calls the callback on every
+          request, so a host can rotate credentials without rebuilding the client.
+        </p>
+
+        <div class="snip">
+          <div class="snip-h"><b>Host-supplied bearer</b><button class="copy" type="button">copy</button></div>
+          <pre><code class="lang-ts">import { UnifiedAI } from "@unifiedai/sdk";
+
+const sdk = new UnifiedAI({
+  apiUrl: "https://api.unifiedai.app",
+  // TokenProvider = string | (() => string | Promise&lt;string&gt;)
+  token: async () => readBearerFromSession(),
+});</code></pre>
+        </div>
+
+        <p>
+          On a <code>401</code> the SDK calls your provider once more &mdash; single-flighted across concurrent
+          requests &mdash; and retries. If it still 401s, it throws <code>UnifiedAIAuthError</code>.
+        </p>
+
+        <h3>OAuth mode <span class="pill node">node only</span></h3>
+        <p>
+          This is the marketplace promise: an installed app authenticates <strong>without its own login</strong>
+          when UnifiedApp is running. <code>bootstrap()</code> walks a fixed chain and stops at the first hit.
+        </p>
+
+        <div class="snip">
+          <div class="snip-h"><b>Seamless auth for a CLI</b><button class="copy" type="button">copy</button></div>
+          <pre><code class="lang-ts">import { UnifiedAI } from "@unifiedai/sdk/node";
+
+const sdk = new UnifiedAI({ appId: "my-cli" });
+
+// OS keychain → desktop handoff → system-browser PKCE.
+// Only opens a browser if the first two miss.
+await sdk.bootstrap();
+
+console.log("signed in as", sdk.identity().user_id);
+const models = await sdk.models.list();</code></pre>
+        </div>
+
+        <div class="tw">
+          <table>
+            <thead><tr><th>#</th><th>Leg</th><th>Hits when</th></tr></thead>
+            <tbody>
+              <tr><td>1</td><td>OS keychain cache</td><td>This app signed in before on this machine</td></tr>
+              <tr><td>2</td><td>Desktop handoff (env port, then discovery file)</td><td>UnifiedApp desktop is running</td></tr>
+              <tr><td>3</td><td>System-browser PKCE (S256) via loopback</td><td>Everything else &mdash; the user consents once</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Session</h3>
+        <p><code>sdk.session</code> is the observable auth surface &mdash; subscribe rather than poll.</p>
+
+        <div class="snip">
+          <div class="snip-h"><b>Session lifecycle</b><button class="copy" type="button">copy</button></div>
+          <pre><code class="lang-ts">const unsubscribe = sdk.session.onChange((event) => {
+  // "signedIn" | "refreshed" | "signedOut" | "expired" | "error"
+  if (event.type === "error") console.error("refresh failed:", event.error);
+  if (event.type === "expired") console.error("re-authentication required");
+});
+
+await sdk.bootstrap();
+// expiresAt is epoch MILLIseconds (TokenSet.expires_at is seconds).
+console.log(sdk.session.isAuthenticated(), sdk.session.snapshot().expiresAt);
+unsubscribe();</code></pre>
+        </div>
+
+        <div class="note warn">
+          <span class="note-t">bootstrap() resolving does not guarantee a live token</span>
+          <p>
+            A keychain hit short-circuits <strong>without an expiry check</strong>, and the proactive-refresh
+            timer is skipped entirely when the cached token is already stale &mdash; only the reactive
+            401&rarr;refresh path recovers it. So <code>bootstrap()</code> can resolve and emit
+            <code>signedIn</code> while holding a dead access token. <code>sdk.session.isAuthenticated()</code>
+            correctly reports <code>false</code> in that window &mdash; check it if you need certainty before
+            the first call.
+          </p>
+        </div>
+
+        <p>
+          <code>signOut()</code> clears memory and keychain and emits <code>signedOut</code>
+          <em>before</em> the network revoke, so a slow endpoint cannot wedge your logout path.
+        </p>
+      </section>
+
+      <!-- ══ CLIENT OPTIONS ════════════════════════════════════════ -->
+      <section id="client">
+        <p class="eyebrow">Concepts</p>
+        <h2>Client options</h2>
+
+        <div class="tw">
+          <table>
+            <thead><tr><th>Option</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td><code>token</code></td><td><code>string | () =&gt; string | Promise&lt;string&gt;</code></td><td>Selects trusted-token mode. Called on every request.</td></tr>
+              <tr><td><code>apiUrl</code></td><td><code>string</code></td><td>Resolution: <code>apiUrl</code> &rarr; <code>UNIFIEDAI_API_URL</code> &rarr; <code>https://api.unifiedai.app</code></td></tr>
+              <tr><td><code>appId</code></td><td><code>string</code></td><td>OAuth client id; also the storage/fs namespace.</td></tr>
+              <tr><td><code>fetch</code></td><td><code>typeof fetch</code></td><td>Injected transport. Handoff, token and revoke all route through it.</td></tr>
+              <tr><td><code>retry</code></td><td><code>false | Partial&lt;RetryConfig&gt;</code></td><td>See <a href="#advanced">Advanced</a>.</td></tr>
+              <tr><td><code>onRetry</code></td><td><code>RetryListener</code></td><td>Telemetry hook; a throw here cannot break the loop.</td></tr>
+              <tr><td><code>keychain</code> <code>env</code> <code>discovery</code> <code>openUrl</code></td><td>adapters</td><td><span class="pill node">node</span> Injectable seams &mdash; see <a href="#advanced">Testing</a>.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="note">
+          <span class="note-t">apiUrl: "" is meaningful, not empty</span>
+          <p>
+            An empty string yields <strong>relative</strong> <code>/api/v1/*</code> URLs, which is exactly what
+            you want when a host serves the API through a dev proxy or a custom protocol. It is a deliberate
+            configuration, not a missing value.
+          </p>
+        </div>
+      </section>
+
+      <!-- ══ SURFACES ══════════════════════════════════════════════ -->
+      <section id="surfaces">
+        <p class="eyebrow">Concepts</p>
+        <h2>Three text surfaces</h2>
+        <p>
+          The SDK exposes three parallel text-generation surfaces, each mirroring a different provider wire
+          format so you can port existing code with minimal edits. <strong>The choice is about the
+          request/response shape you want, not the model you get</strong> &mdash; any surface can route to any
+          compatible model.
+        </p>
+
+        <div class="tw">
+          <table>
+            <thead><tr><th>Surface</th><th>Shape</th><th>Reach for it when</th></tr></thead>
+            <tbody>
+              <tr><td><code>sdk.chat.completions</code></td><td>OpenAI <code>chat/completions</code></td><td>Porting OpenAI code; the most familiar path</td></tr>
+              <tr><td><code>sdk.messages</code></td><td>Anthropic Messages</td><td>Porting Anthropic code; want <code>finalMessage()</code></td></tr>
+              <tr><td><code>sdk.responses</code></td><td>OpenAI Responses</td><td>Unified multimodal input in one call</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="snip">
+          <div class="snip-h"><b>Anthropic-style messages</b><button class="copy" type="button">copy</button></div>
+          <pre><code class="lang-ts">const msg = await sdk.messages.create({
+  model: "claude-sonnet-4-5",
+  max_tokens: 1024, // required on this surface
+  system: "Answer only with valid JSON.",
+  messages: [{ role: "user", content: "List three primary colors." }],
+});
+
+for (const block of msg.content) {
+  if (block.type === "text") console.log(block.text);
+}
+console.log(msg.stop_reason, msg.usage.output_tokens);</code></pre>
+        </div>
+
+        <p>
+          <code>finalMessage()</code> is unique to <code>sdk.messages</code>: stream the request but skip
+          writing an event reducer.
+        </p>
+
+        <div class="snip">
+          <div class="snip-h"><b>Stream, but only want the result</b><button class="copy" type="button">copy</button></div>
+          <pre><code class="lang-ts">const stream = sdk.messages.create({
+  model: "claude-sonnet-4-5",
+  max_tokens: 1024,
+  messages: [{ role: "user", content: "Summarize the CAP theorem." }],
+  stream: true,
+});
+
+// Drains the events for you and assembles the response.
+const final = await stream.finalMessage();
+console.log(final.content, final.stop_reason);</code></pre>
+        </div>
+
+        <div class="snip">
+          <div class="snip-h"><b>Multimodal via the responses surface</b><button class="copy" type="button">copy</button></div>
+          <pre><code class="lang-ts">const res = await sdk.responses.create({
+  model: "gpt-4o",
+  instructions: "Describe images in one sentence.",
+  input: [{
+    role: "user",
+    content: [
+      { type: "input_text", text: "What is in this picture?" },
+      { type: "input_image", image_url: "https://example.com/cat.png", detail: "auto" },
+    ],
+  }],
+});</code></pre>
+        </div>
+
+        <div class="note">
+          <span class="note-t">Extended reasoning differs per surface</span>
+          <p>
+            <code>chat.completions</code> takes <code>thinking: { type: "enabled", budget_tokens? }</code>
+            with <code>budget_tokens</code> optional; <code>messages</code> <strong>requires</strong>
+            <code>budget_tokens</code>; <code>responses</code> has no typed <code>thinking</code> at all (use
+            the untyped <code>reasoning</code> field). Reasoning text arrives as
+            <code>reasoning_content</code> on both the assembled message and the streamed delta &mdash; a
+            non-standard field you will not find in vanilla OpenAI types.
+          </p>
+        </div>
+      </section>
+
+      <!-- ══ STREAMING ═════════════════════════════════════════════ -->
+      <section id="streaming">
+        <p class="eyebrow">Concepts</p>
+        <h2>Streaming</h2>
+        <p>
+          Every <code>create()</code> with <code>stream: true</code> returns a <code>UnifiedStream</code>: an
+          async-iterable over parsed SSE events. Iterate it, or reach for a surface-specific assembler.
+        </p>
+
+        <div class="snip">
+          <div class="snip-h"><b>Cancel mid-flight</b><button class="copy" type="button">copy</button></div>
+          <pre><code class="lang-ts">const stream = sdk.messages.create({
+  model: "claude-sonnet-4-5",
+  max_tokens: 1024,
+  messages: [{ role: "user", content: "Stream a haiku." }],
+  stream: true,
+});
+
+for await (const event of stream) {
+  if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+    process.stdout.write(event.delta.text);
+  }
+  if (userHitEscape) stream.abort(); // closes the fetch, ends the iterator
+}</code></pre>
+        </div>
+
+        <p>
+          <code>stream.usage</code> populates once a usage-bearing event lands &mdash;
+          <code>message_delta</code> on the Anthropic surface, or a final chunk when you pass
+          <code>stream_options: { include_usage: true }</code> on chat. Read it <em>after</em> the loop.
+          If the connection drops mid-stream the iterator throws <code>StreamInterruptedError</code>.
+        </p>
+      </section>
+
+      <!-- ══ ERRORS ════════════════════════════════════════════════ -->
+      <section id="errors">
+        <p class="eyebrow">Concepts</p>
+        <h2>Errors</h2>
+        <p>
+          Every HTTP failure throws a typed error so you can branch on the failure mode without parsing
+          strings. All of them subclass <code>UnifiedAIError</code>, which subclasses <code>Error</code>.
+        </p>
+
+        <div class="tw">
+          <table>
+            <thead><tr><th>Class</th><th>HTTP</th><th>Extra fields</th></tr></thead>
+            <tbody>
+              <tr><td><code>BadRequestError</code></td><td>400</td><td>&mdash;</td></tr>
+              <tr><td><code>AuthenticationError</code></td><td>401</td><td>&mdash;</td></tr>
+              <tr><td><code>UnifiedAIAuthError</code></td><td>401</td><td>refresh failures; extends <code>AuthenticationError</code></td></tr>
+              <tr><td><code>NotFoundError</code></td><td>404</td><td>&mdash;</td></tr>
+              <tr><td><code>RateLimitError</code></td><td>429</td><td><code>retryAfter</code></td></tr>
+              <tr><td><code>UsageLimitError</code></td><td>429</td><td><code>periodCost</code>, <code>limit</code>, <code>resetAt</code>, <code>isUsageLimit</code></td></tr>
+              <tr><td><code>ServerError</code></td><td>5xx</td><td>&mdash;</td></tr>
+              <tr><td><code>UnifiedAIError</code></td><td>other</td><td>base &mdash; <code>code</code>, <code>status</code>, <code>body</code>, <code>headers</code>, <code>requestId</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="note warn">
+          <span class="note-t">RateLimitError and UsageLimitError are siblings, not parent/child</span>
+          <p>
+            Both are 429, but they mean opposite things. <code>RateLimitError</code> is transient throttling
+            &mdash; wait and retry. <code>UsageLimitError</code> is plan-quota exhaustion for the billing
+            period &mdash; retrying will not help. <code>UsageLimitError</code> does <strong>not</strong> pass
+            an <code>instanceof RateLimitError</code> check, so a generic retry wrapper must catch both
+            explicitly. Always check the more specific class first.
+          </p>
+        </div>
+
+        <div class="snip">
+          <div class="snip-h"><b>Branching on failure mode</b><button class="copy" type="button">copy</button></div>
+          <pre><code class="lang-ts">import {
+  UsageLimitError, RateLimitError, AuthenticationError,
+  BadRequestError, ServerError, UnifiedAIError,
+} from "@unifiedai/sdk";
+
+try {
+  await sdk.chat.completions.create({ model: "gpt-4o-mini", messages });
+} catch (err) {
+  if (err instanceof UsageLimitError) {
+    console.error(`Quota exhausted: $${err.periodCost} / $${err.limit}`);
+  } else if (err instanceof RateLimitError) {
+    console.error(`Throttled — retry in ${err.retryAfter ?? "?"}s`);
+  } else if (err instanceof AuthenticationError) {
+    console.error("Token invalid or revoked");
+  } else if (err instanceof BadRequestError) {
+    console.error("Request rejected:", err.body);
+  } else if (err instanceof ServerError) {
+    console.error("Upstream failure:", err.requestId);
+  } else if (err instanceof UnifiedAIError) {
+    console.error(`Unexpected ${err.status}:`, err.message);
+  } else {
+    throw err;
+  }
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- ══ FEATURE REFERENCE ═════════════════════════════════════ -->
+      <section id="reference">
+        <p class="eyebrow">Reference</p>
+        <h2>Feature reference</h2>
+        <p>
+          Everything else the client exposes, grouped by what it is for. Expand what you need &mdash; full
+          signatures live in the generated API reference (<code>bun run docs</code>).
+        </p>
+
+        <h3>Model-facing</h3>
+
+        <details class="feat">
+          <summary>sdk.models &middot; sdk.usage<span class="sub">catalog &amp; account</span></summary>
+          <div class="feat-body">
+            <p>
+              <code>models.list()</code> reads the gateway catalog: id, type, capability flags and context
+              size. Pass <code>include: ["author"]</code> to populate the friendly
+              <code>model_author.name</code> that <code>getModelLogo()</code> keys on.
+            </p>
+            <div class="snip">
+              <div class="snip-h"><b>Catalog + logos</b><button class="copy" type="button">copy</button></div>
+              <pre><code class="lang-ts">import { UnifiedAI, getModelLogo } from "@unifiedai/sdk";
+
+const { data } = await sdk.models.list({ include: ["author"] });
+
+for (const model of data) {
+  if (model.type !== "text") continue;
+  console.log(model.id, model.model_author.name, model.context_size ?? "unknown");
+  const logoSrc = getModelLogo(model, "dark"); // data: URI, always resolves
+}</code></pre>
+            </div>
+            <p>
+              Before sending multimodal input, gate on the model&rsquo;s capability flags
+              (<code>image_inp</code>, <code>audio_inp</code>, <code>video_inp</code>,
+              <code>pdf_inp</code>) rather than assuming &mdash; they are what the gateway enforces.
+            </p>
+            <div class="snip">
+              <div class="snip-h"><b>Usage meter</b><button class="copy" type="button">copy</button></div>
+              <pre><code class="lang-ts">import { summarizeUsage } from "@unifiedai/sdk";
+
+// scope: "account" = totals across all of the user's apps.
+// Omit it for the default: usage scoped to the calling app.
+const usage = await sdk.usage.get({ scope: "account" });
+const view = summarizeUsage(usage, { warnThreshold: 0.8 });
+
+console.log(`${view.planName}: ${view.daily.usedLabel}/${view.daily.limitLabel ?? "unmetered"}`);
+if (view.daily.isMetered && view.daily.isNearLimit) {
+  console.log(`Resets in ${view.daily.resetsInLabel ?? "soon"}`);
+}</code></pre>
+            </div>
+            <div class="note warn">
+              <span class="note-t">scope: "account" fails open</span>
+              <p>
+                A third-party OAuth client stays app-scoped regardless &mdash; you get a normal
+                <code>200</code> with smaller numbers, <em>not</em> an error. Only present an account-scoped
+                read as authoritative when the client holds a first-party trusted token or a
+                <code>uapi_</code> key. Guard on <code>isMetered</code>: <code>limitLabel</code> and
+                <code>percent</code> are <code>null</code> on uncapped plans.
+              </p>
+            </div>
+          </div>
+        </details>
+
+        <details class="feat">
+          <summary>sdk.files<span class="sub">upload &amp; reference</span></summary>
+          <div class="feat-body">
+            <p>
+              Two upload surfaces. <code>upload()</code> is the image-only convenience that also returns a
+              short-lived signed <code>image_url</code> for <code>images.edit</code>. <code>create()</code> is
+              general-purpose (audio, video, PDF) and returns a <code>FileObject</code> with metadata only.
+              Both accept a <code>Blob</code>, <code>File</code>, <code>Buffer</code>,
+              <code>Uint8Array</code>, <code>ArrayBuffer</code>, or a base64 <code>data:</code> URL.
+            </p>
+            <div class="snip">
+              <div class="snip-h"><b>Upload, then reference downstream</b><button class="copy" type="button">copy</button></div>
+              <pre><code class="lang-ts">// Returns a stable file_id plus a signed URL (~1h).
+const { file_id, image_url } = await sdk.files.upload(pickedFile);
+
+const res = await sdk.responses.create({
+  model: "gpt-4o",
+  input: [{
+    role: "user",
+    content: [
+      { type: "input_text", text: "What's in this image?" },
+      { type: "input_image", image_url },
+    ],
+  }],
+});
+
+const { data } = await sdk.files.list();
+const { bytes, contentType } = await sdk.files.content(file_id);
+await sdk.files.del(file_id);</code></pre>
+            </div>
+            <div class="note">
+              <span class="note-t">file_id and image_url both work</span>
+              <p>
+                The id from <code>upload()</code>/<code>create()</code> is usable as <code>file_id</code> on
+                any multimodal content part across all three text surfaces &mdash; the gateway resolves it
+                server-side. Pick whichever reads more naturally at the call site. String sources must be
+                base64 <code>data:</code> URLs; a raw base64 blob or an <code>https://</code> URL throws.
+              </p>
+            </div>
+          </div>
+        </details>
+
+        <details class="feat">
+          <summary>sdk.images &middot; sdk.audio &middot; sdk.videos &middot; sdk.embeddings<span class="sub">other modalities</span></summary>
+          <div class="feat-body">
+            <p>
+              <code>images.generate()</code>, <code>images.edit()</code> and
+              <code>images.createVariation()</code>; <code>audio</code> and <code>videos</code> for their
+              respective modalities; <code>embeddings.create()</code> mirrors the OpenAI shape and accepts a
+              single string or an array.
+            </p>
+            <div class="snip">
+              <div class="snip-h"><b>Embeddings</b><button class="copy" type="button">copy</button></div>
+              <pre><code class="lang-ts">const res = await sdk.embeddings.create({
+  model: "togethercomputer/m2-bert-80M-8k-retrieval",
+  input: ["the quick brown fox", "jumps over the lazy dog"],
+});
+
+for (const item of res.data) {
+  console.log(item.index, item.embedding.length);
+}</code></pre>
+            </div>
+          </div>
+        </details>
+
+        <details class="feat">
+          <summary>sdk.helpers<span class="sub">multimodal part builders</span></summary>
+          <div class="feat-body">
+            <p>
+              A stateless factory that converts a Blob, Buffer, URL, data-URL or file id into the exact
+              content-part shape each surface expects. The free functions work without a client instance.
+            </p>
+            <div class="snip">
+              <div class="snip-h"><b>Same source, different surface</b><button class="copy" type="button">copy</button></div>
+              <pre><code class="lang-ts">const imagePart = await sdk.helpers.toImagePart(file, { detail: "high" });
+
+const res = await sdk.chat.completions.create({
+  model: "auto",
+  messages: [{ role: "user", content: [{ type: "text", text: "What's in this?" }, imagePart] }],
+});
+
+// Or without a client — Anthropic-style document part from raw bytes.
+import { toMessagesDocumentPart } from "@unifiedai/sdk";
+const docPart = await toMessagesDocumentPart(await readFile("./contract.pdf"));</code></pre>
+            </div>
+            <div class="note warn">
+              <span class="note-t">Mime detection blind spot</span>
+              <p>
+                M4A audio sharing the <code>mp42</code>/<code>isom</code> ISO-BMFF brand resolves to
+                <code>video/mp4</code>, as does any unrecognized <code>ftyp</code> brand. For bare bytes, only
+                an explicit <code>{ mimeType }</code> or <code>{ format }</code> fixes it &mdash; a real
+                <code>File</code> works too, via its own <code>.type</code>. Note
+                <code>PartOptions.filename</code> does <em>not</em> influence detection.
+              </p>
+            </div>
+          </div>
+        </details>
+
+        <h3>Ecosystem <span class="pill exp">v0.2.0</span></h3>
+        <p>
+          These give standalone apps the interconnection services that embedded apps get from the desktop
+          shell. They are the newest and least settled part of the SDK &mdash; see
+          <a href="#stability">Stability</a>.
+        </p>
+
+        <details class="feat">
+          <summary>sdk.storage<span class="sub">typed record store</span></summary>
+          <div class="feat-body">
+            <p>
+              An app-namespaced record store. Declare typed collections and the SDK derives the index set and
+              a file/blob split from the schema. Reach for it when an app needs durable per-app records that
+              follow the user across devices &mdash; rather than the model-facing <code>sdk.files</code>.
+            </p>
+            <div class="snip">
+              <div class="snip-h"><b>Typed collection</b><button class="copy" type="button">copy</button></div>
+              <pre><code class="lang-ts">interface Project extends Record&lt;string, unknown&gt; {
+  id: string;
+  name: string;
+  updatedAt: number;
+}
+
+const sdk = new UnifiedAI({ appId: "design-app", token: myToken });
+const db = sdk.storage.namespace(); // this app's own read-write namespace
+const projects = db.collection&lt;Project&gt;("projects", { key: "id", indexes: ["updatedAt"] });
+
+await projects.put({ id: "p1", name: "Coffee", updatedAt: Date.now() });
+const recent = await projects.query({ orderBy: "updatedAt", order: "desc", limit: 20 });</code></pre>
+            </div>
+            <div class="note warn">
+              <span class="note-t">Three things that will bite</span>
+              <p>
+                <strong>No offline fallback.</strong> The local <code>IndexedDbBackend</code> was removed;
+                storage is Supabase-only. With no token and no injected backend every call rejects with
+                <code>storage_unavailable</code>.
+                <strong><code>put()</code> is a full replace</strong>, not a patch &mdash; any field you omit
+                is gone. Read-modify-write to change one field.
+                <strong><code>versions()</code>/<code>revert()</code> always compile</strong> regardless of
+                <code>schema.versioned</code>, and silently degrade to <code>[]</code> on a non-versioned
+                collection.
+              </p>
+            </div>
+          </div>
+        </details>
+
+        <details class="feat">
+          <summary>sdk.fs<span class="sub">jailed file workspace</span></summary>
+          <div class="feat-body">
+            <p>
+              A jailed POSIX-style directory tree, keyed by relative paths &mdash; the sibling of
+              <code>sdk.storage</code>. Reach for it when an app needs durable project files (source trees,
+              drafts, exported assets). Pair it with <code>fsTools()</code> to drive it from an agent loop.
+            </p>
+            <div class="snip">
+              <div class="snip-h"><b>The app's own workspace</b><button class="copy" type="button">copy</button></div>
+              <pre><code class="lang-ts">const sdk = new UnifiedAI({ token: () =&gt; getAccessToken(), appId: "notes-app" });
+
+// No args = this app's own tree, mode "readwrite".
+const ws = sdk.fs.namespace();
+
+await ws.write("drafts/hello.md", "# Hello\n");
+const text = await ws.read("drafts/hello.md"); // UTF-8 string
+const info = await ws.stat("drafts/hello.md"); // FsStat | null
+console.log(ws.id, ws.mode, info?.size, info?.updatedAt);</code></pre>
+            </div>
+            <div class="note warn">
+              <span class="note-t">available() is not a health check</span>
+              <p>
+                <code>CloudFsBackend.available()</code> unconditionally returns <code>true</code> &mdash; it
+                probes nothing. So <code>sdk.fs.available() === true</code> means only &ldquo;a backend object
+                exists,&rdquo; not &ldquo;a call will succeed&rdquo;; auth and network failures surface later as
+                ordinary HTTP errors. Note also that <code>edit()</code> with an empty <code>oldString</code>
+                <strong>silently prepends</strong>, and that a missing file or a missing <code>oldString</code>
+                throws <code>edit_not_found</code> while a non-unique match throws
+                <code>edit_not_unique</code> &mdash; different codes.
+              </p>
+            </div>
+          </div>
+        </details>
+
+        <details class="feat">
+          <summary>sdk.agent &middot; sdk.actions<span class="sub">tool loop &amp; cross-app calls</span></summary>
+          <div class="feat-body">
+            <p>
+              <code>agent.run()</code> is unopinionated tool-loop scaffolding: it streams a completion,
+              accumulates tool calls, dispatches each to your <code>execute</code>, threads results back, and
+              repeats until the model stops or <code>maxSteps</code> (default 40). The SDK injects
+              <strong>no system prompt and no tool policy</strong> &mdash; your app owns both.
+            </p>
+            <div class="snip">
+              <div class="snip-h"><b>Agent loop with the fs tool pack</b><button class="copy" type="button">copy</button></div>
+              <pre><code class="lang-ts">import { UnifiedAI, fsTools } from "@unifiedai/sdk";
+
+const result = await sdk.agent.run({
+  system: "You are a coding assistant. Use the file tools to do the work.",
+  prompt: "Create hello.ts that prints a greeting.",
+  tools: fsTools(sdk.fs.namespace()),
+});
+
+if (!result.ok) throw new Error(result.error ?? "canceled");
+console.log(`served by ${result.model}, ${result.usage?.outputTokens} out`);</code></pre>
+            </div>
+            <div class="note warn">
+              <span class="note-t">run() does not throw for request failures</span>
+              <p>
+                It <em>resolves</em> with <code>{ ok: false, error, errorCode }</code>. A
+                <code>try/catch</code> will not see rate limits or auth failures &mdash; branch on
+                <code>result.ok</code> instead. Two corollaries: a throw from your <code>onEvent</code>
+                callback <strong>does</strong> escape <code>run()</code> (it is invoked outside the internal
+                try/catch during tool dispatch), and <code>ok: true</code> does not mean the model finished
+                &mdash; hitting <code>maxSteps</code> returns <code>ok: true</code> with truncated output.
+              </p>
+            </div>
+            <p>
+              <code>sdk.actions</code> is a separate concern: a cross-app registry where an app declares
+              actions and <em>serves</em> invocations over a pull channel (<code>serve(handlers)</code> polls,
+              runs, responds), so a CLI behind NAT needs no reachable endpoint. The invoker side is
+              <code>invoke()</code> + <code>awaitResult()</code>. Register the app itself first with
+              <code>registerApp()</code>.
+            </p>
+          </div>
+        </details>
+
+        <details class="feat">
+          <summary>sdk.artifacts &middot; sdk.projects &middot; sdk.references &middot; sdk.memory<span class="sub">cross-app interop</span></summary>
+          <div class="feat-body">
+            <p>
+              An <strong>artifact</strong> is a canonical, self-contained versioned snapshot of an app&rsquo;s
+              work that chat, other apps and external agents can consume. A <strong>project</strong> is a
+              user-owned container gathering artifacts from different apps.
+              <strong>References</strong> is the trusted cross-app read path, authorized by project membership
+              rather than a generic cross-namespace read. <strong>Memory</strong> is an append-only agent
+              ledger.
+            </p>
+            <div class="snip">
+              <div class="snip-h"><b>Publish an artifact, then revise it</b><button class="copy" type="button">copy</button></div>
+              <pre><code class="lang-ts">const { artifact } = await sdk.artifacts.create({
+  kind: "docs/document",
+  title: "Q3 Launch Plan",
+  content: { blocks: doc.toJSON() },
+  text: doc.toPlainText(), // required searchable projection
+  projectId,
+});
+
+// Later — versions are whole snapshots, not diffs.
+const next = await sdk.artifacts.addVersion(artifact.id, {
+  content: { blocks: doc.toJSON() },
+  text: doc.toPlainText(),
+});
+console.log(next.version.version); // → 2</code></pre>
+            </div>
+            <p>
+              Every version carries a required <code>text</code> field &mdash; the uniform searchable
+              projection that makes an artifact legible to consumers that do not understand your app&rsquo;s
+              content format.
+            </p>
+            <div class="note warn">
+              <span class="note-t">Deletions arrive as tombstones</span>
+              <p>
+                <code>memory.sync()</code> is cursor-based, and <strong>deletions arrive as
+                <code>type: "tombstone"</code> appends, never as removals</strong>. Mirror the ledger locally
+                without handling that and you silently accumulate deleted rows forever.
+              </p>
+            </div>
+          </div>
+        </details>
+      </section>
+
+      <!-- ══ ADVANCED ══════════════════════════════════════════════ -->
+      <section id="advanced">
+        <p class="eyebrow">Deeper</p>
+        <h2>Advanced</h2>
+
+        <h3>Retry &amp; idempotency</h3>
+        <p>
+          Retry is on by default (3 attempts, exponential backoff with full jitter, 60s total ceiling,
+          <code>Retry-After</code> honored but capped). <strong>What gets retried depends on idempotency</strong>,
+          and the default for <code>POST</code> is <em>not</em> idempotent:
+        </p>
+
+        <div class="tw">
+          <table>
+            <thead><tr><th>Failure</th><th>Retried?</th></tr></thead>
+            <tbody>
+              <tr><td>429 &mdash; transient rate limit</td><td>Always (not gated on idempotency)</td></tr>
+              <tr><td>429 &mdash; usage-limit exhaustion</td><td>Never &mdash; terminal within the billing window</td></tr>
+              <tr><td>408 / 5xx</td><td>Only if the call is idempotent</td></tr>
+              <tr><td>Network error</td><td>Only if the call is idempotent</td></tr>
+              <tr><td>Abort</td><td>Never &mdash; user intent propagates immediately</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="note warn">
+          <span class="note-t">chat.completions does not retry 5xx by default</span>
+          <p>
+            <code>isIdempotent()</code> treats <code>GET</code>/<code>HEAD</code>/<code>PUT</code>/<code>DELETE</code>/<code>OPTIONS</code>
+            as idempotent and <code>POST</code>/<code>PATCH</code> as not. The text surfaces
+            (<code>chat</code>, <code>messages</code>, <code>responses</code>) POST without opting in, so a
+            502 or a dropped connection surfaces to you immediately &mdash; only transient 429s retry. That
+            is deliberate: a 5xx may arrive <em>after</em> the origin already processed your request, so a
+            blind retry could double-charge.
+          </p>
+          <p>
+            Two POSTs that are really pure reads opt themselves in:
+            <code>embeddings.create</code> and <code>images.generate</code> retry 5xx and network errors
+            without you doing anything. Everything else &mdash; including <code>images.edit</code> and
+            <code>images.createVariation</code> &mdash; does not.
+          </p>
+        </div>
+
+        <div class="snip">
+          <div class="snip-h"><b>Tune retry</b><button class="copy" type="button">copy</button></div>
+          <pre><code class="lang-ts">const sdk = new UnifiedAI({
+  token,
+  retry: { maxRetries: 5, initialDelayMs: 250 }, // or `retry: false` to disable
+  onRetry: ({ attempt, delayMs, status }) =&gt; {
+    metrics.increment("sdk.retry", { attempt, status });
+  },
+});
+
+// Per-call: opt a POST into network/5xx retry when it's safe to repeat.
+await sdk.chat.completions.create(body, { idempotent: true });</code></pre>
+        </div>
+
+        <h3>Local-first discovery <span class="pill node">node</span></h3>
+        <p>
+          When the desktop app is running it can host the Ecosystem API on loopback.
+          <code>discoverLocalEcosystem()</code> finds it and hands back a base URL and token &mdash; but it is
+          a <strong>standalone helper</strong>: constructing a client never calls it, and you wire the result
+          in yourself.
+        </p>
+
+        <div class="snip">
+          <div class="snip-h"><b>Prefer local, fall back to cloud</b><button class="copy" type="button">copy</button></div>
+          <pre><code class="lang-ts">import { UnifiedAI, discoverLocalEcosystem } from "@unifiedai/sdk/node";
+
+// null when the desktop isn't running (or the discovery file is stale).
+const local = await discoverLocalEcosystem({ timeoutMs: 500 });
+
+const sdk = local
+  ? new UnifiedAI({ appId: "my-cli", apiUrl: local.baseUrl, token: local.token })
+  : new UnifiedAI({ appId: "my-cli" }); // cloud + OAuth bootstrap
+
+if (!local) await sdk.bootstrap();</code></pre>
+        </div>
+
+        <h3>Testing &amp; CI <span class="pill node">node</span></h3>
+        <p>
+          Every seam in the bootstrap chain is an injectable adapter, so a test can force one branch and assert
+          the others never fire.
+        </p>
+
+        <div class="snip">
+          <div class="snip-h"><b>Inject the whole chain</b><button class="copy" type="button">copy</button></div>
+          <pre><code class="lang-ts">import { UnifiedAI, type KeychainAdapter, type TokenSet } from "@unifiedai/sdk/node";
+
+const store = new Map&lt;string, TokenSet&gt;();
+const keychain: KeychainAdapter = {
+  async get(clientId) { return store.get(clientId) ?? null; },
+  async set(clientId, tokens) { store.set(clientId, tokens); },
+  async clear(clientId) { store.delete(clientId); },
+};
+
+const sdk = new UnifiedAI({
+  appId: "my-cli",
+  keychain,
+  env: { read: () =&gt; ({ handoffPort: 4321, clientId: undefined }) },
+  discovery: { read: async () =&gt; null },
+  openUrl: () =&gt; { throw new Error("browser leg should not run"); },
+  fetch: myFakeFetch, // handoff/token/revoke all go through options.fetch
+});</code></pre>
+        </div>
+
+        <div class="note warn">
+          <span class="note-t">A missing OS keychain rejects bootstrap()</span>
+          <p>
+            <code>bootstrap()</code> reads the keychain with no <code>try/catch</code>, so in a container or
+            CI runner without one, <code>@napi-rs/keyring</code>&rsquo;s
+            <code>keychain_unavailable</code> propagates and <strong>bootstrap rejects before reaching the
+            handoff or PKCE legs</strong>. It is not gracefully tolerated. Inject a <code>keychain</code>
+            adapter in those environments.
+          </p>
+        </div>
+      </section>
+
+      <!-- ══ TROUBLESHOOTING ═══════════════════════════════════════ -->
+      <section id="troubleshooting">
+        <p class="eyebrow">Deeper</p>
+        <h2>Troubleshooting</h2>
+        <p>Indexed by symptom &mdash; which is how you usually arrive.</p>
+
+        <div class="tw">
+          <table>
+            <thead><tr><th>Symptom</th><th>Cause</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><code>404</code> from <code>bun add @unifiedai/sdk</code></td>
+                <td>Not published to npm. Install from GitHub &mdash; <a href="#install">Install</a>.</td>
+              </tr>
+              <tr>
+                <td><code>Cannot find module '.../dist/index.js'</code></td>
+                <td><code>prepare</code> never ran. Add <code>trustedDependencies: ["@unifiedai/sdk"]</code>.</td>
+              </tr>
+              <tr>
+                <td>Bundler errors on <code>node:*</code> or <code>@napi-rs/keyring</code></td>
+                <td>The <code>/node</code> entry reached a browser bundle. Import <code>@unifiedai/sdk</code> or pin <code>@unifiedai/sdk/browser</code>.</td>
+              </tr>
+              <tr>
+                <td><code>TS2353</code> on <code>apiKey</code> / <code>baseURL</code></td>
+                <td>No such options. Use <code>token</code> and <code>apiUrl</code>.</td>
+              </tr>
+              <tr>
+                <td><code>TS2769: No overload matches this call</code></td>
+                <td><code>stream</code> was a <code>boolean</code> variable, not a literal. Branch at the call site.</td>
+              </tr>
+              <tr>
+                <td><code>Agent</code>/<code>Fs</code>/<code>Artifact</code> types won&rsquo;t import from <code>/node</code></td>
+                <td>The node barrel omits those re-exports. Import the types from <code>@unifiedai/sdk/browser</code>; runtime still works.</td>
+              </tr>
+              <tr>
+                <td>Every call 401s right after <code>bootstrap()</code></td>
+                <td>A stale keychain token short-circuited the chain with no expiry check. Check <code>session.isAuthenticated()</code>.</td>
+              </tr>
+              <tr>
+                <td><code>bootstrap()</code> hangs forever</td>
+                <td>The PKCE browser leg has no timeout and no abort seam. The user never finished consent.</td>
+              </tr>
+              <tr>
+                <td><code>bootstrap()</code> rejects in CI</td>
+                <td>No OS keychain. Inject a <code>keychain</code> adapter.</td>
+              </tr>
+              <tr>
+                <td><code>app_not_installed</code> instead of a browser prompt</td>
+                <td>The desktop is running and returned 404 for that <code>appId</code>. A wrong id is only a hard error when the desktop is up.</td>
+              </tr>
+              <tr>
+                <td><code>storage_unavailable</code> / <code>fs_unavailable</code></td>
+                <td>Browser entry with no token and no injected backend. There is no local fallback.</td>
+              </tr>
+              <tr>
+                <td>A generic retry wrapper never fires on quota errors</td>
+                <td><code>UsageLimitError</code> is not a <code>RateLimitError</code>. Catch both.</td>
+              </tr>
+              <tr>
+                <td>5xx surfaces immediately with no retry</td>
+                <td>Expected on the text surfaces: POST is non-idempotent by default. Pass <code>{ idempotent: true }</code> if the call is safe to repeat.</td>
+              </tr>
+              <tr>
+                <td><code>agent.run()</code> never throws on a rate limit</td>
+                <td>By design &mdash; it resolves <code>{ ok: false, errorCode }</code>.</td>
+              </tr>
+              <tr>
+                <td>Account usage looks too small</td>
+                <td><code>scope: "account"</code> fails open for OAuth clients &mdash; you got app-scoped numbers.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ══ STABILITY ═════════════════════════════════════════════ -->
+      <section id="stability">
+        <p class="eyebrow">Deeper</p>
+        <h2>Stability</h2>
+        <p>
+          The package sits at <code>v0.2.0</code> and the surface is not uniformly settled. Roughly:
+        </p>
+
+        <div class="tw">
+          <table>
+            <thead><tr><th>Bucket</th><th>Surface</th><th>What that means</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><strong>Stable</strong></td>
+                <td><code>chat</code> <code>messages</code> <code>responses</code> <code>models</code> <code>usage</code> <code>files</code> <code>embeddings</code> <code>images</code> <code>audio</code> <code>videos</code> <code>helpers</code> &mdash; plus core client, session and errors</td>
+                <td>Mirror external wire formats, exercised by the test suite. Safe to build on.</td>
+              </tr>
+              <tr>
+                <td><strong>Usable, with caveats</strong></td>
+                <td><code>storage</code> <code>fs</code> <code>agent</code> &mdash; and the node OAuth chain</td>
+                <td>Shipping and used in-tree, but read the callouts above: no offline fallback, <code>available()</code> is not a health check, <code>run()</code> reports failures in its return value.</td>
+              </tr>
+              <tr>
+                <td><strong>Experimental</strong></td>
+                <td><code>artifacts</code> <code>projects</code> <code>references</code> <code>memory</code> <code>actions</code></td>
+                <td>Newest surface, <strong>zero test coverage</strong>, and several routes are marked v1-restricted or Phase 2 in <code>PROTOCOL.md</code>. Expect movement.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="note warn">
+          <span class="note-t">Docs that lie</span>
+          <p>
+            Two in-repo documents are stale in ways that will mislead you.
+            <code>STORAGE-SPEC.md</code> carries a superseded banner &mdash; its architecture diagram and
+            backend table describe <code>IndexedDbBackend</code> and <code>OpfsBackend</code>, both of which
+            have been <strong>removed</strong>. Several <code>fs</code> source comments likewise promise a
+            &ldquo;local-first&rdquo; OPFS implementation that does not ship. Where a comment and the code
+            disagree, the code is <code>CloudFsBackend</code> and nothing else.
+          </p>
+        </div>
+      </section>
+
+      <footer class="foot">
+        <p>
+          Hand-written companion to the generated API reference (<code>bun run docs</code> &rarr;
+          typedoc). For the wire contract see <code>PROTOCOL.md</code>; for the dependency graph and
+          conventions, <code>ARCHITECTURE.md</code>.
+        </p>
+        <p>@unifiedai/sdk &middot; MIT</p>
+      </footer>
+
+    </div>
+  </main>
+</div>
+
+<script>
+  (function () {
+    "use strict";
+
+    /* ── Syntax highlighting ─────────────────────────────────────────
+       Snippets live in the HTML as plain text, so copy-to-clipboard
+       yields exactly what the author wrote. Tokenizing happens here,
+       after the fact, and never mutates textContent.               */
+
+    var KW = /^(?:import|from|export|const|let|var|function|async|await|return|if|else|for|of|in|new|try|catch|finally|throw|class|extends|type|interface|typeof|instanceof|as|void|null|undefined|true|false|break|continue|switch|case|default|yield|do|while|delete)$/;
+
+    function esc(s) {
+      return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    // Emits a token stream so strings/comments are never re-scanned for
+    // keywords — the classic highlighter bug.
+    function highlightTS(src) {
+      var out = "";
+      var i = 0;
+      var n = src.length;
+
+      while (i < n) {
+        var c = src[i];
+        var two = src.substr(i, 2);
+
+        // Line comment
+        if (two === "//") {
+          var e = src.indexOf("\n", i);
+          if (e === -1) e = n;
+          out += '<span class="c">' + esc(src.slice(i, e)) + "</span>";
+          i = e;
+          continue;
+        }
+        // Block comment
+        if (two === "/*") {
+          var be = src.indexOf("*/", i + 2);
+          be = be === -1 ? n : be + 2;
+          out += '<span class="c">' + esc(src.slice(i, be)) + "</span>";
+          i = be;
+          continue;
+        }
+        // Strings (single, double, template) — scan with escape awareness
+        if (c === '"' || c === "'" || c === "`") {
+          var j = i + 1;
+          while (j < n) {
+            if (src[j] === "\\") { j += 2; continue; }
+            if (src[j] === c) { j++; break; }
+            j++;
+          }
+          out += '<span class="s">' + esc(src.slice(i, j)) + "</span>";
+          i = j;
+          continue;
+        }
+        // Number
+        if (/[0-9]/.test(c) && !/[A-Za-z_$]/.test(src[i - 1] || "")) {
+          var m = /^[0-9][0-9_.eE+-]*/.exec(src.slice(i));
+          if (m) {
+            out += '<span class="n">' + esc(m[0]) + "</span>";
+            i += m[0].length;
+            continue;
+          }
+        }
+        // Identifier / keyword / call
+        if (/[A-Za-z_$]/.test(c)) {
+          var id = /^[A-Za-z_$][A-Za-z0-9_$]*/.exec(src.slice(i))[0];
+          i += id.length;
+          if (KW.test(id)) {
+            out += '<span class="k">' + esc(id) + "</span>";
+          } else if (src[i] === "(") {
+            out += '<span class="f">' + esc(id) + "</span>";
+          } else {
+            out += esc(id);
+          }
+          continue;
+        }
+        out += esc(c);
+        i++;
+      }
+      return out;
+    }
+
+    // A `#` only opens a comment at line start or after whitespace — otherwise
+    // it is part of a token (`uni-sdk#main`, a URL fragment) and must be left alone.
+    function highlightShell(src) {
+      return src.split("\n").map(function (line) {
+        var full = /^(\s*)(#.*)$/.exec(line);
+        if (full) return full[1] + '<span class="c">' + esc(full[2]) + "</span>";
+
+        var code = line;
+        var comment = "";
+        var at = code.search(/\s#/);
+        if (at !== -1) {
+          comment = code.slice(at);
+          code = code.slice(0, at);
+        }
+        var out = esc(code).replace(/^(\s*)([a-z][\w-]*)/, function (mm, sp, cmd) {
+          return sp + '<span class="f">' + cmd + "</span>";
+        });
+        if (comment) out += '<span class="c">' + esc(comment) + "</span>";
+        return out;
+      }).join("\n");
+    }
+
+    var blocks = document.querySelectorAll("pre > code");
+    for (var b = 0; b < blocks.length; b++) {
+      var el = blocks[b];
+      var raw = el.textContent;
+      el.setAttribute("data-raw", raw);
+      var lang = el.className.replace(/^.*lang-/, "");
+      el.innerHTML = lang === "sh" ? highlightShell(raw) : highlightTS(raw);
+    }
+
+    /* ── Copy buttons ─────────────────────────────────────────────── */
+    document.addEventListener("click", function (ev) {
+      var btn = ev.target.closest(".copy");
+      if (!btn) return;
+      var pre = btn.closest(".snip").querySelector("pre > code");
+      if (!pre) return;
+      var text = pre.getAttribute("data-raw") || pre.textContent;
+      var done = function () {
+        var prev = btn.textContent;
+        btn.textContent = "copied";
+        btn.setAttribute("data-done", "");
+        setTimeout(function () {
+          btn.textContent = prev;
+          btn.removeAttribute("data-done");
+        }, 1200);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () {});
+      }
+    });
+
+    /* ── Scrollspy ────────────────────────────────────────────────── */
+    var links = {};
+    var navs = document.querySelectorAll("a.nav");
+    for (var l = 0; l < navs.length; l++) {
+      links[navs[l].getAttribute("href").slice(1)] = navs[l];
+    }
+    var secs = document.querySelectorAll("section[id]");
+    var current = null;
+
+    var spy = new IntersectionObserver(function (entries) {
+      for (var e = 0; e < entries.length; e++) {
+        if (!entries[e].isIntersecting) continue;
+        var id = entries[e].target.id;
+        if (current === id) continue;
+        if (current && links[current]) links[current].classList.remove("on");
+        current = id;
+        if (links[id]) links[id].classList.add("on");
+      }
+    }, { rootMargin: "0px 0px -72% 0px", threshold: 0 });
+
+    for (var s = 0; s < secs.length; s++) spy.observe(secs[s]);
+  })();
+</script>

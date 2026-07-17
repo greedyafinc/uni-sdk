@@ -2,11 +2,28 @@
 //
 // Classifier inspects either a fetch Response (already received) or a thrown
 // error (network blip / abort) and returns whether the call is worth retrying.
-// Idempotency policy lives here so request paths can stay linear: GET/HEAD/
-// PUT/DELETE retry on network errors by default; POST/PATCH only retry on
-// network errors when the caller marks them `idempotent: true`. All methods
-// retry on 429/5xx responses by default because the server already saw the
-// request — retrying is safe (and 429 with Retry-After is the only sane move).
+// Idempotency policy lives here so request paths can stay linear:
+// GET/HEAD/PUT/DELETE/OPTIONS are idempotent by default; POST/PATCH are not
+// unless the caller passes `idempotent: true`.
+//
+// This module only supplies the predicates — the decision is assembled in
+// client.ts (`executeWithRetry`), which combines them as:
+//   - 429: retried WITHOUT an idempotency check. The server told us to back
+//     off, so the request didn't take effect (RFC 6585). The exception is a
+//     usage-limit 429, which is terminal for the billing window — retrying
+//     only amplifies load.
+//   - 408/5xx: gated on idempotency. These COULD have side-effected: a 502
+//     may arrive after the origin already processed a POST, so a blind retry
+//     risks double-charging.
+//   - network errors: gated on idempotency. We don't know if the server saw
+//     the request at all.
+//
+// Net effect worth knowing: the text surfaces (chat/messages/responses) POST
+// without opting in, so a 5xx or a dropped connection surfaces to the caller
+// immediately — only transient 429s retry. The exceptions are the two POSTs
+// that are really pure reads: `embeddings.create` and `images.generate` pass
+// `idempotent: true` themselves. Callers can opt in per request when the work
+// is genuinely safe to repeat.
 
 export interface RetryConfig {
   /** Max number of *retry* attempts (after the initial try). Default 3. */
@@ -60,12 +77,15 @@ export function isIdempotent(method: string, explicit: boolean | undefined): boo
 }
 
 /**
- * Decide if a *response* status is worth retrying.
+ * Decide if a *response* status is retry-ELIGIBLE, ignoring idempotency.
  *   - 429: yes (rate limited; honor Retry-After)
  *   - 5xx: yes (server-side transient)
  *   - everything else: no
- * 408 (Request Timeout) is also retried — some upstream gateways emit it
+ * 408 (Request Timeout) is also eligible — some upstream gateways emit it
  * for slow-LLM calls and a single retry usually clears it.
+ *
+ * Eligible is not the same as retried: client.ts additionally gates 408/5xx
+ * on `isIdempotent()`, and handles 429 on its own path. See the module header.
  */
 export function isRetryableStatus(status: number): boolean {
   if (status === 408 || status === 429) return true;
