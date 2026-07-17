@@ -1,5 +1,6 @@
 import type { FsBackend } from "../resources/fs/types";
 import type { StorageBackend } from "../resources/storage/types";
+import type { SnapshotBackend } from "../resources/sync/types";
 import type { CacheConfig } from "./_internal/cache";
 import type { RetryAttempt, RetryConfig, RetryListener } from "./_internal/retry";
 import { UnifiedError } from "./errors";
@@ -86,6 +87,14 @@ export interface CoreOptions {
    * backend here. See docs/capability-platform.md.
    */
   fs?: FsBackend;
+  /**
+   * Snapshot backend for `sdk.sync` (the per-workspace sync engine). Host-
+   * injected local persistence so a workspace's materialized view survives a
+   * reload (stale-while-revalidate). When unset, the engine runs memory-only /
+   * online-first — there is deliberately NO browser persistence fallback. See
+   * PROTOCOL.md ("Sync").
+   */
+  sync?: SnapshotBackend;
 }
 
 export interface RequestOptions {
@@ -148,7 +157,10 @@ export interface RequestOptions {
 export class Core {
   protected readonly options: Readonly<
     Required<
-      Omit<CoreOptions, "token" | "retry" | "cache" | "onRetry" | "compression" | "storage" | "fs">
+      Omit<
+        CoreOptions,
+        "token" | "retry" | "cache" | "onRetry" | "compression" | "storage" | "fs" | "sync"
+      >
     >
   > & {
     token: TokenProvider | undefined;
@@ -158,6 +170,7 @@ export class Core {
     compression: boolean | undefined;
     storage: StorageBackend | undefined;
     fs: FsBackend | undefined;
+    sync: SnapshotBackend | undefined;
   };
 
   constructor(options: CoreOptions = {}) {
@@ -173,6 +186,7 @@ export class Core {
       compression: options.compression,
       storage: options.storage,
       fs: options.fs,
+      sync: options.sync,
     });
   }
 
@@ -202,6 +216,11 @@ export class Core {
   /** The injected fs backend, if any. `undefined` uses the Cloud backend when server-capable, else none. */
   get fsBackend(): FsBackend | undefined {
     return this.options.fs;
+  }
+
+  /** The injected snapshot backend for `sdk.sync`, if any. `undefined` runs the engine memory-only. */
+  get snapshotBackend(): SnapshotBackend | undefined {
+    return this.options.sync;
   }
 
   /**

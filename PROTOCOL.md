@@ -439,6 +439,63 @@ The local hosting runs the SAME policy sequence as the cloud hosting
 (authenticate → scope → grant/policy → execute → audit); it is the shell's
 broker logic re-fronted as HTTP, not a second policy implementation.
 
+## Sync
+
+A **per-workspace, live-first** materialized-view protocol: a client hydrates a
+workspace's records (bootstrap), then streams changes (delta), then writes
+(apply). The wire counter is a monotonic per-workspace **`syncId`**; ordering,
+paging, and dedupe are all keyed off it. All three routes are scoped by a
+`workspaceId` path segment.
+
+```json
+// SyncRecord — on read (bootstrap + delta)
+{
+  "ns": "string",
+  "collection": "string",
+  "id": "string",
+  "metadata": {},          // JSON-ish bag; {} on a tombstone
+  "version": 0,             // bumps on every write
+  "deleted": false,         // true = tombstone (delta only)
+  "syncId": 0,              // SERVER monotonic per-workspace change counter
+  "createdAt": 0,
+  "updatedAt": 0,
+  "hasBlob": false,
+  "blobEncoding": "string"  // optional
+}
+```
+
+```
+GET  /sync/workspaces                              → { workspaces: [{ id, name, kind, role }] }
+GET  /sync/:workspaceId/bootstrap?cursor=&limit=   → { records: SyncRecord[], cursor, complete }
+GET  /sync/:workspaceId/delta?cursor=&limit=       → { records: SyncRecord[], cursor, hasMore }
+POST /sync/:workspaceId/apply                       Body: { ops: SyncOp[] }   // 1..200
+                                                    → { results: [{ ns, collection, id, syncId, version }] }
+```
+
+- **workspaces** lists the memberships of the authenticated caller — `id`,
+  `name`, `kind` (`personal` | `team`), `role` (`owner` | `member`). It lets an
+  app discover its personal workspace id without a round-trip to base-api.
+  (SDK: `sdk.sync.listWorkspaces()`.)
+- **bootstrap** pages the LIVE rows (no tombstones). Follow `cursor` while
+  `complete` is false; when `complete` is true the returned `cursor` **becomes a
+  delta cursor** (resume point for the change stream).
+- **delta** returns every change after `cursor` — including **tombstones**
+  (`deleted: true`, empty `metadata`). Follow `cursor` while `hasMore` is true.
+- **The cursor is OPAQUE** — clients MUST NOT parse it; they only echo it back.
+- **apply** ops carry exactly one intent: `patch` (shallow-merge over `metadata`;
+  a JSON `null` value REMOVES that key), `replace` (swap `metadata` wholesale),
+  or `delete` (tombstone: sets `deleted`, clears `metadata`). Blob fields
+  (`blob_hash`, `blob_encoding`, `bytes`) are content-addressed and rejected in
+  shared workspaces.
+- **Epoch reset (409 `cursor_epoch_mismatch`):** the workspace's change log was
+  rewound/reset, so an older cursor is no longer valid. From either bootstrap or
+  delta, the client MUST **discard ALL local state for that workspace** (and any
+  local snapshot) and re-run bootstrap from scratch.
+- **Offline is read-only** (platform decision). A failed `apply` is rolled back
+  locally and rethrown; the client does **NOT** queue a local write log for
+  later replay. Reads continue to serve the last-known view (optionally from a
+  host-provided snapshot) while offline.
+
 ## Error codes
 
 SDKs surface these as typed errors. Names normative; messages free-form.
@@ -461,6 +518,17 @@ SDKs surface these as typed errors. Names normative; messages free-form.
   the model is also absent from `models.list()`. SDKs MUST key off the body
   `code`, not the `410` status alone — `410` is also returned for expired upload
   sessions. Retrying does not help; switch to a current model.
+
+Sync API (HTTP status in parentheses):
+
+- `invalid_cursor` (400) — a `bootstrap`/`delta` cursor was malformed.
+- `cursor_epoch_mismatch` (409) — the cursor's epoch is stale; the client MUST
+  discard ALL local state for the workspace and re-bootstrap (see §Sync). SDKs
+  key off the body `code` (409 alone is not specific enough).
+- `not_a_member` (403) — the caller is not a member of the workspace.
+- `workspace_not_found` (404) — no workspace for the id.
+- `blobs_not_supported_in_shared_workspaces` (400) — an `apply` op carried a blob
+  field against a shared workspace.
 
 Ecosystem API (returned by both hostings; HTTP status in parentheses):
 
