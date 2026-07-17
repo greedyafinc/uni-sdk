@@ -66,20 +66,32 @@ export {
 } from "../core/_internal/http-errors";
 
 // Resources.
+// Explicit /index: agent is a directory barrel (see src/index.ts note).
+export * from "../resources/agent/index";
 export * from "../resources/audio";
+export * from "../resources/actions";
+export * from "../resources/artifacts";
+// Explicit /index: calendar is a directory barrel (see src/index.ts note).
+export * from "../resources/calendar/index";
 export * from "../resources/chat";
+export * from "../resources/memory";
 export * from "../resources/embeddings";
 export * from "../resources/files";
+// Explicit /index: fs is a directory barrel (see src/index.ts note).
+export * from "../resources/fs/index";
 export * from "../resources/helpers";
 export * from "../resources/images";
 export * from "../resources/messages";
 export * from "../resources/models";
+export * from "../resources/projects";
+export * from "../resources/references";
 export * from "../resources/responses";
 // Explicit /index: storage is a directory barrel (see src/index.ts note).
 export * from "../resources/storage/index";
 // Explicit /index: sync is a directory barrel (see src/index.ts note).
 export * from "../resources/sync/index";
 export * from "../resources/usage";
+export * from "../resources/users";
 export * from "../resources/videos";
 export * from "../resources/logos";
 

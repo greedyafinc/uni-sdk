@@ -6,9 +6,32 @@ forcing any consumer to bundle Node-only modules.
 
 ## Install
 
+`@unifiedai/sdk` is **not published to npm** — `bun add @unifiedai/sdk` 404s.
+Install it from GitHub:
+
 ```sh
-bun add @unifiedai/sdk
+bun add @unifiedai/sdk@github:greedyafinc/uni-sdk#main
+
+# Or pin a commit — the `version` field moves slower than `main`.
+bun add @unifiedai/sdk@github:greedyafinc/uni-sdk#<sha>
 ```
+
+`dist/` is gitignored and produced by the `prepare` script at install time.
+Bun blocks lifecycle scripts by default, so consumers **must** trust the
+package — otherwise `dist/` is never built and every import fails to resolve:
+
+```json
+{
+  "dependencies": {
+    "@unifiedai/sdk": "github:greedyafinc/uni-sdk#main"
+  },
+  "trustedDependencies": ["@unifiedai/sdk"]
+}
+```
+
+Inside the UnifiedApp workspace, apps use a `file:` reference instead
+(`"@unifiedai/sdk": "file:../../uni-sdk"`) so local SDK edits are picked up
+without a publish step.
 
 ## Which entry should I import?
 
@@ -261,8 +284,14 @@ bun run lint        # biome
 bun run typecheck   # tsc --noEmit
 bun test            # bun test (core + node + bundle integrity)
 bun run build       # browser bundle + node bundle + types + verify
-bun run docs        # typedoc → ./docs
+bun run docs        # typedoc → ./docs (generated API reference)
+bun run site        # serve ./site/index.html on :4321 (PORT=… to override)
 ```
+
+`site/` is the hand-written guide (install, auth, the three text surfaces,
+streaming, errors, feature reference); `docs/` is the generated typedoc API
+reference and is gitignored. `bun run site` serves the file verbatim — no
+bundling — so what you see is what ships.
 
 The build runs a structural-invariant check (`scripts/verify-browser-bundle.ts`)
 that fails if the browser bundle ever picks up a `node:*` specifier or
@@ -275,6 +304,11 @@ A PR with a `.changeset/*.md` file lands on `main`; the release workflow opens
 a "Version Packages" PR; merging that PR publishes to npm.
 
 Requires the `NPM_TOKEN` repo secret.
+
+> **No release has been published yet** — the name is unclaimed on the public
+> registry, so the pipeline above describes the intended flow rather than the
+> current state. Until a version lands, consume the SDK from GitHub as shown
+> in [Install](#install).
 
 ## License
 

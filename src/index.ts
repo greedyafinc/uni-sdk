@@ -77,6 +77,8 @@ export * from "./resources/agent/index";
 export * from "./resources/audio";
 export * from "./resources/actions";
 export * from "./resources/artifacts";
+// Explicit /index: calendar is a directory barrel (same dts-fixup reason as storage).
+export * from "./resources/calendar/index";
 export * from "./resources/chat";
 export * from "./resources/memory";
 export * from "./resources/embeddings";
@@ -97,5 +99,6 @@ export * from "./resources/storage/index";
 // Explicit /index: sync is a directory barrel (same dts-fixup reason as storage).
 export * from "./resources/sync/index";
 export * from "./resources/usage";
+export * from "./resources/users";
 export * from "./resources/videos";
 export * from "./resources/logos";

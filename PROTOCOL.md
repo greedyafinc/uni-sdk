@@ -26,6 +26,87 @@ All token endpoints return and all SDKs persist the same JSON object:
 
 `expires_at` is a Unix timestamp in seconds.
 
+## Userinfo
+
+`GET /api/v1/me` resolves the authenticated user's profile from the gateway.
+Accepts any credential type unified-api honors on the Authorization header —
+an OAuth access token, an app token, or a `uapi_` key — so any SDK caller can
+hit it without first knowing which kind of token it holds.
+
+```json
+{
+  "user": {
+    "id": "string",
+    "email": "string | null",
+    "first_name": "string | null",
+    "last_name": "string | null",
+    "display_name": "string | null",
+    "created_at": "string",
+    "account_type": 0
+  },
+  "client": {
+    "id": "string | null",
+    "app_name": "string"
+  }
+}
+```
+
+`client.id` is the OAuth `client_id` for an OAuth-authenticated call, and
+`null` for non-OAuth credentials (app token, `uapi_` key). `user.email` is
+`null` when the identity provider didn't supply one.
+
+`GET /api/v1/users/:id` resolves any user id to their public display info —
+e.g. rendering project-member names in a shared workspace. Any authenticated
+caller (same credential types as `/me`) may look up any id; because the
+lookup isn't scoped to the caller's own account, the response is deliberately
+narrower than `/me` and by design never includes `email` or `account_type`:
+
+```json
+{
+  "user": {
+    "id": "string",
+    "first_name": "string | null",
+    "last_name": "string | null",
+    "display_name": "string | null",
+    "created_at": "string"
+  }
+}
+```
+
+An unknown id returns `404` with body `{ "code": "user_not_found", ... }`,
+which SDKs surface through their normal HTTP error mapping (e.g. the TS SDK's
+`NotFoundError`) — no special-casing required.
+
+`GET /api/v1/users?ids=<comma-separated>` batch-resolves multiple ids in one
+round trip — e.g. rendering a list of project members without N+1 calls to
+the by-id route. Same field set as the by-id route (no `email`/`account_type`):
+
+```json
+{
+  "users": [
+    {
+      "id": "string",
+      "first_name": "string | null",
+      "last_name": "string | null",
+      "display_name": "string | null",
+      "created_at": "string"
+    }
+  ]
+}
+```
+
+Found-only semantics: unknown or malformed ids in the list are silently
+omitted from `users` rather than erroring — an absent id means "not found,"
+not "request failed." Order of the returned `users` is unspecified. The
+gateway caps at 100 ids after its own dedupe (`400` `"too_many_ids"` beyond
+that) and rejects an empty id list (`400` `"invalid_ids"`); SDKs should dedupe
+client-side before sending and reject locally rather than relying on the
+server for a request that's already known to be too large — the TS SDK's
+`sdk.users.list()` does this: short-circuiting to `{ users: [] }` for an
+empty deduped list without a network call, and throwing a client-side
+`UnifiedError` (`code: "invalid_input"`) above the 100-id cap instead of
+truncating or round-tripping to the gateway's `400`.
+
 ## Bootstrap order
 
 An SDK MUST resolve tokens in this order on first call to `bootstrap()`:

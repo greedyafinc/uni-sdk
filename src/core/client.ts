@@ -2,6 +2,7 @@ import { Actions } from "../resources/actions";
 import { Agent } from "../resources/agent";
 import { Artifacts } from "../resources/artifacts";
 import { Audio } from "../resources/audio";
+import { Calendar } from "../resources/calendar";
 import { Chat } from "../resources/chat";
 import { Embeddings } from "../resources/embeddings";
 import { Files } from "../resources/files";
@@ -17,6 +18,7 @@ import { Responses } from "../resources/responses";
 import { Storage } from "../resources/storage";
 import { Sync } from "../resources/sync";
 import { Usage } from "../resources/usage";
+import { Users } from "../resources/users";
 import { Videos } from "../resources/videos";
 import { LruCache, cacheKey, resolveCacheConfig } from "./_internal/cache";
 import {
@@ -149,6 +151,7 @@ export interface UnifiedAIOptions extends CoreOptions {}
 export class UnifiedAI extends Core {
   readonly models: Models = new Models(this);
   readonly usage: Usage = new Usage(this);
+  readonly users: Users = new Users(this);
   readonly chat: Chat = new Chat(this);
   readonly responses: Responses = new Responses(this);
   readonly messages: Messages = new Messages(this);
@@ -158,6 +161,7 @@ export class UnifiedAI extends Core {
   readonly videos: Videos = new Videos(this);
   readonly embeddings: Embeddings = new Embeddings(this);
   readonly helpers: Helpers = new Helpers();
+  readonly calendar: Calendar = new Calendar();
 
   /**
    * Cross-app projects (`sdk.projects`). A Project gathers artifacts from
