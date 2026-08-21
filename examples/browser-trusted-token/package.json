@@ -1,0 +1,9 @@
+{
+  "name": "@unifiedai/sdk-example-browser-trusted-token",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun index.html"
+  }
+}
