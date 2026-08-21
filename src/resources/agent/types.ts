@@ -5,7 +5,7 @@ import type { UnifiedAIHttpErrorCode, UnifiedErrorCode } from "../../core/errors
 // tool-calls, thread messages, abort, step cap, usage events) and a TOOL SPEC
 // abstraction. It provides NO system prompt and NO tool policy: the app supplies
 // its own prompt and composes its own tool set (optionally including the
-// `fsTools()` pack). This is a daemon-less generalization of OpenDesign's
+// `fsTools()` / `webTools()` packs). This is a daemon-less generalization of OpenDesign's
 // in-process unified-agent loop. See docs/capability-platform.md.
 import type {
   ChatCompletionMessage,
@@ -22,7 +22,7 @@ export interface ToolResult {
 /**
  * One tool the model may call: its wire DEFINITION (name/description/JSON-schema
  * params, OpenAI function shape) plus the host-side `execute` the loop runs when
- * the model calls it. The app owns these — it can use `fsTools()`, subset them,
+ * the model calls it. The app owns these — it can use `fsTools()`, `webTools()`, subset them,
  * wrap them, or supply entirely its own.
  */
 export interface ToolSpec {
@@ -46,7 +46,7 @@ export type AgentEvent =
   // (a partial object, possibly truncated mid-value) so a host can render a live
   // preview of the in-flight tool input — e.g. the file a write_file is emitting.
   | { type: "tool_partial"; name: string; chars: number; args: string }
-  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
+  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown>; raw?: string }
   | { type: "tool_result"; toolUseId: string; content: string; isError: boolean }
   // The concrete model the gateway served for the current turn — fires once per
   // turn, on the first chunk carrying a non-`auto` model. Lets the UI flip an
@@ -65,7 +65,12 @@ export interface RunAgentOptions {
   system?: string;
   /** The first user turn — plain text or multimodal content parts. Ignored when `messages` is set. */
   prompt?: string | ChatCompletionUserContentPart[];
-  /** Tools the model may call. Compose `fsTools(ns)` with your own; omit/empty for a plain completion. */
+  /**
+   * Tools the model may call. Compose `fsTools(ns)` / `webTools()` with your own;
+   * omit/empty for a plain completion. The array is read LIVE at each step: a
+   * tool's `execute` may push additional ToolSpecs into it mid-run (deferred
+   * tool loading) and they are advertised and dispatchable from the next step on.
+   */
   tools?: ToolSpec[];
   /** Model id; defaults to the gateway's `auto` router. */
   model?: string;

@@ -38,6 +38,130 @@ function errorDetail(
   return out;
 }
 
+/** Parse model tool-call JSON, recovering from trailing commas, truncated objects, and double-encoded strings. */
+function parseToolArguments(raw?: string): Record<string, unknown> {
+  if (!raw?.trim()) return {};
+  let value: unknown = unwrapToolArgText(raw);
+  for (let i = 0; i < 3 && typeof value === "string"; i++) {
+    const next = parseJsonLenient(value);
+    if (next === undefined) break;
+    value = next;
+  }
+  if (Array.isArray(value)) return value as unknown as Record<string, unknown>;
+  if (value && typeof value === "object") {
+    const rec = value as Record<string, unknown>;
+    // `{}` + the real payload concatenated (`{}{"cards":[...]}`) parses as the
+    // leading empty object. Prefer the richest complete object in the raw text.
+    if (Object.keys(rec).length === 0) {
+      return richestJsonObject(unwrapToolArgText(raw)) ?? rec;
+    }
+    return rec;
+  }
+  return richestJsonObject(unwrapToolArgText(raw)) ?? {};
+}
+
+function unwrapToolArgText(raw: string): string {
+  let text = raw.trim();
+  const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fenced?.[1]) text = fenced[1].trim();
+  return text;
+}
+
+function parseJsonLenient(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    /* try repairs */
+  }
+  const noTrailing = raw.replace(/,\s*([}\]])/g, "$1");
+  try {
+    return JSON.parse(noTrailing);
+  } catch {
+    /* try a complete prefix */
+  }
+  for (let i = noTrailing.length - 1; i > 8; i--) {
+    const ch = noTrailing[i];
+    if (ch !== "}" && ch !== "]") continue;
+    try {
+      return JSON.parse(noTrailing.slice(0, i + 1));
+    } catch {
+      /* keep walking back */
+    }
+  }
+  return undefined;
+}
+
+function richestJsonObject(text: string): Record<string, unknown> | undefined {
+  let best: Record<string, unknown> | undefined;
+  let bestLen = 0;
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}" && depth > 0) {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        const slice = text.slice(start, i + 1);
+        try {
+          const parsed = JSON.parse(slice) as unknown;
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && slice.length > bestLen) {
+            best = parsed as Record<string, unknown>;
+            bestLen = slice.length;
+          }
+        } catch {
+          /* skip incomplete object */
+        }
+        start = -1;
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * Merge a streamed tool-argument delta into the accumulator.
+ *
+ * Providers mix shapes: empty object `{}` on the first delta, then a JSON
+ * string; or incremental strings; or a complete object on the finalized
+ * `tool-call` event after `tool-input-start` already opened the call with "".
+ * Appending `{}` + `{"cards":[...]}` produces unparseable JSON that collapses
+ * back to `{}`. Replace empty/incomplete current text with a richer complete
+ * payload; otherwise concatenate string chunks.
+ */
+function mergeToolCallArguments(current: string, incoming: unknown): string {
+  if (incoming == null) return current;
+
+  if (typeof incoming === "object") {
+    const json = JSON.stringify(incoming);
+    if (json === "{}" || json === "[]") return current || json;
+    if (!current || current === "{}" || parseJsonLenient(current) === undefined || json.length >= current.length) {
+      return json;
+    }
+    return current;
+  }
+
+  if (typeof incoming !== "string" || incoming === "") return current;
+  if (!current) return incoming;
+  if (current === "{}") {
+    const trimmed = incoming.trimStart();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) return incoming;
+    return current + incoming;
+  }
+  const incomingParsed = parseJsonLenient(incoming);
+  const currentParsed = parseJsonLenient(current);
+  if (incomingParsed !== undefined) {
+    if (currentParsed === undefined || incoming.length >= current.length) return incoming;
+    return current;
+  }
+  // Current is already valid JSON — appending a fragment would produce `}{...}`
+  // and 500 the follow-up turn. Ignore the extra chunk.
+  if (currentParsed !== undefined) return current;
+  return current + incoming;
+}
+
 interface ToolCallAccumulator {
   id?: string;
   name?: string;
@@ -99,7 +223,8 @@ async function consumeChatStream(
           const acc = toolAcc.get(index) ?? { arguments: "" };
           if (tc.id) acc.id = tc.id;
           if (tc.function?.name) acc.name = tc.function.name;
-          if (typeof tc.function?.arguments === "string") acc.arguments += tc.function.arguments;
+          const fnArgs = tc.function?.arguments as unknown;
+          if (fnArgs !== undefined) acc.arguments = mergeToolCallArguments(acc.arguments, fnArgs);
           // The gateway emits the provider signature on its own delta (keyed to
           // the same index) after the argument deltas — capture it so we can echo
           // it back verbatim next turn, or Gemini rejects the follow-up tool call.
@@ -158,7 +283,6 @@ export class Agent {
     const signal = options.signal ?? new AbortController().signal;
     const emit = options.onEvent ?? (() => {});
     const tools = options.tools ?? [];
-    const toolMap = new Map<string, ToolSpec>(tools.map((t) => [t.definition.function.name, t]));
 
     // Build the starting transcript: an explicit `messages` array wins; else
     // assemble [system?, user]. The app owns the prompt — the SDK adds nothing.
@@ -196,6 +320,12 @@ export class Agent {
           producedOutput,
           messages,
         };
+
+      // Rebuilt every step (not hoisted) so the `tools` array is LIVE: a tool's
+      // `execute` may append new ToolSpecs mid-run (deferred tool loading), and
+      // both the next request's advertised definitions (below) and this map must
+      // see them — a stale map would advertise a tool it then can't dispatch.
+      const toolMap = new Map<string, ToolSpec>(tools.map((t) => [t.definition.function.name, t]));
 
       let turn: StreamTurnResult;
       try {
@@ -269,7 +399,9 @@ export class Agent {
                 // empty string. Send `"{}"` instead so the gateway can
                 // `JSON.parse` it on the follow-up turn — `""` is invalid JSON
                 // and 500s the next request, aborting the loop.
-                function: { name: tc.name, arguments: tc.arguments.trim() ? tc.arguments : "{}" },
+                // Canonical JSON so the follow-up turn never 500s on
+                // concatenated/truncated streamed arguments.
+                function: { name: tc.name, arguments: JSON.stringify(parseToolArguments(tc.arguments)) },
                 // Echo the provider signature back so the gateway can re-attach it
                 // to the tool call for Gemini/Vertex on the next request.
                 ...(tc.thoughtSignature ? { thought_signature: tc.thoughtSignature } : {}),
@@ -320,14 +452,9 @@ export class Agent {
             producedOutput,
             messages,
           };
-        let input: Record<string, unknown> = {};
-        try {
-          input = tc.arguments ? JSON.parse(tc.arguments) : {};
-        } catch {
-          input = {};
-        }
+        let input: Record<string, unknown> = parseToolArguments(tc.arguments);
         producedOutput = true;
-        emit({ type: "tool_use", id: tc.id, name: tc.name, input });
+        emit({ type: "tool_use", id: tc.id, name: tc.name, input, raw: tc.arguments });
         const spec = toolMap.get(tc.name);
         let result: { content: string; isError: boolean };
         if (!spec) {
