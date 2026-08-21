@@ -41,6 +41,7 @@ export {
   UnifiedAIAuthError,
   AuthenticationError,
   BadRequestError,
+  ForbiddenError,
   NotFoundError,
   DeprecatedModelError,
   RateLimitError,
@@ -69,7 +70,7 @@ export type {
 
 export { UnifiedStream } from "./core/_internal/stream";
 export type { StreamUsage, StreamUsageExtractor } from "./core/_internal/stream";
-export { parseSSE } from "./core/_internal/sse";
+export { parseSSE, type SSEMessage } from "./core/_internal/sse";
 
 // Resource modules — all browser-safe.
 // Explicit /index: agent is a directory barrel (same dts-fixup reason as storage).
@@ -101,4 +102,5 @@ export * from "./resources/sync/index";
 export * from "./resources/usage";
 export * from "./resources/users";
 export * from "./resources/videos";
-export * from "./resources/logos";
+// Logo helpers (getProviderLogo, etc.) live behind "@unifiedai/sdk/logos" —
+// the generated data-URI table is ~58 KB and must not ship in the core bundle.

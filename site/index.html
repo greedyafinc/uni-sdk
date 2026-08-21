@@ -702,7 +702,7 @@
             </div>
             <div class="row">
               <dt>Entries</dt>
-              <dd>Two entry points, <strong>one class name</strong>. <code>@unifiedai/sdk</code> is browser-safe; <code>@unifiedai/sdk/node</code> adds OAuth.</dd>
+              <dd>Two runtime client entries, <strong>one class name</strong>. <code>@unifiedai/sdk</code> is browser-safe; <code>@unifiedai/sdk/node</code> adds OAuth. Logos and test doubles use separate subpaths.</dd>
             </div>
             <div class="row">
               <dt>Auth</dt>
@@ -823,16 +823,25 @@ bun add @unifiedai/sdk@github:greedyafinc/uni-sdk#&lt;sha&gt;</code></pre>
           (<code>"@unifiedai/sdk": "file:../../uni-sdk"</code>) so local SDK edits are picked up without a
           publish step.
         </p>
+        <p>
+          The package is ESM-only. The node entry requires Node 18 or newer and the types target TypeScript 5.
+          GitHub installs require Bun during installation because <code>prepare</code> builds
+          <code>dist/</code>; the repository examples also execute with Bun.
+        </p>
 
         <h3>Which entry?</h3>
         <div class="snip">
-          <div class="snip-h"><b>Two entries, one class name</b><button class="copy" type="button">copy</button></div>
+          <div class="snip-h"><b>Four entries, one core client</b><button class="copy" type="button">copy</button></div>
           <pre><code class="lang-ts">// Browser, Tauri WebViews, Workers, edge, server-side trusted hosts.
 // Zero node:* specifiers — bundles without polyfills.
 import { UnifiedAI } from "@unifiedai/sdk";
 
 // Node CLIs and desktop apps: adds OAuth (PKCE + loopback + OS keychain).
-import { UnifiedAI } from "@unifiedai/sdk/node";</code></pre>
+import { UnifiedAI } from "@unifiedai/sdk/node";
+
+// Optional payloads stay out of the production core bundle.
+import { getModelLogo } from "@unifiedai/sdk/logos";
+import { FakeSyncServer } from "@unifiedai/sdk/testing";</code></pre>
         </div>
 
         <p>
@@ -842,15 +851,12 @@ import { UnifiedAI } from "@unifiedai/sdk/node";</code></pre>
           reverse direction: a structural check fails if the browser bundle ever picks up either.
         </p>
 
-        <div class="note warn">
-          <span class="note-t">Type-export asymmetry</span>
+        <div class="note">
+          <span class="note-t">The keychain dependency is optional</span>
           <p>
-            <code>src/node/index.ts</code> re-exports resources explicitly and <strong>omits</strong> the
-            <code>agent</code>, <code>actions</code>, <code>fs</code>, <code>artifacts</code>,
-            <code>memory</code>, <code>projects</code> and <code>references</code> barrels. Those properties
-            still <em>work at runtime</em> from the node entry (the node class extends the browser one), but
-            their <strong>named type exports are unavailable</strong>. Import those types from
-            <code>@unifiedai/sdk/browser</code>.
+            The node entry re-exports the same resource surface as the browser entry.
+            <code>@napi-rs/keyring</code> is an optional dependency: if it cannot install or the OS keychain
+            is locked, bootstrap continues to desktop handoff and browser PKCE.
           </p>
         </div>
       </section>
@@ -932,7 +938,7 @@ console.log(stream.usage?.tokens_per_second);</code></pre>
               </tr>
               <tr>
                 <td><strong>OAuth (PKCE)</strong></td>
-                <td>Omit <code>token</code>, set <code>appId</code>, call <code>bootstrap()</code></td>
+                <td>Omit <code>token</code>, set <code>appId</code>; bootstrap explicitly or on the first request</td>
                 <td><code>/node</code> only</td>
                 <td>CLIs and installed marketplace apps signing in as the user</td>
               </tr>
@@ -982,10 +988,14 @@ const sdk = new UnifiedAI({
           <div class="snip-h"><b>Seamless auth for a CLI</b><button class="copy" type="button">copy</button></div>
           <pre><code class="lang-ts">import { UnifiedAI } from "@unifiedai/sdk/node";
 
-const sdk = new UnifiedAI({ appId: "my-cli" });
+const sdk = new UnifiedAI({
+  appId: "my-cli",
+  signInTimeoutMs: 5 * 60_000,
+  onAuthEvent: (event) =&gt; console.error("[auth]", event.type),
+});
 
 // OS keychain → desktop handoff → system-browser PKCE.
-// Only opens a browser if the first two miss.
+// Optional: the first API request also bootstraps lazily.
 await sdk.bootstrap();
 
 console.log("signed in as", sdk.identity().user_id);
@@ -1033,8 +1043,9 @@ unsubscribe();</code></pre>
         </div>
 
         <p>
-          <code>signOut()</code> clears memory and keychain and emits <code>signedOut</code>
-          <em>before</em> the network revoke, so a slow endpoint cannot wedge your logout path.
+          <code>signOut()</code> snapshots the token family, clears memory and keychain, emits
+          <code>signedOut</code>, then revokes the snapshot best-effort. A later request does not silently
+          reopen the browser; call <code>bootstrap()</code> explicitly to sign in again.
         </p>
       </section>
 
@@ -1053,6 +1064,12 @@ unsubscribe();</code></pre>
               <tr><td><code>fetch</code></td><td><code>typeof fetch</code></td><td>Injected transport. Handoff, token and revoke all route through it.</td></tr>
               <tr><td><code>retry</code></td><td><code>false | Partial&lt;RetryConfig&gt;</code></td><td>See <a href="#advanced">Advanced</a>.</td></tr>
               <tr><td><code>onRetry</code></td><td><code>RetryListener</code></td><td>Telemetry hook; a throw here cannot break the loop.</td></tr>
+              <tr><td><code>cache</code></td><td><code>false | Partial&lt;CacheConfig&gt;</code></td><td>Opt-in bounded in-memory cache for supported deterministic calls.</td></tr>
+              <tr><td><code>compression</code></td><td><code>boolean</code></td><td>Default gateway context-compression flag for chat/messages/responses; per-request values win.</td></tr>
+              <tr><td><code>signInTimeoutMs</code></td><td><code>number</code></td><td><span class="pill node">node</span> Browser-PKCE deadline; defaults to 5 minutes.</td></tr>
+              <tr><td><code>refreshSkewSeconds</code></td><td><code>number</code></td><td><span class="pill node">node</span> Proactive refresh lead time; defaults to 60, or set 0 to disable.</td></tr>
+              <tr><td><code>revokeTimeoutMs</code></td><td><code>number</code></td><td><span class="pill node">node</span> Best-effort sign-out revoke deadline; defaults to 5 seconds.</td></tr>
+              <tr><td><code>onAuthEvent</code></td><td><code>AuthEventListener</code></td><td><span class="pill node">node</span> Non-sensitive auth-ladder and refresh telemetry.</td></tr>
               <tr><td><code>keychain</code> <code>env</code> <code>discovery</code> <code>openUrl</code></td><td>adapters</td><td><span class="pill node">node</span> Injectable seams &mdash; see <a href="#advanced">Testing</a>.</td></tr>
             </tbody>
           </table>
@@ -1182,7 +1199,7 @@ for await (const event of stream) {
           <code>stream.usage</code> populates once a usage-bearing event lands &mdash;
           <code>message_delta</code> on the Anthropic surface, or a final chunk when you pass
           <code>stream_options: { include_usage: true }</code> on chat. Read it <em>after</em> the loop.
-          If the connection drops mid-stream the iterator throws <code>StreamInterruptedError</code>.
+          If reading an established stream fails, the iterator throws <code>StreamInterruptedError</code>.
         </p>
       </section>
 
@@ -1191,8 +1208,9 @@ for await (const event of stream) {
         <p class="eyebrow">Concepts</p>
         <h2>Errors</h2>
         <p>
-          Every HTTP failure throws a typed error so you can branch on the failure mode without parsing
-          strings. All of them subclass <code>UnifiedAIError</code>, which subclasses <code>Error</code>.
+          Every SDK error extends <code>UnifiedError</code> and carries a stable <code>code</code>, optional
+          <code>cause</code>, and <code>isUnifiedSdkError: true</code>. HTTP failures additionally extend
+          <code>UnifiedAIError</code> and carry response details.
         </p>
 
         <div class="tw">
@@ -1202,10 +1220,13 @@ for await (const event of stream) {
               <tr><td><code>BadRequestError</code></td><td>400</td><td>&mdash;</td></tr>
               <tr><td><code>AuthenticationError</code></td><td>401</td><td>&mdash;</td></tr>
               <tr><td><code>UnifiedAIAuthError</code></td><td>401</td><td>refresh failures; extends <code>AuthenticationError</code></td></tr>
+              <tr><td><code>ForbiddenError</code></td><td>403</td><td>credential accepted but not permitted; refreshing will not help</td></tr>
               <tr><td><code>NotFoundError</code></td><td>404</td><td>&mdash;</td></tr>
+              <tr><td><code>DeprecatedModelError</code></td><td>410</td><td><code>isDeprecated</code>; keyed off body code <code>model_deprecated</code></td></tr>
               <tr><td><code>RateLimitError</code></td><td>429</td><td><code>retryAfter</code></td></tr>
               <tr><td><code>UsageLimitError</code></td><td>429</td><td><code>periodCost</code>, <code>limit</code>, <code>resetAt</code>, <code>isUsageLimit</code></td></tr>
               <tr><td><code>ServerError</code></td><td>5xx</td><td>&mdash;</td></tr>
+              <tr><td><code>StreamInterruptedError</code></td><td>&mdash;</td><td>reading an established SSE response failed; original transport failure in <code>cause</code></td></tr>
               <tr><td><code>UnifiedAIError</code></td><td>other</td><td>base &mdash; <code>code</code>, <code>status</code>, <code>body</code>, <code>headers</code>, <code>requestId</code></td></tr>
             </tbody>
           </table>
@@ -1225,8 +1246,9 @@ for await (const event of stream) {
         <div class="snip">
           <div class="snip-h"><b>Branching on failure mode</b><button class="copy" type="button">copy</button></div>
           <pre><code class="lang-ts">import {
-  UsageLimitError, RateLimitError, AuthenticationError,
-  BadRequestError, ServerError, UnifiedAIError,
+  UsageLimitError, RateLimitError, DeprecatedModelError,
+  ForbiddenError, AuthenticationError, BadRequestError,
+  ServerError, StreamInterruptedError, UnifiedAIError,
 } from "@unifiedai/sdk";
 
 try {
@@ -1236,12 +1258,18 @@ try {
     console.error(`Quota exhausted: $${err.periodCost} / $${err.limit}`);
   } else if (err instanceof RateLimitError) {
     console.error(`Throttled — retry in ${err.retryAfter ?? "?"}s`);
+  } else if (err instanceof DeprecatedModelError) {
+    console.error("Model retired — select a current model");
+  } else if (err instanceof ForbiddenError) {
+    console.error("Credential is not permitted for this operation");
   } else if (err instanceof AuthenticationError) {
     console.error("Token invalid or revoked");
   } else if (err instanceof BadRequestError) {
     console.error("Request rejected:", err.body);
   } else if (err instanceof ServerError) {
     console.error("Upstream failure:", err.requestId);
+  } else if (err instanceof StreamInterruptedError) {
+    console.error("Partial response; retry the stream:", err.cause);
   } else if (err instanceof UnifiedAIError) {
     console.error(`Unexpected ${err.status}:`, err.message);
   } else {
@@ -1272,7 +1300,8 @@ try {
             </p>
             <div class="snip">
               <div class="snip-h"><b>Catalog + logos</b><button class="copy" type="button">copy</button></div>
-              <pre><code class="lang-ts">import { UnifiedAI, getModelLogo } from "@unifiedai/sdk";
+              <pre><code class="lang-ts">import { UnifiedAI } from "@unifiedai/sdk";
+import { getModelLogo } from "@unifiedai/sdk/logos";
 
 const { data } = await sdk.models.list({ include: ["author"] });
 
@@ -1687,14 +1716,12 @@ const sdk = new UnifiedAI({
 });</code></pre>
         </div>
 
-        <div class="note warn">
-          <span class="note-t">A missing OS keychain rejects bootstrap()</span>
+        <div class="note">
+          <span class="note-t">A missing OS keychain is recoverable</span>
           <p>
-            <code>bootstrap()</code> reads the keychain with no <code>try/catch</code>, so in a container or
-            CI runner without one, <code>@napi-rs/keyring</code>&rsquo;s
-            <code>keychain_unavailable</code> propagates and <strong>bootstrap rejects before reaching the
-            handoff or PKCE legs</strong>. It is not gracefully tolerated. Inject a <code>keychain</code>
-            adapter in those environments.
+            A locked, missing, or unavailable keychain is treated as a cache miss. Bootstrap continues through
+            desktop handoff and browser PKCE; inject a <code>keychain</code> adapter in CI when you need a
+            fully non-interactive flow.
           </p>
         </div>
       </section>
@@ -1730,24 +1757,20 @@ const sdk = new UnifiedAI({
                 <td><code>stream</code> was a <code>boolean</code> variable, not a literal. Branch at the call site.</td>
               </tr>
               <tr>
-                <td><code>Agent</code>/<code>Fs</code>/<code>Artifact</code> types won&rsquo;t import from <code>/node</code></td>
-                <td>The node barrel omits those re-exports. Import the types from <code>@unifiedai/sdk/browser</code>; runtime still works.</td>
-              </tr>
-              <tr>
                 <td>Every call 401s right after <code>bootstrap()</code></td>
                 <td>A stale keychain token short-circuited the chain with no expiry check. Check <code>session.isAuthenticated()</code>.</td>
               </tr>
               <tr>
-                <td><code>bootstrap()</code> hangs forever</td>
-                <td>The PKCE browser leg has no timeout and no abort seam. The user never finished consent.</td>
+                <td><code>bootstrap()</code> fails with <code>auth_timeout</code></td>
+                <td>The browser redirect did not arrive within <code>signInTimeoutMs</code> (5 minutes by default). Start sign-in again.</td>
               </tr>
               <tr>
                 <td><code>bootstrap()</code> rejects in CI</td>
-                <td>No OS keychain. Inject a <code>keychain</code> adapter.</td>
+                <td>The keychain now falls through; CI still needs a handoff/token source or injected adapters to avoid interactive browser PKCE.</td>
               </tr>
               <tr>
                 <td><code>app_not_installed</code> instead of a browser prompt</td>
-                <td>The desktop is running and returned 404 for that <code>appId</code>. A wrong id is only a hard error when the desktop is up.</td>
+                <td>An env-injected handoff port returned 404, which is authoritative for that launched process. A discovery-file 404 is treated as stale and falls through to browser PKCE.</td>
               </tr>
               <tr>
                 <td><code>storage_unavailable</code> / <code>fs_unavailable</code></td>
@@ -1794,7 +1817,7 @@ const sdk = new UnifiedAI({
               <tr>
                 <td><strong>Usable, with caveats</strong></td>
                 <td><code>storage</code> <code>fs</code> <code>agent</code> &mdash; and the node OAuth chain</td>
-                <td>Shipping and used in-tree, but read the callouts above: no offline fallback, <code>available()</code> is not a health check, <code>run()</code> reports failures in its return value.</td>
+                <td>Shipping and used in-tree, but read the callouts above: no offline fallback, <code>available()</code> is not a health check, and <code>run()</code> reports failures in its return value.</td>
               </tr>
               <tr>
                 <td><strong>Experimental</strong></td>

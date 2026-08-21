@@ -25,6 +25,7 @@ export {
   UnifiedAIAuthError,
   AuthenticationError,
   BadRequestError,
+  ForbiddenError,
   NotFoundError,
   DeprecatedModelError,
   RateLimitError,
@@ -56,7 +57,7 @@ export type {
 // Stream + SSE.
 export { UnifiedStream } from "../core/_internal/stream";
 export type { StreamUsage, StreamUsageExtractor } from "../core/_internal/stream";
-export { parseSSE } from "../core/_internal/sse";
+export { parseSSE, type SSEMessage } from "../core/_internal/sse";
 
 // Error helpers.
 export {
@@ -93,12 +94,12 @@ export * from "../resources/sync/index";
 export * from "../resources/usage";
 export * from "../resources/users";
 export * from "../resources/videos";
-export * from "../resources/logos";
+// Logo helpers live behind "@unifiedai/sdk/logos" (see src/index.ts note).
 
 // The node-capable UnifiedAI — supersedes the browser entry's class. Consumers
 // importing from this entry get the OAuth-capable client under the same name.
 export { UnifiedAI } from "./client";
-export type { UnifiedAIOptions } from "./client";
+export type { UnifiedAIOptions, AuthEvent, AuthEventListener } from "./client";
 
 // Local-first Ecosystem API discovery (PROTOCOL.md "Local ecosystem hosting & discovery").
 // Resolves the running desktop app's loopback hosting (env handoff → discovery file + probe
@@ -112,8 +113,8 @@ export {
 } from "./_internal/ecosystem-discovery";
 
 // Node-specific configuration types.
-export type { DiscoveryReader } from "./_internal/discovery";
-export type { EnvReader } from "./_internal/env";
+export type { DiscoveryReader, DiscoveryRecord } from "./_internal/discovery";
+export type { Env, EnvReader } from "./_internal/env";
 export type { KeychainAdapter } from "./_internal/keychain";
 export {
   signInWithBrowser,

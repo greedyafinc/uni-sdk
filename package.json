@@ -3,6 +3,7 @@
   "version": "0.2.0",
   "description": "Official SDK for Unifiedai marketplace apps.",
   "type": "module",
+  "sideEffects": ["./src/**"],
   "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
   "main": "./dist/index.browser.js",
   "module": "./dist/index.browser.js",
@@ -34,6 +35,16 @@
       "import": "./dist/index.browser.js",
       "default": "./dist/index.browser.js"
     },
+    "./logos": {
+      "types": "./dist/logos/index.d.ts",
+      "import": "./dist/logos/index.js",
+      "default": "./dist/logos/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js",
+      "default": "./dist/testing/index.js"
+    },
     "./package.json": "./package.json"
   },
   "publishConfig": {
@@ -42,10 +53,12 @@
   "scripts": {
     "clean": "rm -rf dist docs",
     "logos": "bun run scripts/generate-logos.ts",
-    "build": "bun run clean && bun run logos && bun run build:browser && bun run build:node && bun run build:types && bun run build:fixup-dts && bun run build:verify",
+    "build": "bun run clean && bun run logos && bun run build:browser && bun run build:node && bun run build:logos-entry && bun run build:testing && bun run build:types && bun run build:fixup-dts && bun run build:verify",
     "prepare": "bun run build",
-    "build:browser": "bun build ./src/index.ts --outdir dist --target browser --format esm --sourcemap --entry-naming index.browser.js",
+    "build:browser": "bun build ./src/index.ts --outdir dist --target browser --format esm --minify --sourcemap --entry-naming index.browser.js",
     "build:node": "bun build ./src/node/index.ts --outdir dist/node --target node --format esm --sourcemap --external @napi-rs/keyring --entry-naming index.js",
+    "build:logos-entry": "bun build ./src/logos/index.ts --outdir dist/logos --target browser --format esm --minify --sourcemap --entry-naming index.js",
+    "build:testing": "bun build ./src/testing/index.ts --outdir dist/testing --target browser --format esm --sourcemap --entry-naming index.js",
     "build:types": "tsc -p tsconfig.build.json",
     "build:fixup-dts": "bun run scripts/fixup-dts-extensions.ts",
     "build:verify": "bun run scripts/verify-browser-bundle.ts",
@@ -79,7 +92,7 @@
   },
   "keywords": ["unifiedai", "sdk", "llm", "marketplace"],
   "license": "MIT",
-  "dependencies": {
+  "optionalDependencies": {
     "@napi-rs/keyring": "^1.3.0"
   }
 }
