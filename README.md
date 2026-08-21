@@ -1,8 +1,9 @@
 # @unifiedai/sdk
 
-Official SDK for Unifiedai marketplace apps. Ships two entry points so the
-same package works in the browser, in Workers/edge, and in Node CLIs — without
-forcing any consumer to bundle Node-only modules.
+Official SDK for Unifiedai marketplace apps. Ships two runtime client entries
+plus optional logos/testing subpaths, so the same package works in the browser,
+in Workers/edge, and in Node CLIs — without forcing consumers to bundle
+Node-only or test-only modules.
 
 ## Install
 
@@ -33,6 +34,11 @@ Inside the UnifiedApp workspace, apps use a `file:` reference instead
 (`"@unifiedai/sdk": "file:../../uni-sdk"`) so local SDK edits are picked up
 without a publish step.
 
+The package is ESM-only. The Node entry requires Node 18 or newer and the
+published types target TypeScript 5. GitHub installs also require Bun during
+installation because the `prepare` script builds `dist/`; the example commands
+below run with Bun.
+
 ## Which entry should I import?
 
 ```ts
@@ -50,7 +56,41 @@ polyfills. It requires you to supply a bearer token via the `token` option.
 The `/node` entry is a **strict superset**: same resources, plus the
 Authorization Code + PKCE OAuth flow with a local loopback HTTP listener,
 discovery file lookups, and OS keychain storage. Same class name (`UnifiedAI`)
-in both — call sites read identically.
+in both — call sites read identically. The keychain module
+(`@napi-rs/keyring`) is an **optional** dependency: if it fails to install,
+the SDK still works and treats the keychain as unavailable.
+
+Two additional subpath entries keep optional payloads out of the core bundle:
+
+```ts
+// Provider/model brand logos (~58 KB of data-URI SVGs; browser-safe)
+import { getProviderLogo, getModelLogo, listProviderLogos } from "@unifiedai/sdk/logos";
+import type { LogoTheme, ProviderLogoInput, ModelLogoInput } from "@unifiedai/sdk/logos";
+
+// Test doubles — never ship in production bundles
+import { FakeSyncServer } from "@unifiedai/sdk/testing";
+import type { FakeSyncServerOptions } from "@unifiedai/sdk/testing";
+```
+
+> **Breaking (unreleased):** the logo helpers and `FakeSyncServer` were
+> previously exported from the root/node entries. Import them from
+> `@unifiedai/sdk/logos` and `@unifiedai/sdk/testing` now.
+
+When both `token` and `appId` are supplied, `token` selects trusted-token
+authentication while `appId` still namespaces `sdk.storage` and `sdk.fs`,
+and is sent as `X-Unified-App` so a shared `uapi_` testing key can attribute
+usage per app.
+The browser entry cannot run OAuth: `appId` without `token` does not
+authenticate there.
+
+Runnable examples use the working-tree source directly:
+
+- [`examples/browser-trusted-token`](examples/browser-trusted-token/README.md) — browser
+  host supplies a token and observes `sdk.session`
+- [`examples/streaming-chat`](examples/streaming-chat/README.md) — Node OAuth
+  auto-bootstrap, auth events, and chat SSE
+- [`examples/file-upload`](examples/file-upload/README.md) — general file upload with
+  byte progress, list/content round-trip, and cleanup
 
 ## Usage
 
@@ -129,7 +169,7 @@ await sdk.images.edit({
 });
 ```
 
-`sdk.files.upload(source, { filename?, contentType?, signal? })` accepts a
+`sdk.files.upload(source, { filename?, contentType?, signal?, onProgress? })` accepts a
 `Blob`, `File`, `Buffer`, `Uint8Array`, `ArrayBuffer`, or a base64 `data:` URL.
 Filename and content-type are auto-detected from `File`/`Blob` metadata when
 present and can be overridden via the options object. `files.upload()` is the
@@ -158,6 +198,13 @@ const meta = await sdk.files.retrieve(file.id);
 const { bytes, contentType, filename } = await sdk.files.content(file.id);
 await sdk.files.del(file.id);
 ```
+
+`files.create()` also accepts `purpose` and switches to resumable chunked
+upload above 5 MB by default. Override the threshold with
+`chunkedUploadThreshold` (`Infinity` disables chunking). To survive a process
+restart, persist the id received by `onPersistUploadId` and pass it back as
+`resumeFrom`; the hook receives `null` after completion or caller abort. A
+resumed call must use the same filename, MIME type, and byte length.
 
 #### Messages (Anthropic) streaming
 
@@ -196,48 +243,148 @@ ends the iterator. `stream.usage` is populated once `message_delta` lands.
 ```ts
 import { UnifiedAI } from "@unifiedai/sdk/node";
 
-const sdk = new UnifiedAI({ appId: "your-client-id" });
+const sdk = new UnifiedAI({
+  appId: "your-client-id", // OAuth client_id from app registration
+  signInTimeoutMs: 5 * 60_000, // optional: bound the browser sign-in wait (default 5 min)
+  refreshSkewSeconds: 60, // optional: proactively refresh before expiry; 0 disables
+  revokeTimeoutMs: 5_000, // optional: bound best-effort sign-out revocation
+  onAuthEvent: (e) => console.error("[auth]", e.type), // optional observability hook
+});
+
+// Either bootstrap explicitly…
 await sdk.bootstrap(); // → opens browser, runs PKCE, stores in OS keychain
 const me = sdk.identity();
+
+// …or just make a call: with no `token` configured, the first request
+// auto-bootstraps (lazily, once per instance).
+const usage = await sdk.usage.get();
 ```
 
 Bootstrap tries cached keychain tokens → environment-supplied handoff port →
-discovery-file handoff → fresh browser PKCE. Refresh tokens are rotated
-transparently on 401.
+discovery-file handoff → fresh browser PKCE. A locked or unavailable OS
+keychain falls through to the next source instead of failing; desktop handoff
+probes are bounded at 3 s; the browser wait is bounded by `signInTimeoutMs`
+(default 5 minutes, then `auth_timeout`). If the system browser can't be
+launched, the SDK throws `browser_open_failed` naming the failed opener and
+underlying process error. Access tokens refresh proactively
+60 seconds before expiry by default (`refreshSkewSeconds`), with the
+single-flighted 401 refresh path as a fallback.
+
+`onAuthEvent` receives an `AuthEvent` union — `keychain_lookup`,
+`handoff_attempt`, `handoff_result`, `browser_pkce_start`, `refresh_start`,
+`refresh_success`, `refresh_failure`, `sign_out` — for logging/telemetry.
+Events include the handoff `source`, `port`, and `result`, or a refresh-failure
+`code` where applicable. The listener runs synchronously; a thrown listener
+error is swallowed so telemetry cannot break auth. Failed lazy bootstrap
+attempts may be retried by a later request. A successful bootstrap or
+`signOut()` disarms lazy bootstrap, so a signed-out request will not silently
+reopen a browser — call `bootstrap()` explicitly to sign in again.
+If `signOut()` races an in-flight bootstrap, sign-out wins: bootstrap rejects
+with `code: "aborted"`, no late `signedIn` event fires, and any newly minted
+token family is revoked best-effort.
+
+### Session lifecycle
+
+`sdk.session` exposes the current auth state and an observable event stream:
+
+```ts
+const unsubscribe = sdk.session.onChange((event) => {
+  if (event.type === "expired") showSignInAgain();
+  if (event.type === "error") console.error(event.error);
+});
+
+console.log(sdk.session.status); // "active" | "expired" | "signed_out"
+console.log(sdk.session.isAuthenticated());
+unsubscribe();
+```
+
+Trusted-token clients start active when a token provider is configured. A
+retried 401 that still fails transitions the session to `expired`. OAuth
+clients additionally emit `signedIn`, `refreshed`, and `signedOut`; their
+`expiresAt` values are epoch milliseconds. Trusted-token sessions have no
+known `expiresAt`, and `signOut()` only updates local observable state—the
+host remains responsible for revoking its credential.
+
+### Client behavior options
+
+- `retry` configures transient 429/5xx/network retry, or `false` disables it;
+  `onRetry` observes each attempt. Non-idempotent POST/PATCH requests do not
+  retry network/5xx failures unless the resource marks them safe.
+- `cache` enables the bounded in-memory cache used by cacheable deterministic
+  calls.
+- `compression` sets the default gateway context-compression flag for chat,
+  messages, and responses. An explicit per-request value takes precedence.
 
 ## Error handling
 
 The SDK throws typed errors from `@unifiedai/sdk` so consumers can branch on
-the failure mode without parsing strings. All HTTP errors subclass
-`UnifiedAIError`, which in turn subclasses `Error` — `instanceof Error` keeps
-working for catch-all handlers.
+the failure mode without parsing strings. Every SDK error extends
+`UnifiedError`, which carries a stable `code` (`UnifiedErrorCode`), an
+optional `status`, the standard ES2022 `cause` (the original transport error,
+where relevant), and an `isUnifiedSdkError: true` marker that survives
+bundler-duplicated class identities where `instanceof` breaks. HTTP failures
+extend `UnifiedAIError` (itself a `UnifiedError`), which adds `body`,
+`headers`, and `requestId` (from `x-request-id` / `request-id`).
+`instanceof Error` keeps working for catch-all handlers.
 
-| Class                  | HTTP   | Extra fields                                |
-| ---------------------- | ------ | ------------------------------------------- |
-| `BadRequestError`      | 400    | —                                           |
-| `AuthenticationError`  | 401    | —                                           |
-| `NotFoundError`        | 404    | —                                           |
-| `RateLimitError`       | 429    | `retryAfter` (seconds)                      |
-| `UsageLimitError`      | 429    | `periodCost`, `limit`, `resetAt`, `isUsageLimit` |
-| `ServerError`          | 5xx    | —                                           |
-| `UnifiedAIError`       | other  | base — has `code`, `status`, `body`, `headers`, `requestId` |
-| `UnifiedAIAuthError`   | 401    | refresh-token failures; extends `AuthenticationError` |
+| Class                    | HTTP | Trigger                                                        | Extra fields |
+| ------------------------ | ---- | -------------------------------------------------------------- | ------------ |
+| `UnifiedError`           | —    | base of every SDK error, incl. non-HTTP subsystem errors       | `code`, `status?`, `isUnifiedSdkError` |
+| `StreamInterruptedError` | —    | reading an established SSE response failed mid-stream — provider timeout or socket close; retry or switch models | `cause` (e.g. `ECONNRESET`) |
+| `UnifiedAIError`         | any  | base of all HTTP errors; generic 4xx fallback                  | `body`, `headers`, `requestId` |
+| `BadRequestError`        | 400  | request rejected as invalid                                    | —            |
+| `AuthenticationError`    | 401  | credential missing, invalid, or expired — refresh may help     | —            |
+| `UnifiedAIAuthError`     | 401  | the SDK's own refresh flow failed, or a retried 401 still 401'd; extends `AuthenticationError` | — |
+| `ForbiddenError`         | 403  | credential accepted but not permitted (app-scoped token, disabled key) — terminal, refreshing won't help | — |
+| `NotFoundError`          | 404  | no such resource (model, file, conversation, …)                | —            |
+| `DeprecatedModelError`   | 410  | model retired; keyed off body `code: "model_deprecated"`, not the status alone (410 is also used for expired upload sessions) — switch models | `isDeprecated` |
+| `RateLimitError`         | 429  | transient throttling — wait and retry                          | `retryAfter` (seconds) |
+| `UsageLimitError`        | 429  | plan quota exhausted for the billing period — retrying won't help | `periodCost`, `limit`, `resetAt`, `isUsageLimit` |
+| `ServerError`            | 5xx  | upstream provider / gateway failure                            | —            |
 
-`RateLimitError` covers transient throttling (e.g. too many requests in a
-short window — wait and retry). `UsageLimitError` signals plan-quota
-exhaustion for the billing period; retrying won't help. They are
-**siblings**, not parent/child — `UsageLimitError` does *not* pass an
-`instanceof RateLimitError` check, so a generic retry wrapper must catch
-both explicitly. Always check the more specific class first.
+`RateLimitError` and `UsageLimitError` are **siblings**, not parent/child —
+`UsageLimitError` does *not* pass an `instanceof RateLimitError` check, so a
+generic retry wrapper must catch both explicitly. Always check the more
+specific class first.
+
+All three streaming surfaces (`chat`, `messages`, `responses`) throw
+`StreamInterruptedError` when reading an established stream fails — a request
+that never got a 200 throws the HTTP error instead, and a caller-initiated
+abort surfaces as the caller's own `AbortError`.
+
+`err.code` is typed against a single `UnifiedErrorCode` registry covering:
+
+- **HTTP** — `bad_request`, `unauthorized`, `forbidden`, `not_found`,
+  `model_deprecated`, `rate_limited`, `usage_limit_exceeded`, `server_error`,
+  `request_failed`
+- **Auth / bootstrap (node)** — `not_bootstrapped`, `app_not_installed`,
+  `handoff_unreachable`, `auth_user_cancelled`, `auth_state_mismatch`,
+  `auth_timeout`, `auth_token_exchange_failed`, `auth_refresh_failed`,
+  `auth_retry_still_unauthorized`, `browser_open_failed`,
+  `keychain_unavailable`
+- **Streaming** — `stream_interrupted`
+- **Client-side** — `invalid_input`, `aborted`, `not_implemented`
+- **Storage subsystem** — `storage_unavailable`, `storage_read_only`,
+  `storage_not_granted`
+- **Fs subsystem** — `fs_unavailable`, `fs_read_only`, `fs_not_granted`,
+  `invalid_path`, `edit_not_found`, `edit_not_unique`
+
+Registered codes get autocomplete and exhaustiveness help; unregistered
+strings still compile (forward compatibility). Non-HTTP subsystem errors are
+built through the shared `subsystemError()` factory and are plain
+`UnifiedError`s.
 
 ```ts
 import {
   UnifiedAI,
   AuthenticationError,
+  ForbiddenError,
+  DeprecatedModelError,
   RateLimitError,
   UsageLimitError,
   BadRequestError,
   ServerError,
+  StreamInterruptedError,
   UnifiedAIError,
 } from "@unifiedai/sdk";
 
@@ -250,12 +397,18 @@ try {
     console.error(`Quota exhausted: $${err.periodCost} / $${err.limit}`);
   } else if (err instanceof RateLimitError) {
     console.error(`Throttled — retry in ${err.retryAfter ?? "?"}s`);
+  } else if (err instanceof DeprecatedModelError) {
+    console.error("Model retired — pick a current one from models.list()");
+  } else if (err instanceof ForbiddenError) {
+    console.error("Credential not permitted for this operation");
   } else if (err instanceof AuthenticationError) {
     console.error("API key invalid or revoked");
   } else if (err instanceof BadRequestError) {
     console.error("Request rejected:", err.body);
   } else if (err instanceof ServerError) {
     console.error("Upstream failure:", err.requestId);
+  } else if (err instanceof StreamInterruptedError) {
+    console.error("Stream dropped mid-response:", err.cause);
   } else if (err instanceof UnifiedAIError) {
     console.error(`Unexpected ${err.status}:`, err.message);
   } else {
@@ -264,13 +417,68 @@ try {
 }
 ```
 
+## Resources
+
+Everything hangs off one client. Resources are memoized lazy getters —
+constructed on first access, so `sdk.chat` alone doesn't pay for the other 21.
+
+| Resource | What it does |
+| --- | --- |
+| `sdk.chat` | OpenAI-compatible `chat/completions` — text generation with SSE streaming. |
+| `sdk.messages` | Anthropic-style `messages` API, streaming events + `finalMessage()`. |
+| `sdk.responses` | Unified multimodal responses endpoint (text, vision, audio, tools). |
+| `sdk.embeddings` | Vector embeddings (OpenAI parity — string or string-array input). |
+| `sdk.images` | Image generation, editing, and variations. |
+| `sdk.audio` | Text-to-speech synthesis and speech transcription. |
+| `sdk.videos` | Video generation jobs — submit, poll, retrieve content. |
+| `sdk.files` | Upload/download/manage files, incl. resumable chunked uploads. |
+| `sdk.models` | Model catalog with provider, pricing, and capability metadata. |
+| `sdk.usage` | Account usage stats (tokens, costs) + subscription plan details. |
+| `sdk.users` | Authenticated profile (`me()`) and public user lookup by id(s). |
+| `sdk.helpers` | Stateless multimodal helpers — source normalization, part construction. |
+| `sdk.calendar` | Stateless date math: timezone-aware recurrence expansion, sync-adapter serialization. |
+| `sdk.projects` | Cross-app projects — user-owned containers gathering work from many apps. |
+| `sdk.references` | Resolve `uniref://` project links back into renderable content. |
+| `sdk.artifacts` | Canonical, versioned snapshots of app work (docs, sheets, designs). |
+| `sdk.memory` | Append-only agent-memory ledger with server-stamped taint origin. |
+| `sdk.actions` | Cross-app action registry — declare `ActionSpec`s, serve or invoke actions. |
+| `sdk.storage` | App-namespaced typed collections + blobs (see [`STORAGE-SPEC.md`](STORAGE-SPEC.md)). |
+| `sdk.fs` | App-namespaced jailed file workspace — read/write/edit a directory tree. |
+| `sdk.sync` | Per-workspace sync engine: bootstrap/delta hydration + optimistic writes (see [`PROTOCOL.md`](PROTOCOL.md) §Sync; `FakeSyncServer` ships in `@unifiedai/sdk/testing`). |
+| `sdk.agent` | Unopinionated tool-loop scaffolding — run a model over app-supplied tools. Opt-in packs: `fsTools(ns)` and `webTools()` (`web_search` + `web_fetch`; compose into `tools`). `webTools()` is for Node/CLI/node-service — browser pages hit CORS on DuckDuckGo unless you inject a custom `search` backend. |
+
+### App data, sync, and polling
+
+- `sdk.storage` uses the cloud backend when the client can authenticate, or a
+  host-injected backend. There is no browser-local fallback. The app's own
+  namespace is read-write; cross-app namespaces default to read-only.
+  Collections support metadata queries, out-of-line blobs, and versioning.
+- `sdk.fs` follows the same cloud/injected/no-fallback selection. It exposes a
+  jailed POSIX-style tree with text/byte reads, writes, unique-string edits,
+  listing, stat, and delete.
+- `sdk.sync.workspace(id)` caches a `WorkspaceSync`. `start()` hydrates an
+  optional snapshot then catches up, background polling reads deltas, `sync()`
+  forces catch-up, and `apply()` performs optimistic writes with rollback on
+  failure. Observe `workspace.status`; cursor epoch mismatch automatically
+  discards stale state and re-bootstraps.
+- `videos.waitUntilReady()` polls every 5 seconds for up to 10 minutes by
+  default, supports abort, throws on timeout, and returns both completed and
+  failed terminal jobs. `actions.awaitResult()` polls every 400 ms for up to
+  30 seconds and returns the last pending result on timeout.
+
+The hand-written guide in [`site/`](site/index.html) covers install, auth, the
+three text surfaces, streaming, and errors in more depth.
+
 ## Project layout
 
 ```
 src/
-├── index.ts                  # browser entry
-├── core/                     # shared base (UnifiedAI, Core, errors, stream/sse)
-├── resources/                # chat, messages, models, responses, usage, logos
+├── index.ts                  # browser entry (browser-safe surface)
+├── logos/                    # @unifiedai/sdk/logos entry (brand logos)
+├── testing/                  # @unifiedai/sdk/testing entry (test doubles)
+├── auth/                     # browser sign-in helper
+├── core/                     # shared base (UnifiedAI, Core, errors, retry, SSE/stream)
+├── resources/                # one file/dir per resource — the 22 above
 └── node/                     # OAuth extension (PKCE, keychain, loopback, handoff)
 ```
 

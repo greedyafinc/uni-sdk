@@ -107,23 +107,62 @@ empty deduped list without a network call, and throwing a client-side
 `UnifiedError` (`code: "invalid_input"`) above the 100-id cap instead of
 truncating or round-tripping to the gateway's `400`.
 
+## Per-request app attribution
+
+`user_activity.app_name` (the dimension user analytics charts by) is
+**server-derived from the credential**:
+
+| Credential | `app_name` |
+|---|---|
+| Internal app-token JWT | JWT `app` claim |
+| OAuth access token | `sessions.client_id` |
+| `uapi_` API key | `api_keys.app_name`, unless overridden below |
+
+A `uapi_` key is pinned to one `app_name` at create time, which collapses
+attribution when one testing key is shared across apps. SDKs that know
+their `appId` MUST send it as:
+
+```
+X-Unified-App: <slug>
+```
+
+`<slug>` matches `^[a-z0-9][a-z0-9-]{0,63}$` (same as `/auth/app-token`).
+unified-api honors the header **only** on own-credential `uapi_` keys (and
+auth bypass). Internal JWTs and OAuth tokens ignore it — a client cannot
+relabel a server-issued app identity. Malformed values are ignored and the
+key's stored `app_name` is kept.
+
+The TypeScript SDK sends this header automatically when `appId` is set on
+the client (`new UnifiedAI({ token, appId })`).
+
 ## Bootstrap order
 
 An SDK MUST resolve tokens in this order on first call to `bootstrap()`:
 
 1. **Keychain hit.** Read OS keychain entry for `(SERVICE, client_id)`. If a valid
-   `TokenSet` is present, use it and stop.
+   `TokenSet` is present, use it and stop. If the keychain itself is
+   inaccessible (`keychain_unavailable`), fall through to the next step —
+   an unusable secret store must not block sign-in.
 2. **Env-var handoff.** If `UNIFIEDAI_HANDOFF_PORT` is set, `POST` to the desktop
    handoff endpoint on that port (see below). On `handoff_unreachable`, fall
-   through. On 404 (`app_not_installed`), surface the error — do not fall back.
+   through. On 404 (`app_not_installed`), surface the error — do not fall back:
+   the desktop injected the port into this exact process, so its answer is
+   authoritative.
 3. **Discovery-file handoff.** Read the discovery file (see below). If present
-   and valid, `POST` to the desktop handoff endpoint on the file's port. Same
-   fall-through rules as step 2.
+   and valid, `POST` to the desktop handoff endpoint on the file's port. Fall
+   through on `handoff_unreachable` **and** on 404 (`app_not_installed`) —
+   unlike step 2, a discovery file may be stale (a desktop that has since
+   uninstalled or re-registered apps), so its 404 is not authoritative and the
+   SDK proceeds to browser PKCE.
 4. **Browser PKCE.** Open the user's system browser to the authorize URL with
    a loopback `redirect_uri`. Exchange the resulting code for tokens at the
    token URL.
 
 Persist the resulting `TokenSet` to the keychain in steps 2–4.
+The TypeScript node SDK invokes the same ladder lazily on the first API request
+when no trusted `token` is configured. A failed lazy attempt leaves the ladder
+eligible for a later request; success or `signOut()` disarms implicit
+bootstrap until the caller explicitly invokes `bootstrap()` again.
 
 ## Desktop handoff endpoint
 
@@ -139,12 +178,19 @@ Body: { "client_id": "<string>" }
 ```
 
 Any connection failure or non-200/non-404 response → `handoff_unreachable` (SDK
-falls through to the next step).
+falls through to the next step). SDKs SHOULD bound the handoff request with a
+short deadline (recommended: 3 seconds, the TS SDK default) and treat a timeout
+as `handoff_unreachable` — a hung desktop must not stall bootstrap.
+
+If `UNIFIEDAI_HANDOFF_TOKEN` is set, SDKs MUST forward it verbatim as an
+`x-handoff-token` header so the desktop can bind the handoff to the process it
+launched; when unset, the header is omitted (back-compat).
 
 ## Desktop discovery file
 
 When the desktop starts, it writes a JSON record describing how to reach its
-handoff endpoint. SDKs read this file when `UNIFIEDAI_HANDOFF_PORT` is not set.
+handoff endpoint. SDKs read this file after the environment handoff is absent
+or fails with a fall-through error such as `handoff_unreachable`.
 
 | OS | Path |
 | --- | --- |
@@ -171,8 +217,13 @@ Query params:
 - `response_type=code`
 - `code_challenge`
 - `code_challenge_method=S256`
-- `state` — random per-request token; SDK rejects callbacks with mismatched
-  state as `auth_state_mismatch`
+- `state` — random per-request token; the loopback listener MUST ignore
+  callbacks carrying a code with a mismatched state (answer the HTTP request
+  with an error, keep listening) so a local process racing the browser cannot
+  consume the pending flow; a mismatched state that reaches the waiter is
+  rejected as `auth_state_mismatch`. SDKs SHOULD bound the wait for the
+  redirect (recommended: 5 minutes) and reject with `auth_timeout`, closing
+  the listener.
 
 Token URL: `https://api.unifiedai.app/oauth/token`
 
@@ -193,9 +244,48 @@ Body: {
 The SDK MUST bind the loopback server before opening the browser and close it
 after the callback (or on cancellation).
 
+## Token refresh
+
+OAuth clients refresh through the same token URL:
+
+```
+POST /oauth/token
+Content-Type: application/json
+Body: {
+  "grant_type": "refresh_token",
+  "refresh_token": "<current refresh_token>",
+  "client_id": "<string>"
+}
+
+200 → replacement TokenSet JSON
+```
+
+The server rotates refresh tokens, so an SDK MUST replace the entire stored
+`TokenSet` atomically rather than updating only `access_token`. Concurrent
+callers MUST share one refresh operation; a proactive expiry refresh and a
+reactive 401 refresh must not spend the same rotating token twice.
+
+SDKs SHOULD refresh shortly before `expires_at` (TS SDK default: 60 seconds)
+and MUST retain the reactive 401→refresh→single retry path. A refresh failure
+clears the unusable local session and surfaces `auth_refresh_failed`; a
+successful refresh that races a sign-out MUST be discarded rather than
+re-persisting tokens after the user ended the session.
+
 ## Sign-out / token revocation
 
-`signOut()` MUST attempt server-side revocation before clearing local state.
+`signOut()` MUST snapshot the current tokens, then clear local state, then
+revoke the snapshot — in that order:
+
+1. **Snapshot** the `TokenSet` to revoke (in-memory first, keychain fallback)
+   while it is still intact, so the original `refresh_token` is available to
+   send to `/oauth/revoke`.
+2. **Clear local state** (in-memory session + keychain entry) BEFORE issuing
+   the revoke call. Revocation is a network round-trip; if local state stayed
+   live during that window, a concurrent `bootstrap()` could establish a fresh
+   session that a trailing clear would then destroy. Clearing first closes the
+   race: the snapshot lives in a local variable and any subsequently created
+   session is owned by the new bootstrap, untouched by this sign-out.
+3. **Revoke the snapshot** server-side, best-effort.
 
 ```
 POST /oauth/revoke
@@ -211,7 +301,9 @@ Body: {
 
 Per RFC 7009 the server revokes the entire token family (the supplied token
 and any rotated children). SDKs MUST treat the call as best-effort: network
-failure, 4xx, or 5xx MUST NOT block clearing the local keychain entry. The
+failure, 4xx, or 5xx MUST NOT fail `signOut()` — local state is already
+cleared by the time the call is made, and SDKs SHOULD bound it with a short
+deadline (TS SDK default: 5 seconds) so a hung server cannot stall sign-out. The
 default revoke URL is derived from the token URL by replacing `/oauth/token`
 with `/oauth/revoke`; it can be overridden via the `UNIFIEDAI_REVOKE_URL` env
 var or an explicit `revokeUrl` option.
@@ -234,11 +326,14 @@ Stored value is the `TokenSet` JSON, UTF-8.
 | Name | Purpose |
 | --- | --- |
 | `UNIFIEDAI_HANDOFF_PORT` | Desktop handoff endpoint port. Set by the desktop when it launches an installed app. |
+| `UNIFIEDAI_HANDOFF_TOKEN` | Optional per-launch shared secret, forwarded verbatim as the `x-handoff-token` header on handoff requests. Absent → header omitted. |
 | `UNIFIEDAI_CLIENT_ID` | Optional fallback client_id when the SDK is not configured with one. |
 | `UNIFIEDAI_TOKEN_URL` | Override the OAuth token endpoint URL (testing / staging). |
 | `UNIFIEDAI_REVOKE_URL` | Override the OAuth revoke endpoint URL. Defaults to `tokenUrl` with `/oauth/token` → `/oauth/revoke`. |
 | `UNIFIEDAI_AUTHORIZE_URL` | Override the OAuth authorize endpoint URL (testing / staging). |
 | `UNIFIEDAI_API_URL` | Override the base URL for `/api/v1/*` and `/v1/messages` requests. Defaults to `https://api.unifiedai.app`. |
+| `UNIFIEDAI_ECOSYSTEM_URL` | Authoritative local Ecosystem API base injected into a desktop-launched child process. Use with `UNIFIEDAI_ECOSYSTEM_TOKEN`. |
+| `UNIFIEDAI_ECOSYSTEM_TOKEN` | Bearer token paired with `UNIFIEDAI_ECOSYSTEM_URL` for the local Ecosystem API. |
 
 ## Context compression
 
@@ -523,10 +618,10 @@ broker logic re-fronted as HTTP, not a second policy implementation.
 ## Sync
 
 A **per-workspace, live-first** materialized-view protocol: a client hydrates a
-workspace's records (bootstrap), then streams changes (delta), then writes
-(apply). The wire counter is a monotonic per-workspace **`syncId`**; ordering,
-paging, and dedupe are all keyed off it. All three routes are scoped by a
-`workspaceId` path segment.
+workspace's records (bootstrap), polls changes (delta), and writes optimistic
+updates (apply). The wire counter is a monotonic per-workspace **`syncId`**;
+ordering, paging, and dedupe are all keyed off it. All three routes are scoped
+by a `workspaceId` path segment.
 
 ```json
 // SyncRecord — on read (bootstrap + delta)
@@ -583,16 +678,30 @@ SDKs surface these as typed errors. Names normative; messages free-form.
 
 - `not_bootstrapped` — `identity()` called before `bootstrap()`, or `client_id`
   not resolvable.
-- `app_not_installed` — desktop 404'd the `client_id`.
+- `app_not_installed` — the authoritative env-injected desktop handoff 404'd
+  the `client_id`. A discovery-file 404 is treated as stale and falls through,
+  so it does not surface this code.
 - `handoff_unreachable` — desktop handoff probe failed (used internally for
   fall-through; only surfaced if there is no fallback path).
 - `auth_user_cancelled` — browser OAuth flow returned `error=access_denied` or
   equivalent.
 - `auth_state_mismatch` — loopback callback's `state` did not match.
+- `auth_timeout` — browser sign-in redirect did not arrive before the SDK's
+  deadline; the flow was abandoned and the loopback listener closed.
 - `auth_token_exchange_failed` — token endpoint rejected or returned malformed
   body.
+- `auth_refresh_failed` — the refresh-token grant failed or a successful
+  refresh was invalidated by a concurrent local session clear.
+- `auth_retry_still_unauthorized` — the request still returned 401 after one
+  successful credential refresh; SDKs MUST stop rather than loop.
+- `browser_open_failed` — the system browser could not be launched for the
+  PKCE step (missing/failed opener binary). The TS SDK identifies the failed
+  opener and preserves the underlying process error.
 - `keychain_unavailable` — OS keychain inaccessible (no native module, locked,
   etc.). SDKs MAY treat persist failures as non-fatal for the current session.
+- `aborted` — the caller ended an operation. For auth, this includes
+  `signOut()` winning a race with an in-flight `bootstrap()`; the pending
+  bootstrap MUST NOT restore local state or emit a later signed-in event.
 - `model_deprecated` — a call-time request named a model that has been retired.
   unified-api returns HTTP `410` with body `{code: "model_deprecated", message}`
   from any model endpoint (chat, messages, embeddings, images, responses, …);

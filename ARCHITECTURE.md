@@ -2,15 +2,17 @@
 
 How the source is organised, and where new code goes.
 
-## Two-entry layout
+## Entry-point layout
 
-The SDK ships two entry points so the same package works in browsers, Workers,
-edge runtimes, and Node — without forcing any consumer to bundle Node-only
-modules.
+The SDK ships two runtime client entries plus optional logos/testing subpaths,
+so the same package works in browsers, Workers, edge runtimes, and Node —
+without forcing any consumer to bundle Node-only or test-only modules.
 
 ```
-@unifiedai/sdk         → browser-safe (default; zero `node:*` deps)
-@unifiedai/sdk/node    → strict superset; adds OAuth/PKCE/keychain/loopback
+@unifiedai/sdk           → browser-safe (default; zero `node:*` deps; minified)
+@unifiedai/sdk/node      → strict superset; adds OAuth/PKCE/keychain/loopback
+@unifiedai/sdk/logos     → brand-logo helpers (~58 KB data-URI table, kept out of the core bundle)
+@unifiedai/sdk/testing   → test doubles (FakeSyncServer), never in production bundles
 ```
 
 Bundlers auto-resolve via the `browser` / `node` export conditions in
@@ -22,44 +24,85 @@ read identically regardless of which target you build for.
 ```
 src/
 ├── index.ts                  # browser entry — exports the browser-safe surface
+├── logos/
+│   └── index.ts              # @unifiedai/sdk/logos entry — brand-logo helpers (~58 KB data-URIs)
+├── testing/
+│   └── index.ts              # @unifiedai/sdk/testing entry — test doubles (FakeSyncServer)
+├── auth/
+│   └── browser-sign-in.ts    # browser sign-in helper
+├── assets/
+│   └── logos/                # SVG sources compiled into resources/logos.generated.ts
 ├── core/                     # shared base, both entries depend on this
-│   ├── client.ts             # UnifiedAI base class (trusted-token mode)
+│   ├── client.ts             # UnifiedAI base class (trusted-token mode; memoized lazy resource getters)
 │   ├── core.ts               # transport types (Core, RequestOptions, TokenProvider)
-│   ├── errors.ts             # UnifiedError + subclasses
+│   ├── errors.ts             # UnifiedError + subclasses + the UnifiedErrorCode registry
 │   ├── identity.ts           # Identity public type
 │   └── _internal/
+│       ├── base64.ts         # chunked base64 ↔ bytes (shared; RangeError-safe)
+│       ├── cache.ts          # small TTL cache
+│       ├── http-errors.ts    # error-body extraction helpers
+│       ├── pkce.ts           # crypto-based code challenge/verifier (WebCrypto; runtime-agnostic)
+│       ├── progress.ts       # progress-event types
+│       ├── retry.ts          # 401-retry + network-retry classifier, ms-based Retry-After parser
 │       ├── sse.ts            # SSE frame parser
+│       ├── sse-stream.ts     # shared SSE stream factory (chat / messages / responses)
 │       ├── stream.ts         # UnifiedStream async-iterable
+│       ├── token-endpoint.ts # postTokenGrant helper
 │       ├── tokens.ts         # TokenSet type
-│       └── http-errors.ts    # error-body extraction helpers
-├── resources/                # one file per resource; browser-safe
-│   ├── chat.ts
-│   ├── messages.ts
-│   ├── models.ts
-│   ├── responses.ts
-│   ├── usage.ts
-│   ├── logos.ts
-│   └── logos.generated.ts
+│       └── upload-progress.ts# upload progress tracking
+├── resources/                # one file (or dir) per resource; browser-safe
+│   ├── _internal/            # chunkedUpload, contentDisposition, mime, poll
+│   ├── _kv/                  # shared keys, records, queries, and namespace/backend resolution
+│   ├── agent/                # tool-loop scaffolding (agent, fs-tools, web-tools, types)
+│   ├── calendar/             # date math, recurrence, sync-adapter (curated barrel)
+│   ├── fs/                   # jailed file workspace (cloud backend, path jail, errors)
+│   ├── storage/              # typed collections (cloud + in-memory backends)
+│   ├── sync/                 # workspace sync engine (+ fake-server, exported via /testing)
+│   ├── actions.ts            # ─┐
+│   ├── artifacts.ts          #  │
+│   ├── audio.ts              #  │
+│   ├── chat.ts               #  │
+│   ├── embeddings.ts         #  │
+│   ├── files.ts              #  │
+│   ├── helpers.ts            #  │ flat single-file resources
+│   ├── images.ts             #  │
+│   ├── memory.ts             #  │
+│   ├── messages.ts           #  │
+│   ├── models.ts             #  │
+│   ├── projects.ts           #  │
+│   ├── references.ts         #  │
+│   ├── responses.ts          #  │
+│   ├── usage.ts              #  │
+│   ├── users.ts              #  │
+│   ├── videos.ts             # ─┘
+│   ├── logos.ts              # logo helpers (exported via @unifiedai/sdk/logos)
+│   └── logos.generated.ts    # generated logo table — do not edit
 └── node/                     # OAuth/CLI extension; pulls Node-only deps
     ├── index.ts              # node entry — re-exports browser surface + adds OAuth UnifiedAI
-    ├── client.ts             # UnifiedAI subclass: bootstrap, signOut, identity, refresh
+    ├── client.ts             # UnifiedAI subclass: bootstrap (lazy auto-bootstrap), signOut,
+    │                         #   identity, refresh, onAuthEvent
     └── _internal/
-        ├── browser-auth.ts   # runBrowserPkce (CLI-style)
-        ├── discovery.ts      # ~/.config/unifiedai/desktop.json
-        ├── env.ts            # UNIFIEDAI_* env reader
-        ├── handoff.ts        # tries the desktop handoff endpoint
-        ├── keychain.ts       # @napi-rs/keyring (lazy)
-        ├── loopback.ts       # node:http for OAuth redirect callback
-        ├── open-url.ts       # node:child_process to open browser
-        ├── pkce.ts           # crypto-based code challenge/verifier
-        ├── refresh.ts        # refresh-token grant
-        ├── revoke.ts         # token revocation
-        └── token-endpoint.ts # postTokenGrant helper
+        ├── discovery.ts           # desktop.json handoff discovery
+        ├── discovery-file.ts      # shared platform config-dir + discovery-file read/parse
+        ├── ecosystem-discovery.ts # ecosystem.json discovery (local ecosystem hosting)
+        ├── env.ts                 # UNIFIEDAI_* env reader
+        ├── fetch-timeout.ts       # fetch bounded by a deadline
+        ├── handoff.ts             # desktop handoff endpoint probe (3 s timeout)
+        ├── keychain.ts            # @napi-rs/keyring (lazy, optional dependency)
+        ├── loopback.ts            # node:http OAuth redirect callback (state-hardened, signInTimeoutMs)
+        ├── open-url.ts            # opens the system browser (Windows: rundll32 url.dll,FileProtocolHandler)
+        ├── refresh.ts             # refresh-token grant
+        └── revoke.ts              # token revocation (best-effort, bounded)
 
 tests/
 ├── core/                     # browser-safe behavior; imports from src/index.ts
 ├── node/                     # OAuth behavior; imports from src/node/index.ts
-└── bundle/                   # asserts dist/index.browser.js is node-free
+├── bundle/                   # asserts dist/index.browser.js is node-free
+├── browser/                  # Playwright tests against the built browser bundle
+└── integration/              # recorded-cassette tests against the live API
+    ├── cassettes/            # one dir per surface (chat, messages, files, …)
+    ├── helpers/
+    └── setup/
 
 scripts/
 └── verify-browser-bundle.ts  # bundle-content gate; runs on every build
@@ -83,16 +126,18 @@ hooks that the subclass overrides:
   subclass returns from the OAuth tokens it owns
 - `refreshAccessToken()` — base re-invokes the provider with single-flight
   coalescing; subclass runs the refresh-token grant
-- `onAuthFailure()` — base no-op; subclass clears local session + keychain
+- `onAuthFailure()` — base marks the trusted-token session `expired`; the
+  subclass additionally clears SDK-owned tokens and keychain state
 
 All four code paths (browser+trusted, node+trusted, node+OAuth, future
 node+OAuth-with-token) share one 401-retry implementation.
 
 ## Conventions
 
-- **One resource per file** in `src/resources/`. Each file exports the
-  resource class **and** its public types — colocate them, don't put types
-  in a separate dump directory.
+- **One module per resource** in `src/resources/`. Simple resources use one
+  file; complex resources use a curated directory barrel. Colocate each
+  resource's public types with its module rather than creating a shared type
+  dump.
 - **Cross-cutting universal types** live at the top of `src/core/` as their
   own file.
 - **Internal-only helpers** colocate with their caller. If you need to share
@@ -124,11 +169,16 @@ node+OAuth-with-token) share one 401-retry implementation.
    }
    ```
 
-2. Attach it to the base `UnifiedAI` in `src/core/client.ts`. The node
-   subclass inherits it automatically:
+2. Attach it to the base `UnifiedAI` in `src/core/client.ts` as a memoized
+   lazy getter (resources are constructed on first access so an unused
+   resource costs nothing at construction). The node subclass inherits it
+   automatically:
 
    ```ts
-   readonly myResources: MyResources = new MyResources(this);
+   #myResources?: MyResources;
+   get myResources(): MyResources {
+     return (this.#myResources ??= new MyResources(this));
+   }
    ```
 
 3. Re-export public types from BOTH `src/index.ts` and `src/node/index.ts`
@@ -144,13 +194,27 @@ node+OAuth-with-token) share one 401-retry implementation.
 `UnifiedAI.bootstrap()` is idempotent. In trusted-token mode it's a no-op.
 In OAuth mode (node entry only) it resolves the user identity via:
 
-1. cached keychain tokens for the client_id
-2. env-var-supplied handoff port (`UNIFIEDAI_HANDOFF_PORT`)
-3. discovery-file handoff (`~/.config/unifiedai/desktop.json`)
-4. fresh browser PKCE (loopback receives the redirect)
+1. cached keychain tokens for the client_id (an unavailable keychain falls
+   through rather than failing)
+2. env-var-supplied handoff port (`UNIFIEDAI_HANDOFF_PORT`; a 404 here is
+   authoritative and surfaces as `app_not_installed`)
+3. discovery-file handoff (`~/.unifiedai/desktop.json`, or
+   `%APPDATA%\UnifiedAI\desktop.json` on Windows; a 404 here falls through —
+   the file may be stale)
+4. fresh browser PKCE (loopback receives the redirect; bounded by
+   `signInTimeoutMs`, default 5 minutes)
 
-Tokens are private instance state on the subclass. Refresh runs single-flighted
-on 401 with transparent retry. `sdk.identity()` returns `{ user_id, client_id }`.
+In OAuth mode `bootstrap()` also runs lazily on the first request when no
+`token` was configured. Failed attempts remain eligible for a later request;
+success or `signOut()` disarms implicit bootstrap so a signed-out client never
+silently reopens a browser. Auth-flow progress is observable via the
+`onAuthEvent` hook.
+
+Tokens are private instance state on the subclass. Refresh is single-flighted
+across the proactive pre-expiry timer and reactive 401 retry, and rotated token
+sets replace keychain state atomically. Session-generation guards prevent an
+in-flight bootstrap or refresh from restoring tokens after `signOut()`.
+`sdk.identity()` returns `{ user_id, client_id }`.
 
 The wire protocol (endpoints, discovery file format, keychain entry name,
 env vars, PKCE params) is documented in [PROTOCOL.md](PROTOCOL.md) so future
@@ -159,20 +223,23 @@ desktop endpoint.
 
 ## Errors
 
-All thrown errors must be `UnifiedError` or one of its subclasses
+Errors constructed by the SDK use `UnifiedError` or one of its subclasses
 (`UnifiedAIError` for HTTP failures, `UnifiedAIAuthError` for auth failures).
-Map HTTP / transport failures inside the base `request()`/`stream()`; resources
-should not catch and re-wrap.
+Caller `AbortError`s, exhausted raw transport failures, and a few polling
+timeouts may propagate as native errors. Map HTTP failures inside the base
+`request()`/`stream()`; resources should not catch and re-wrap them.
 
 `UnifiedAIError.message` includes a server-extracted snippet when the body
 matches a known shape (`{message}`, `{error}`, `{error: {message}}`, FastAPI
 `{detail}`, `{errors[]}`). The full body is on `err.body`.
 
-## Public surface = the two `index.ts` files
+## Public surface = the entry `index.ts` files
 
-If a name isn't exported from `src/index.ts` (browser surface) or
-`src/node/index.ts` (node surface), it isn't part of the SDK and can be
-renamed/removed without a major bump. Treat both as the contract.
+If a name isn't exported from `src/index.ts` (browser surface),
+`src/node/index.ts` (node surface), `src/logos/index.ts`
+(`@unifiedai/sdk/logos`), or `src/testing/index.ts`
+(`@unifiedai/sdk/testing`), it isn't part of the SDK and can be
+renamed/removed without a major bump. Treat all four as the contract.
 
 The bundle-content test (`tests/bundle/browser-bundle.test.ts`) plus the
 `scripts/verify-browser-bundle.ts` step enforce the **structural invariant**
