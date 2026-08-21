@@ -1,31 +1,74 @@
+import { parseRetryAfterValue } from "./_internal/retry";
+
 export type UnifiedErrorCode =
+  // Core / client lifecycle
   | "not_implemented"
   | "not_bootstrapped"
+  // Client-side input validation (raised across resources, sync, and calendar)
+  | "invalid_input"
+  // Caller abort observed before/between requests (files upload, chunked upload)
+  | "aborted"
+  // Auth & token acquisition (node OAuth flow, desktop handoff, keychain)
   | "app_not_installed"
   | "handoff_unreachable"
   | "auth_user_cancelled"
+  | "auth_timeout"
   | "auth_state_mismatch"
   | "auth_token_exchange_failed"
   | "auth_refresh_failed"
   | "auth_retry_still_unauthorized"
+  | "browser_open_failed"
   | "keychain_unavailable"
+  // HTTP errors from unified-api (defined below; includes "not_found", which
+  // the storage/fs subsystems also raise for local lookups)
+  | UnifiedAIHttpErrorCode
+  // Streaming
+  | "stream_interrupted"
+  // Storage subsystem (also raises "not_found" / "invalid_input")
   | "storage_unavailable"
   | "storage_read_only"
   | "storage_not_granted"
-  | "not_found"
-  | "stream_interrupted"
+  // Fs subsystem (also raises "not_found" / "invalid_input")
+  | "fs_unavailable"
+  | "fs_read_only"
+  | "fs_not_granted"
+  | "invalid_path"
+  | "edit_not_found"
+  | "edit_not_unique"
+  // Forward-compat escape hatch: codes not yet registered here still compile,
+  // while the literals above keep autocomplete and exhaustiveness hints.
   | (string & {});
 
 export class UnifiedError extends Error {
+  /**
+   * Structural marker present on every SDK-typed error. The retry classifier
+   * (`_internal/retry.ts` → `isNetworkErrorRetryable`) checks this property —
+   * not `instanceof`, which fails when two copies of the SDK are bundled, and
+   * not an error-name allowlist, which silently misses new subclasses — to
+   * keep intentional SDK errors out of the network-retry path.
+   */
+  readonly isUnifiedSdkError = true as const;
   readonly code: UnifiedErrorCode;
   readonly status: number | undefined;
 
-  constructor(code: UnifiedErrorCode, message: string, status?: number) {
-    super(message);
+  constructor(code: UnifiedErrorCode, message: string, status?: number, cause?: unknown) {
+    // ES2022 `Error.cause` (lib target is ESNext). Only pass the options bag
+    // when a cause was supplied so `"cause" in err` stays false otherwise.
+    super(message, cause !== undefined ? { cause } : undefined);
     this.name = "UnifiedError";
     this.code = code;
     this.status = status;
   }
+}
+
+/**
+ * Construct a plain (non-HTTP) subsystem error. The subsystem error modules
+ * (storage/fs/sync) re-export this behind a code type narrowed to the codes
+ * that subsystem actually raises, so call sites keep tight typing while the
+ * construction logic lives in one place.
+ */
+export function subsystemError(code: UnifiedErrorCode, message: string): UnifiedError {
+  return new UnifiedError(code, message);
 }
 
 /**
@@ -44,9 +87,10 @@ export class StreamInterruptedError extends UnifiedError {
       "stream_interrupted",
       message ??
         "The model stream ended unexpectedly before completing — the connection dropped mid-response. The model may be slow or the upstream may have timed out; retry, or switch to a different model.",
+      undefined,
+      cause,
     );
     this.name = "StreamInterruptedError";
-    if (cause !== undefined) (this as { cause?: unknown }).cause = cause;
   }
 }
 
@@ -80,8 +124,9 @@ export class UnifiedAIError extends UnifiedError {
     status: number,
     body: unknown,
     headers?: Readonly<Record<string, string>>,
+    cause?: unknown,
   ) {
-    super(code, message, status);
+    super(code, message, status, cause);
     this.name = "UnifiedAIError";
     this.body = body;
     this.headers = headers;
@@ -108,8 +153,9 @@ export class AuthenticationError extends UnifiedAIError {
     body: unknown,
     headers?: Readonly<Record<string, string>>,
     code: UnifiedAIHttpErrorCode | UnifiedAIAuthErrorCode = "unauthorized",
+    cause?: unknown,
   ) {
-    super(code, message, status, body, headers);
+    super(code, message, status, body, headers, cause);
     this.name = "AuthenticationError";
   }
 }
@@ -129,9 +175,30 @@ export class UnifiedAIAuthError extends AuthenticationError {
     status?: number,
     body?: unknown,
     headers?: Readonly<Record<string, string>>,
+    cause?: unknown,
   ) {
-    super(message, status ?? 401, body, headers, code);
+    super(message, status ?? 401, body, headers, code, cause);
     this.name = "UnifiedAIAuthError";
+  }
+}
+
+/**
+ * The credential was accepted but is not allowed to perform this request
+ * (HTTP 403) — e.g. an app-scoped token whose scope doesn't cover the
+ * endpoint, or a key disabled by policy. Distinct from
+ * `AuthenticationError` (401: credential missing/invalid, where a refresh
+ * may help) — a 403 is terminal for the credential: neither retrying nor
+ * refreshing will clear it.
+ */
+export class ForbiddenError extends UnifiedAIError {
+  constructor(
+    message: string,
+    status: number,
+    body: unknown,
+    headers?: Readonly<Record<string, string>>,
+  ) {
+    super("forbidden", message, status, body, headers);
+    this.name = "ForbiddenError";
   }
 }
 
@@ -172,17 +239,18 @@ export class DeprecatedModelError extends UnifiedAIError {
   }
 }
 
+/**
+ * Derive `RateLimitError.retryAfter` (whole SECONDS) from the shared
+ * Retry-After parser in `_internal/retry.ts` (which returns milliseconds and
+ * guards against empty/whitespace-only headers — `Number("   ")` is 0, which
+ * would otherwise read as "retry immediately"). Kept as a thin wrapper so the
+ * retry loop's delay and this public field can never diverge.
+ */
 function parseRetryAfter(
   headers: Readonly<Record<string, string>> | undefined,
 ): number | undefined {
-  const v = headers?.["retry-after"];
-  if (!v) return undefined;
-  const n = Number(v);
-  if (Number.isFinite(n)) return Math.max(0, n);
-  // HTTP-date form: convert to seconds-from-now.
-  const t = Date.parse(v);
-  if (!Number.isNaN(t)) return Math.max(0, Math.ceil((t - Date.now()) / 1000));
-  return undefined;
+  const ms = parseRetryAfterValue(headers?.["retry-after"]);
+  return ms === undefined ? undefined : Math.ceil(ms / 1000);
 }
 
 /**
@@ -336,7 +404,7 @@ export function httpErrorCodeFromStatus(status: number): UnifiedAIHttpErrorCode 
 
 /**
  * Build the right typed error subclass for an HTTP failure. Falls back to
- * `UnifiedAIError` for statuses without a dedicated class (403, generic 4xx).
+ * `UnifiedAIError` for statuses without a dedicated class (generic 4xx).
  */
 export function buildHttpError(
   message: string,
@@ -352,6 +420,7 @@ export function buildHttpError(
   }
   if (status === 400) return new BadRequestError(message, status, body, headers);
   if (status === 401) return new AuthenticationError(message, status, body, headers);
+  if (status === 403) return new ForbiddenError(message, status, body, headers);
   if (status === 404) return new NotFoundError(message, status, body, headers);
   if (status === 429) {
     return isUsageLimitBody(body)

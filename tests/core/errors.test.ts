@@ -3,14 +3,19 @@ import {
   AuthenticationError,
   BadRequestError,
   DeprecatedModelError,
+  ForbiddenError,
   NotFoundError,
   RateLimitError,
   ServerError,
+  StreamInterruptedError,
   UnifiedAI,
+  UnifiedAIAuthError,
   UnifiedAIError,
+  UnifiedError,
   UsageLimitError,
   buildHttpError,
 } from "../../src/index";
+import { parseRetryAfterHeader } from "../../src/core/_internal/retry";
 
 // Verifies the typed-error hierarchy and that the fetch path dispatches the
 // right subclass per status. Each test mocks fetch directly — no network.
@@ -158,10 +163,99 @@ describe("buildHttpError", () => {
     expect(ra).toBeLessThanOrEqual(6);
   });
 
-  test("403 falls back to base UnifiedAIError", () => {
+  test("whitespace-only retry-after → retryAfter undefined (not 0)", () => {
+    // Number("   ") === 0, so without a trim guard a blank header would read
+    // as "retry immediately" instead of "no hint".
+    const e = buildHttpError("msg", 429, { error: "rate_limited" }, { "retry-after": "   " });
+    expect(e).toBeInstanceOf(RateLimitError);
+    expect((e as RateLimitError).retryAfter).toBeUndefined();
+  });
+
+  test("empty retry-after → retryAfter undefined", () => {
+    const e = buildHttpError("msg", 429, { error: "rate_limited" }, { "retry-after": "" });
+    expect((e as RateLimitError).retryAfter).toBeUndefined();
+  });
+
+  test("garbage retry-after → retryAfter undefined", () => {
+    const e = buildHttpError("msg", 429, { error: "rate_limited" }, { "retry-after": "soon" });
+    expect((e as RateLimitError).retryAfter).toBeUndefined();
+  });
+
+  test("RateLimitError.retryAfter (seconds) is consistent with the retry loop's parser (ms)", () => {
+    // Numeric forms only: the HTTP-date form calls Date.now() in each parse,
+    // so strict equality across two calls would be racy on a second boundary
+    // (it has its own tolerance-based test above).
+    for (const header of ["3", " 7 ", "0"]) {
+      const res = new Response("", { status: 429, headers: { "retry-after": header } });
+      const ms = parseRetryAfterHeader(res);
+      const e = buildHttpError("msg", 429, { error: "rate_limited" }, { "retry-after": header });
+      expect(ms).toBeDefined();
+      expect((e as RateLimitError).retryAfter).toBe(Math.ceil((ms as number) / 1000));
+    }
+  });
+
+  test("403 -> ForbiddenError with code forbidden", () => {
     const e = buildHttpError("msg", 403, {});
-    expect(e.constructor).toBe(UnifiedAIError);
+    expect(e).toBeInstanceOf(ForbiddenError);
+    expect(e).toBeInstanceOf(UnifiedAIError);
+    expect(e.name).toBe("ForbiddenError");
     expect(e.code).toBe("forbidden");
+    expect(e.status).toBe(403);
+  });
+});
+
+describe("Error.cause propagation", () => {
+  test("UnifiedError accepts a cause and surfaces it", () => {
+    const cause = new Error("root");
+    const e = new UnifiedError("not_found", "wrapped", 404, cause);
+    expect(e.cause).toBe(cause);
+  });
+
+  test("UnifiedError without a cause does not define one", () => {
+    const e = new UnifiedError("not_found", "no cause");
+    expect("cause" in e).toBe(false);
+  });
+
+  test("StreamInterruptedError carries its transport cause", () => {
+    const cause = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+    const e = new StreamInterruptedError(cause);
+    expect(e.cause).toBe(cause);
+    expect(e.code).toBe("stream_interrupted");
+  });
+
+  test("UnifiedAIAuthError threads cause through the subclass chain", () => {
+    const cause = new Error("provider exploded");
+    const e = new UnifiedAIAuthError(
+      "auth_refresh_failed",
+      "refresh failed",
+      undefined,
+      undefined,
+      undefined,
+      cause,
+    );
+    expect(e.cause).toBe(cause);
+    expect(e).toBeInstanceOf(AuthenticationError);
+    expect(e.status).toBe(401);
+  });
+});
+
+describe("SDK error marker", () => {
+  test("every error class carries isUnifiedSdkError for cross-bundle detection", () => {
+    const errors = [
+      new UnifiedError("not_found", "x"),
+      new UnifiedAIError("request_failed", "x", 418, undefined),
+      new StreamInterruptedError(),
+      buildHttpError("msg", 400, {}),
+      buildHttpError("msg", 401, {}),
+      buildHttpError("msg", 403, {}),
+      buildHttpError("msg", 404, {}),
+      buildHttpError("msg", 429, { error: "rate_limited" }),
+      buildHttpError("msg", 500, {}),
+      new UnifiedAIAuthError("auth_refresh_failed", "x"),
+    ];
+    for (const e of errors) {
+      expect(e.isUnifiedSdkError).toBe(true);
+    }
   });
 });
 
