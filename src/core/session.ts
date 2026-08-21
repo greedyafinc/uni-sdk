@@ -99,7 +99,15 @@ export class Session {
 
   // ─── Mutators (driven by the client, not the host) ──────────────────────
 
-  /** @internal */
+  /**
+   * @internal
+   * Unlike {@link markRefreshed}, this intentionally has NO `signed_out`
+   * guard: an explicit bootstrap() after signOut is the legitimate re-auth
+   * path and MUST transition `signed_out` → `active`. Session can't tell a
+   * deliberate re-sign-in from a stale in-flight one, so protection against
+   * a signOut racing a pending bootstrap lives in the node client's
+   * sessionGeneration guard (see bootstrap()/persist() in node/client.ts).
+   */
   markSignedIn(opts: { expiresAt?: number; identity?: Identity } = {}): void {
     this._status = "active";
     this._expiresAt = opts.expiresAt;

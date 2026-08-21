@@ -94,10 +94,12 @@ export function isRetryableStatus(status: number): boolean {
 }
 
 /**
- * Parse Retry-After (seconds or HTTP-date). Returns ms or undefined.
+ * Parse a raw Retry-After header value (seconds or HTTP-date). Returns ms or
+ * undefined. Single source of truth for Retry-After parsing — the retry loop
+ * consumes it via `parseRetryAfterHeader`, and `RateLimitError.retryAfter`
+ * (errors.ts) derives its public seconds value from it.
  */
-export function parseRetryAfterHeader(res: Response): number | undefined {
-  const v = res.headers.get("retry-after");
+export function parseRetryAfterValue(v: string | null | undefined): number | undefined {
   if (!v) return undefined;
   const trimmed = v.trim();
   // Empty / whitespace-only Retry-After: treat as missing, not as 0ms.
@@ -110,6 +112,14 @@ export function parseRetryAfterHeader(res: Response): number | undefined {
   const t = Date.parse(trimmed);
   if (!Number.isNaN(t)) return Math.max(0, t - Date.now());
   return undefined;
+}
+
+/**
+ * Parse Retry-After (seconds or HTTP-date) from a Response. Returns ms or
+ * undefined.
+ */
+export function parseRetryAfterHeader(res: Response): number | undefined {
+  return parseRetryAfterValue(res.headers.get("retry-after"));
 }
 
 /**
@@ -183,31 +193,21 @@ export function delay(ms: number, signal?: AbortSignal): Promise<void> {
  * browsers, FetchError in undici, AbortError when the caller cancelled).
  * We retry network failures but NOT:
  *   - AbortError: user intent, must propagate immediately
- *   - typed SDK errors (UnifiedError / UnifiedAIError / UnifiedAIAuthError):
- *     thrown intentionally by the 401-after-refresh path; not transient.
+ *   - typed SDK errors (UnifiedError and every subclass): thrown
+ *     intentionally by e.g. the 401-after-refresh path; not transient.
  *
  * Node-side fetch errors (undici) decorate the Error with a `code` like
  * `ECONNRESET`, `ETIMEDOUT`, `UND_ERR_SOCKET`, `EAI_AGAIN` — those are
  * exactly the connection blips retry should cover. We can't filter on
- * `.code` alone, so we structural-check against the SDK error name to
- * exclude only our own typed errors.
+ * `.code` alone, so SDK errors identify themselves via the
+ * `isUnifiedSdkError` marker set in the `UnifiedError` base constructor
+ * (errors.ts). A structural property check — deliberately NOT `instanceof`
+ * (fails when two bundled copies of the SDK exchange errors) and NOT a
+ * name allowlist (silently misses newly added subclasses).
  */
-const SDK_ERROR_NAMES = new Set([
-  "UnifiedError",
-  "UnifiedAIError",
-  "UnifiedAIAuthError",
-  "AuthenticationError",
-  "BadRequestError",
-  "NotFoundError",
-  "DeprecatedModelError",
-  "RateLimitError",
-  "UsageLimitError",
-  "ServerError",
-]);
-
 export function isNetworkErrorRetryable(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   if (err.name === "AbortError") return false;
-  if (SDK_ERROR_NAMES.has(err.name)) return false;
+  if ((err as { isUnifiedSdkError?: unknown }).isUnifiedSdkError === true) return false;
   return true;
 }

@@ -8,22 +8,13 @@
 // the extracted snapshot bytes (only the app knows how to extract its own
 // component/snippet), and `fragment` is an opaque, app-interpreted locator. See
 // `sdk.references` for reading a link back (including cross-app).
+import { bytesToBase64 } from "../core/_internal/base64";
 import type { Core, RequestOptions } from "../core/core";
 
 export type TargetKind = "object" | "file";
 type SnapshotEncoding = "utf8" | "binary" | "arraybuffer";
 
 const utf8Encoder = new TextEncoder();
-
-function bytesToB64(bytes: Uint8Array): string {
-  if (typeof Buffer !== "undefined") return Buffer.from(bytes).toString("base64");
-  let bin = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(bin);
-}
 
 /** A user-owned project container. */
 export interface Project {
@@ -120,7 +111,7 @@ function encodeSnapshot(s: SnapshotInput): {
     encoding = "arraybuffer";
   }
   return {
-    snapshotB64: bytesToB64(bytes),
+    snapshotB64: bytesToBase64(bytes),
     snapshotEncoding: encoding,
     ...(s.preview !== undefined ? { snapshotPreview: s.preview } : {}),
   };

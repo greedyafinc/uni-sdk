@@ -1,7 +1,7 @@
-import { parseSSE } from "../core/_internal/sse";
-import { UnifiedStream } from "../core/_internal/stream";
+import { createSSEStream } from "../core/_internal/sse-stream";
+import type { UnifiedStream } from "../core/_internal/stream";
 import type { Core, RequestOptions } from "../core/core";
-import { StreamInterruptedError, UnifiedAIError, UnifiedError } from "../core/errors";
+import { UnifiedAIError } from "../core/errors";
 
 // ── Request types (OpenAI chat.completions, mirrored from unified-api) ─────────
 
@@ -235,62 +235,33 @@ export class ChatCompletions {
     params: ChatCompletionCreateParams & { stream: true },
     options: ChatCreateOptions,
   ): ChatCompletionStream {
-    const controller = new AbortController();
-    if (options.signal) {
-      if (options.signal.aborted) controller.abort();
-      else options.signal.addEventListener("abort", () => controller.abort(), { once: true });
-    }
-    const client = this.client;
-    const iter = (async function* (): AsyncGenerator<ChatCompletionChunk, void, void> {
-      const body = await client.stream("/api/v1/chat/completions", {
-        method: "POST",
-        body: { ...params, compression: params.compression ?? client.defaultCompression },
-        signal: controller.signal,
-      });
-      try {
-        for await (const msg of parseSSE(body)) {
-          if (msg.data === "[DONE]") return;
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(msg.data);
-          } catch {
-            continue;
-          }
-          const obj = parsed as { error?: { message?: string; type?: string } };
-          if (obj.error) {
-            throw new UnifiedAIError(
-              "request_failed",
-              `chat.completions stream error: ${obj.error.message ?? "unknown"}`,
-              0,
-              obj.error,
-            );
-          }
-          yield parsed as ChatCompletionChunk;
+    return createSSEStream<ChatCompletionChunk, ChatCompletionStream>({
+      client: this.client,
+      path: "/api/v1/chat/completions",
+      params,
+      signal: options.signal,
+      doneSentinel: "[DONE]",
+      interpret: (parsed) => {
+        const obj = parsed as { error?: { message?: string; type?: string } };
+        if (obj.error) {
+          throw new UnifiedAIError(
+            "request_failed",
+            `chat.completions stream error: ${obj.error.message ?? "unknown"}`,
+            0,
+            obj.error,
+          );
         }
-      } catch (err) {
-        // A caller-initiated abort surfaces here as the fetch's AbortError —
-        // leave it for the consumer's cancellation path, don't relabel it.
-        if (controller.signal.aborted) throw err;
-        // Already-typed failures (an in-band `{error}` frame above) are
-        // meaningful as-is; pass them through unchanged.
-        if (err instanceof UnifiedError) throw err;
-        // Anything else is an abrupt mid-stream transport drop: the socket
-        // closed after a 200 but before the stream terminated (e.g. ECONNRESET
-        // from an idle timeout or a provider closing a buffered generation).
-        // Surface it as a typed, actionable error so callers — and
-        // `sdk.agent.run`'s `errorCode` — can offer "retry / switch model"
-        // instead of an opaque socket-closed string.
-        throw new StreamInterruptedError(err);
-      }
-    })();
-    return new UnifiedStream(iter, controller, (chunk) => {
-      const u = chunk.usage;
-      if (!u) return null;
-      return {
-        input_tokens: u.prompt_tokens ?? 0,
-        output_tokens: u.completion_tokens ?? 0,
-        total_tokens: u.total_tokens ?? (u.prompt_tokens ?? 0) + (u.completion_tokens ?? 0),
-      };
+        return { event: parsed as unknown as ChatCompletionChunk };
+      },
+      usage: (chunk) => {
+        const u = chunk.usage;
+        if (!u) return null;
+        return {
+          input_tokens: u.prompt_tokens ?? 0,
+          output_tokens: u.completion_tokens ?? 0,
+          total_tokens: u.total_tokens ?? (u.prompt_tokens ?? 0) + (u.completion_tokens ?? 0),
+        };
+      },
     });
   }
 }

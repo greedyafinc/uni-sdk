@@ -4,18 +4,9 @@
 // It is what the main chat, other apps, and external agents (over MCP) consume. Versions
 // are whole snapshots; `text` is required (the uniform searchable projection). The
 // producing `appId`/`contributedBy` are SERVER-attributed — never sent by the client.
+import { bytesToBase64 } from "../core/_internal/base64";
 import type { Core, RequestOptions } from "../core/core";
 import { NotFoundError } from "../core/errors";
-
-function bytesToB64(bytes: Uint8Array): string {
-  if (typeof Buffer !== "undefined") return Buffer.from(bytes).toString("base64");
-  let bin = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(bin);
-}
 
 /** An optional rendered preview (server stores it; fetch a signed URL via `previewUrl`). */
 export interface PreviewRef {
@@ -92,7 +83,7 @@ function encodePreview(p: PreviewInput): { previewB64: string; previewMime?: str
         ? c
         : new Uint8Array(c);
   return {
-    previewB64: bytesToB64(bytes),
+    previewB64: bytesToBase64(bytes),
     ...(p.mime !== undefined ? { previewMime: p.mime } : {}),
   };
 }

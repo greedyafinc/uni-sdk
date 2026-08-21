@@ -1,5 +1,5 @@
-import { parseSSE } from "../core/_internal/sse";
-import { UnifiedStream } from "../core/_internal/stream";
+import { createSSEStream } from "../core/_internal/sse-stream";
+import type { UnifiedStream } from "../core/_internal/stream";
 import type { Core, RequestOptions } from "../core/core";
 import { UnifiedAIError } from "../core/errors";
 
@@ -221,27 +221,14 @@ export class Responses {
     params: ResponseCreateParams & { stream: true },
     options: ResponseCreateOptions,
   ): ResponseStream {
-    const controller = new AbortController();
-    if (options.signal) {
-      if (options.signal.aborted) controller.abort();
-      else options.signal.addEventListener("abort", () => controller.abort(), { once: true });
-    }
-    const client = this.client;
-    const iter = (async function* (): AsyncGenerator<ResponseStreamEvent, void, void> {
-      const body = await client.stream("/api/v1/responses", {
-        method: "POST",
-        body: { ...params, compression: params.compression ?? client.defaultCompression },
-        signal: controller.signal,
-      });
-      for await (const msg of parseSSE(body)) {
-        let parsed: Record<string, unknown>;
-        try {
-          parsed = JSON.parse(msg.data) as Record<string, unknown>;
-        } catch {
-          continue;
-        }
-        const type = msg.event ?? (typeof parsed.type === "string" ? parsed.type : undefined);
-        if (!type) continue;
+    return createSSEStream<ResponseStreamEvent, ResponseStream>({
+      client: this.client,
+      path: "/api/v1/responses",
+      params,
+      signal: options.signal,
+      interpret: (parsed, eventName) => {
+        const type = eventName ?? (typeof parsed.type === "string" ? parsed.type : undefined);
+        if (!type) return null;
         if (type === "error") {
           // unified-api emits `{type:"error", error:{message, type}}`; accept either
           // shape so we surface the real upstream message instead of a generic fallback.
@@ -249,19 +236,21 @@ export class Responses {
           const m = typeof err.message === "string" ? err.message : "unknown";
           throw new UnifiedAIError("request_failed", `responses stream error: ${m}`, 0, parsed);
         }
-        yield { ...parsed, type } as ResponseStreamEvent;
-        if (type === "response.completed") return;
-      }
-    })();
-    return new UnifiedStream(iter, controller, (ev) => {
-      if (ev.type !== "response.completed") return null;
-      const u = (ev as { response?: { usage?: ResponseObject["usage"] } }).response?.usage;
-      if (!u) return null;
-      return {
-        input_tokens: u.input_tokens ?? 0,
-        output_tokens: u.output_tokens ?? 0,
-        total_tokens: u.total_tokens ?? (u.input_tokens ?? 0) + (u.output_tokens ?? 0),
-      };
+        return {
+          event: { ...parsed, type } as ResponseStreamEvent,
+          terminal: type === "response.completed",
+        };
+      },
+      usage: (ev) => {
+        if (ev.type !== "response.completed") return null;
+        const u = (ev as { response?: { usage?: ResponseObject["usage"] } }).response?.usage;
+        if (!u) return null;
+        return {
+          input_tokens: u.input_tokens ?? 0,
+          output_tokens: u.output_tokens ?? 0,
+          total_tokens: u.total_tokens ?? (u.input_tokens ?? 0) + (u.output_tokens ?? 0),
+        };
+      },
     });
   }
 }

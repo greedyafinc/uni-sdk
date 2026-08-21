@@ -27,7 +27,6 @@ import {
   httpErrorMessage,
   readErrorBody,
 } from "./_internal/http-errors";
-import { safeEmit } from "./_internal/progress";
 import {
   type RetryAttempt,
   type RetryConfig,
@@ -39,7 +38,8 @@ import {
   resolveRetryConfig,
   delay as retryDelay,
 } from "./_internal/retry";
-import { Core, type CoreOptions, type RequestOptions, type UploadProgressListener } from "./core";
+import { prepareUploadProgress } from "./_internal/upload-progress";
+import { Core, type CoreOptions, type RequestOptions } from "./core";
 import {
   UnifiedAIAuthError,
   UnifiedAIError,
@@ -61,75 +61,6 @@ function envVar(name: string): string | undefined {
 }
 
 /**
- * Wrap a Blob's stream so each pulled chunk fires a progress event before it
- * reaches the network. Returns a fresh stream every call so the body can be
- * re-sent on a 401 retry — `Blob.stream()` is one-shot per ReadableStream,
- * but the underlying Blob can be re-streamed indefinitely.
- *
- * The listener is invoked from a microtask after `controller.enqueue`; if it
- * throws, the error is swallowed — a buggy host callback must not corrupt the
- * upload mid-flight.
- */
-/**
- * Estimate the byte size of a FormData after multipart encoding, WITHOUT
- * materializing it. Walks parts and sums `value.size` (Blob/File) or the
- * UTF-8 encoded length (string parts), plus a generous per-part overhead
- * for boundaries and headers. Pessimistic by design — we use this only
- * to decide whether the actual encoding is safe to do, so over-estimating
- * is fine (we skip wrapping and the host gets coarser progress) but
- * under-estimating would defeat the cap.
- */
-function estimateFormDataBytes(form: FormData): number {
-  let total = 0;
-  let partCount = 0;
-  const encoder = typeof TextEncoder !== "undefined" ? new TextEncoder() : undefined;
-  for (const [name, value] of form.entries()) {
-    partCount += 1;
-    // RFC 7578 encodes the field name into the Content-Disposition header;
-    // we approximate its contribution by its UTF-8 byte length. The
-    // per-part overhead added below covers the surrounding header bytes
-    // (`Content-Disposition: form-data; name="..."` + CRLFs) — the goal is
-    // an over-estimate, not an exact match.
-    total += encoder ? encoder.encode(name).length : name.length;
-    if (typeof value === "string") {
-      total += encoder ? encoder.encode(value).length : value.length;
-    } else {
-      // FormDataEntryValue = string | File; the else branch is a File but
-      // tsc's `for...of` narrowing loses that without an explicit cast.
-      total += (value as Blob).size;
-    }
-  }
-  // ~200 bytes per part covers boundary + Content-Disposition + Content-Type
-  // headers with room to spare. The trailing boundary adds another ~50.
-  total += partCount * 200 + 50;
-  return total;
-}
-
-function progressStream(
-  blob: Blob,
-  onProgress: UploadProgressListener,
-): ReadableStream<Uint8Array> {
-  const total = blob.size;
-  const reader = blob.stream().getReader();
-  let loaded = 0;
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        controller.close();
-        return;
-      }
-      loaded += value.byteLength;
-      controller.enqueue(value);
-      safeEmit(onProgress, loaded, total);
-    },
-    async cancel(reason) {
-      await reader.cancel(reason);
-    },
-  });
-}
-
-/**
  * Options for the browser-safe UnifiedAI client.
  *
  * To use OAuth (PKCE bootstrap, keychain storage, handoff discovery), import
@@ -137,6 +68,18 @@ function progressStream(
  * with the additional `authorizeUrl`, `tokenUrl`, `discovery`, `keychain`,
  * `openUrl`, and `loopback` options.
  */
+/**
+ * The browser/core entry has no OAuth machinery. Every "you need the node
+ * entry" site shares this factory so consumers can branch on a single
+ * `not_implemented` code and get consistent guidance.
+ */
+function oauthUnavailable(reason: string): UnifiedError {
+  return new UnifiedError(
+    "not_implemented",
+    `${reason}. Pass \`token\` for trusted-token mode, or import UnifiedAI from '@unifiedai/sdk/node' for OAuth.`,
+  );
+}
+
 export interface UnifiedAIOptions extends CoreOptions {}
 
 /**
@@ -149,33 +92,92 @@ export interface UnifiedAIOptions extends CoreOptions {}
  * mode-specific behavior is reached through `protected` hooks.
  */
 export class UnifiedAI extends Core {
-  readonly models: Models = new Models(this);
-  readonly usage: Usage = new Usage(this);
-  readonly users: Users = new Users(this);
-  readonly chat: Chat = new Chat(this);
-  readonly responses: Responses = new Responses(this);
-  readonly messages: Messages = new Messages(this);
-  readonly images: Images = new Images(this);
-  readonly files: Files = new Files(this);
-  readonly audio: Audio = new Audio(this);
-  readonly videos: Videos = new Videos(this);
-  readonly embeddings: Embeddings = new Embeddings(this);
-  readonly helpers: Helpers = new Helpers();
-  readonly calendar: Calendar = new Calendar();
+  // Resources are memoized lazy getters rather than eager fields: a client
+  // that only ever calls `sdk.chat` shouldn't pay ~22 allocations at
+  // construction. Every resource constructor is a pure field assignment (no
+  // listeners, timers, or I/O), so deferring construction is observably
+  // identical. Note this is an allocation win only — the static imports
+  // remain, so all resource classes still ship in the bundle.
+  #models?: Models;
+  #usage?: Usage;
+  #users?: Users;
+  #chat?: Chat;
+  #responses?: Responses;
+  #messages?: Messages;
+  #images?: Images;
+  #files?: Files;
+  #audio?: Audio;
+  #videos?: Videos;
+  #embeddings?: Embeddings;
+  #helpers?: Helpers;
+  #calendar?: Calendar;
+  #projects?: Projects;
+  #references?: References;
+  #artifacts?: Artifacts;
+  #memory?: Memory;
+  #actions?: Actions;
+  #storage?: Storage;
+  #fs?: Fs;
+  #sync?: Sync;
+  #agent?: Agent;
+
+  get models(): Models {
+    return (this.#models ??= new Models(this));
+  }
+  get usage(): Usage {
+    return (this.#usage ??= new Usage(this));
+  }
+  get users(): Users {
+    return (this.#users ??= new Users(this));
+  }
+  get chat(): Chat {
+    return (this.#chat ??= new Chat(this));
+  }
+  get responses(): Responses {
+    return (this.#responses ??= new Responses(this));
+  }
+  get messages(): Messages {
+    return (this.#messages ??= new Messages(this));
+  }
+  get images(): Images {
+    return (this.#images ??= new Images(this));
+  }
+  get files(): Files {
+    return (this.#files ??= new Files(this));
+  }
+  get audio(): Audio {
+    return (this.#audio ??= new Audio(this));
+  }
+  get videos(): Videos {
+    return (this.#videos ??= new Videos(this));
+  }
+  get embeddings(): Embeddings {
+    return (this.#embeddings ??= new Embeddings(this));
+  }
+  get helpers(): Helpers {
+    return (this.#helpers ??= new Helpers());
+  }
+  get calendar(): Calendar {
+    return (this.#calendar ??= new Calendar());
+  }
 
   /**
    * Cross-app projects (`sdk.projects`). A Project gathers artifacts from
    * different apps into one user-owned workspace; `addLink` attaches an artifact
    * or a portion of one. Requires auth (writes to unified-api).
    */
-  readonly projects: Projects = new Projects(this);
+  get projects(): Projects {
+    return (this.#projects ??= new Projects(this));
+  }
 
   /**
    * Reference resolution (`sdk.references`). Reads a project link back into
    * content — including across apps — authorized by project membership. Resolves
    * a `uniref://` handle (or linkId) to a portion snapshot or a live artifact.
    */
-  readonly references: References = new References(this);
+  get references(): References {
+    return (this.#references ??= new References(this));
+  }
 
   /**
    * Artifacts (`sdk.artifacts`). The cross-app export contract — publish a
@@ -183,7 +185,9 @@ export class UnifiedAI extends Core {
    * chat, other apps, and external agents can consume. Versions are whole
    * snapshots; `resolveRef` reads an `artifact://<id>@<v>` reference.
    */
-  readonly artifacts: Artifacts = new Artifacts(this);
+  get artifacts(): Artifacts {
+    return (this.#artifacts ??= new Artifacts(this));
+  }
 
   /**
    * Agent memory (`sdk.memory`). The server-side append-only ledger — append
@@ -191,7 +195,9 @@ export class UnifiedAI extends Core {
    * credential), sync since a cursor, and lexically query. Standalone-app parity
    * with the desktop shell's memory.
    */
-  readonly memory: Memory = new Memory(this);
+  get memory(): Memory {
+    return (this.#memory ??= new Memory(this));
+  }
 
   /**
    * Cross-app actions (`sdk.actions`). Declare this app's ActionSpecs and SERVE
@@ -199,7 +205,9 @@ export class UnifiedAI extends Core {
    * INVOKE another app's action (`invoke` + `awaitResult`). Offline apps report as
    * unavailable so callers can fall back to artifacts.
    */
-  readonly actions: Actions = new Actions(this);
+  get actions(): Actions {
+    return (this.#actions ??= new Actions(this));
+  }
 
   /**
    * App-namespaced storage (`STORAGE-SPEC.md`). Typed collections over a
@@ -207,7 +215,9 @@ export class UnifiedAI extends Core {
    * when a token is configured, or a host-injected backend. Requires a token (or
    * an injected backend): there is no local browser fallback.
    */
-  readonly storage: Storage = new Storage(this);
+  get storage(): Storage {
+    return (this.#storage ??= new Storage(this));
+  }
 
   /**
    * App-namespaced file workspace (`docs/capability-platform.md`). A jailed
@@ -216,7 +226,9 @@ export class UnifiedAI extends Core {
    * when a token is configured, or a host-injected backend. Requires a token (or
    * an injected backend): there is no local browser fallback.
    */
-  readonly fs: Fs = new Fs(this);
+  get fs(): Fs {
+    return (this.#fs ??= new Fs(this));
+  }
 
   /**
    * Per-workspace sync engine (`sdk.sync`, PROTOCOL.md "Sync"). `sync.workspace(id)`
@@ -224,16 +236,20 @@ export class UnifiedAI extends Core {
    * `SnapshotBackend`, catches up (bootstrap → delta) against unified-api, polls
    * deltas, and applies optimistic writes. One cached engine per workspace id.
    */
-  readonly sync: Sync = new Sync(this);
+  get sync(): Sync {
+    return (this.#sync ??= new Sync(this));
+  }
 
   /**
    * Unopinionated tool-loop scaffolding (`docs/capability-platform.md`).
    * `sdk.agent.run({ system, prompt, tools, … })` runs the model with the app's
-   * OWN prompt and tools (compose `fsTools(sdk.fs.namespace())` with your own),
+   * OWN prompt and tools (compose `fsTools(sdk.fs.namespace())` / `webTools()` with your own),
    * dispatching tool-calls until the model stops. No prompt or tool policy is
    * baked in — the app orchestrates.
    */
-  readonly agent: Agent = new Agent(this);
+  get agent(): Agent {
+    return (this.#agent ??= new Agent(this));
+  }
 
   /**
    * Observable auth-session surface: `isAuthenticated()`, `expiresAt`,
@@ -268,13 +284,7 @@ export class UnifiedAI extends Core {
    */
   bootstrap(): Promise<void> {
     if (this.options.token !== undefined) return Promise.resolve();
-    return Promise.reject(
-      new UnifiedError(
-        "not_implemented",
-        "OAuth bootstrap is unavailable in the browser entry. Either pass `token` " +
-          "to use trusted-token mode, or import UnifiedAI from '@unifiedai/sdk/node'.",
-      ),
-    );
+    return Promise.reject(oauthUnavailable("OAuth bootstrap is unavailable in the browser entry"));
   }
 
   identity(): Identity {
@@ -296,12 +306,26 @@ export class UnifiedAI extends Core {
     this.session.markSignedOut();
   }
 
+  /** Map a non-ok response to the thrown typed HTTP error (shared by request/requestBinary/stream). */
+  private async throwHttpError(op: string, path: string, res: Response): Promise<never> {
+    const status = res.status;
+    const body = await readErrorBody(res);
+    throw buildHttpError(
+      httpErrorMessage(op, path, status, body),
+      status,
+      body,
+      headersToRecord(res.headers),
+    );
+  }
+
   override async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const method = options.method ?? "GET";
     // Opt-in cache: lookup before any network work. Cache only applies to
     // JSON `request()` — binary and stream responses aren't worth storing.
+    // The key is computed once and reused for the post-response store below.
+    let key: string | undefined;
     if (options.cache && this.responseCache) {
-      const key = cacheKey(method, path, options.body, options.query);
+      key = cacheKey(method, path, options.body, options.query);
       const hit = this.responseCache.get(key);
       if (hit !== undefined) return hit as T;
     }
@@ -311,36 +335,14 @@ export class UnifiedAI extends Core {
       options.body instanceof ArrayBuffer ||
       options.body instanceof Uint8Array ||
       (typeof Blob !== "undefined" && options.body instanceof Blob);
-    const onUploadProgress = options.onUploadProgress;
-    // For progress-tracked multipart uploads we need to know the total byte
-    // count and to be able to wrap each send in a fresh counting stream (for
-    // the 401-retry path). Encoding the FormData to a Blob up front gives us
-    // both — the encoded multipart payload (including boundaries) and the
-    // exact Content-Type with that boundary.
-    // Wrapping a multipart body for byte-level progress requires encoding
-    // the whole FormData to a single in-memory Blob (so we know its exact
-    // size and Content-Type with boundary). For a multi-hundred-MB upload
-    // that's an O(payload) memory spike. We avoid it by ESTIMATING the
-    // encoded size first — walking FormData parts and summing their .size
-    // / encoded string length — and only wrap below PROGRESS_BLOB_MAX_BYTES.
-    // Above the cap we ship the original FormData (lazily streamable by
-    // fetch) and emit only coarse synthetic bookends, since the alternative
-    // is a likely-OOM.
-    //
-    // For files.create() this only matters as a backstop — its chunked
-    // path kicks in at 5 MB and emits per-chunk progress separately. The
-    // cap here protects files.upload() and any future single-shot caller
-    // that opts into progress for a huge payload.
-    const PROGRESS_BLOB_MAX_BYTES = 100 * 1024 * 1024;
-    const wantsProgressBlob = isMultipart && typeof onUploadProgress === "function";
-    let progressBlob: Blob | undefined;
-    let estimatedFormBytes = 0;
-    if (wantsProgressBlob) {
-      estimatedFormBytes = estimateFormDataBytes(options.body as FormData);
-      if (estimatedFormBytes <= PROGRESS_BLOB_MAX_BYTES) {
-        progressBlob = await new Response(options.body as FormData).blob();
-      }
-    }
+    // Progress-tracked multipart uploads: the encode-vs-estimate strategy,
+    // the 100 MB wrap cap, and the bookend semantics all live in
+    // _internal/upload-progress.ts. `upload` is undefined when no listener
+    // was supplied (or the body isn't FormData) — the request then sends the
+    // FormData untouched.
+    const upload = isMultipart
+      ? await prepareUploadProgress(options.body as FormData, options.onUploadProgress)
+      : undefined;
     const bodyInit: BodyInit | undefined = isMultipart
       ? (options.body as FormData)
       : isBinaryBody
@@ -349,22 +351,9 @@ export class UnifiedAI extends Core {
           ? JSON.stringify(options.body)
           : undefined;
     const send = (accessToken: string) => {
-      // Emit the 0/total bookend per send so a 401 → refresh → retry shows
-      // hosts a clean "we're restarting from byte 0" marker, instead of
-      // silently resetting `loaded` partway through the listener's stream.
-      // Without this, listeners that assume monotonic `loaded` would see
-      // it climb on attempt 1, drop on attempt 2, climb again — the test
-      // `tests/node/files.test.ts` documents the per-attempt-monotonic
-      // shape, and consumers may rely on the 0-bookend to know when a
-      // restart happened.
-      if (wantsProgressBlob && onUploadProgress) {
-        // Above the wrap cap we use the pre-encode estimate so listeners
-        // still get a meaningful `total` (otherwise a 200 MB upload would
-        // report total=0 on its bookend, which divides-by-zero in any
-        // percent-driven UI).
-        const total = progressBlob?.size ?? estimatedFormBytes;
-        safeEmit(onUploadProgress, 0, total);
-      }
+      // 0/total bookend, once per send attempt (see UploadProgress.beginAttempt
+      // for why per-attempt matters on the 401-retry path).
+      upload?.beginAttempt();
       const init: RequestInit & { duplex?: "half" } = {
         method: options.method ?? "GET",
         // For multipart, let fetch set the Content-Type (with boundary). For
@@ -376,15 +365,15 @@ export class UnifiedAI extends Core {
           bodyInit !== undefined && !isMultipart && !isBinaryBody,
         ),
       };
-      if (progressBlob && onUploadProgress) {
-        init.body = progressStream(progressBlob, onUploadProgress);
+      const wrapped = upload?.body();
+      if (wrapped) {
+        init.body = wrapped.stream;
         // Required by the WHATWG fetch spec when body is a stream; Node 20+
         // and Bun reject the call without it.
         init.duplex = "half";
-        // We're sending the pre-encoded multipart bytes ourselves, so we have
-        // to set the Content-Type (including boundary) — fetch only does that
-        // automatically when body is a real FormData instance.
-        (init.headers as Record<string, string>)["content-type"] = progressBlob.type;
+        // Pre-encoded multipart bytes need the Content-Type (with boundary)
+        // set explicitly — fetch only does that for a real FormData body.
+        (init.headers as Record<string, string>)["content-type"] = wrapped.contentType;
       } else if (bodyInit !== undefined) {
         init.body = bodyInit;
         if (isBinaryBody) {
@@ -397,28 +386,15 @@ export class UnifiedAI extends Core {
     };
 
     const res = await this.executeWithRetry(send, method, options);
-    // Final bookend for the above-cap progress path. The wrapping branch
-    // already emits total/total naturally as the last chunk drains, so
-    // this only fires when we sent the FormData as-is. The `total` here
-    // is the pre-encode estimate — a few hundred bytes off from the wire
-    // truth, but stable enough for "upload finished" UI.
-    if (res.ok && wantsProgressBlob && !progressBlob && onUploadProgress) {
-      safeEmit(onUploadProgress, estimatedFormBytes, estimatedFormBytes);
-    }
+    // Final synthetic bookend — only fires on the above-cap (unwrapped) path;
+    // see UploadProgress.finish.
+    if (res.ok) upload?.finish();
     if (!res.ok) {
-      const status = res.status;
-      const body = await readErrorBody(res);
-      throw buildHttpError(
-        httpErrorMessage("request", path, status, body),
-        status,
-        body,
-        headersToRecord(res.headers),
-      );
+      await this.throwHttpError("request", path, res);
     }
     if (res.status === 204) return undefined as T;
     const parsed = (await res.json()) as T;
-    if (options.cache && this.responseCache) {
-      const key = cacheKey(method, path, options.body, options.query);
+    if (key !== undefined && this.responseCache) {
       this.responseCache.set(key, parsed);
     }
     return parsed;
@@ -457,14 +433,7 @@ export class UnifiedAI extends Core {
 
     const res = await this.executeWithRetry(send, options.method ?? "GET", options);
     if (!res.ok) {
-      const status = res.status;
-      const body = await readErrorBody(res);
-      throw buildHttpError(
-        httpErrorMessage("requestBinary", path, status, body),
-        status,
-        body,
-        headersToRecord(res.headers),
-      );
+      await this.throwHttpError("requestBinary", path, res);
     }
     const rawCt = res.headers.get("content-type") ?? "";
     const headers = headersToRecord(res.headers);
@@ -530,14 +499,7 @@ export class UnifiedAI extends Core {
 
     const res = await this.executeWithRetry(send, options.method ?? "GET", options);
     if (!res.ok) {
-      const status = res.status;
-      const body = await readErrorBody(res);
-      throw buildHttpError(
-        httpErrorMessage("stream", path, status, body),
-        status,
-        body,
-        headersToRecord(res.headers),
-      );
+      await this.throwHttpError("stream", path, res);
     }
     if (!res.body) {
       throw new UnifiedAIError(
@@ -625,12 +587,14 @@ export class UnifiedAI extends Core {
           // isNetworkErrorRetryable as a transient blip and trigger
           // duplicate onAuthFailure() / markExpired() on every retry.
           if (err instanceof UnifiedError) throw err;
-          const wrapped = new UnifiedAIAuthError(
+          throw new UnifiedAIAuthError(
             "auth_refresh_failed",
             err instanceof Error ? err.message : "refresh failed",
+            undefined,
+            undefined,
+            undefined,
+            err,
           );
-          if (err instanceof Error) wrapped.cause = err;
-          throw wrapped;
         }
         currentToken = freshToken;
         res = await send(freshToken);
@@ -763,10 +727,7 @@ export class UnifiedAI extends Core {
     if (this.options.token !== undefined) return this.resolveTrustedToken();
     // Same code as bootstrap() throws so consumers can branch on a single
     // condition to detect "browser entry imported but OAuth needed".
-    throw new UnifiedError(
-      "not_implemented",
-      "no token configured. Pass `token` for trusted-token mode, or import UnifiedAI from '@unifiedai/sdk/node' for OAuth.",
-    );
+    throw oauthUnavailable("no token configured");
   }
 
   /**
@@ -792,15 +753,19 @@ export class UnifiedAI extends Core {
       );
       return p;
     }
-    throw new UnifiedError(
-      "not_implemented",
-      "no refresh strategy available. Pass `token` for trusted-token mode, or import UnifiedAI from '@unifiedai/sdk/node' for OAuth.",
-    );
+    throw oauthUnavailable("no refresh strategy available");
   }
 
   /** Cleanup hook fired when refresh fails or a retry still 401s. */
   protected async onAuthFailure(): Promise<void> {
-    // Base: nothing to clean. Host owns the trusted-token lifecycle.
+    // Base: no local state to clear (the host owns the trusted-token
+    // lifecycle) — but the observable session must still learn that auth is
+    // dead, or a host subscribed to session.onChange would keep seeing
+    // "active" after a terminal failure. markExpired() only transitions
+    // `active` → `expired` (idempotent, never overrides signed_out), so a
+    // burst of concurrent failures collapses to one `expired` event and a
+    // subclass that also marks expired won't double-emit.
+    this.session.markExpired();
   }
 
   protected async resolveTrustedToken(): Promise<string> {
@@ -838,6 +803,11 @@ export class UnifiedAI extends Core {
     // token would be rejected by most backends.
     if (accessToken) h.authorization = `Bearer ${accessToken}`;
     if (hasBody) h["content-type"] = "application/json";
+    // Per-app attribution for shared uapi_ testing keys. unified-api honors
+    // this only on own-credential API keys; JWT `app` claims and OAuth
+    // client_id ignore it. Empty appId (unscoped client) omits the header.
+    const appId = this.appId.trim();
+    if (appId) h["x-unified-app"] = appId;
     return h;
   }
 }

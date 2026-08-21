@@ -10,7 +10,12 @@ import {
   resolveRetryConfig,
 } from "../../src/core/_internal/retry";
 import { UnifiedAI } from "../../src/core/client";
-import { RateLimitError, UnifiedAIAuthError, UnifiedAIError } from "../../src/core/errors";
+import {
+  ForbiddenError,
+  RateLimitError,
+  UnifiedAIAuthError,
+  UnifiedAIError,
+} from "../../src/core/errors";
 
 describe("retry classifier", () => {
   test("retries 408, 429, and all 5xx; not 4xx else", () => {
@@ -21,6 +26,7 @@ describe("retry classifier", () => {
     expect(isRetryableStatus(599)).toBe(true);
     expect(isRetryableStatus(400)).toBe(false);
     expect(isRetryableStatus(401)).toBe(false);
+    expect(isRetryableStatus(403)).toBe(false);
     expect(isRetryableStatus(404)).toBe(false);
     expect(isRetryableStatus(200)).toBe(false);
   });
@@ -49,6 +55,25 @@ describe("retry classifier", () => {
       code: "UND_ERR_SOCKET",
     });
     expect(isNetworkErrorRetryable(undici)).toBe(true);
+  });
+
+  test("SDK errors are detected via the isUnifiedSdkError marker, not the class name", () => {
+    // Simulates an error from a DIFFERENT bundled copy of the SDK: not an
+    // instanceof our classes, name mangled by a minifier — only the marker
+    // survives. It must still be treated as a non-retryable SDK error.
+    const foreignCopy = Object.assign(new Error("auth failed"), {
+      name: "a", // minified class name
+      isUnifiedSdkError: true,
+    });
+    expect(isNetworkErrorRetryable(foreignCopy)).toBe(false);
+    // A plain error whose name happens to collide with an SDK class name is
+    // NOT ours (no marker) — it stays retryable. This is the behavior change
+    // vs the old name allowlist.
+    const nameCollision = Object.assign(new Error("blip"), { name: "UnifiedError" });
+    expect(isNetworkErrorRetryable(nameCollision)).toBe(true);
+    // ForbiddenError (new per-status class) is covered by the marker with no
+    // allowlist update needed.
+    expect(isNetworkErrorRetryable(new ForbiddenError("nope", 403, undefined))).toBe(false);
   });
 
   test("parseRetryAfterHeader handles numeric seconds", () => {

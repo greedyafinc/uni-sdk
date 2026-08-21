@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import net from "node:net";
 import { parseSSE } from "../../src/core/_internal/sse";
 import type { TokenSet } from "../../src/core/_internal/tokens";
 import { InMemoryKeychain } from "../../src/node/_internal/keychain";
-import { UnifiedAI, UnifiedAIError } from "../../src/node/index";
+import { StreamInterruptedError, UnifiedAI, UnifiedAIError } from "../../src/node/index";
 
 const CLIENT = "app_test";
 const USER = "user_test";
@@ -80,7 +81,7 @@ async function startFakeStreamApi(): Promise<FakeStreamApi> {
   };
 }
 
-function makeSdk(api: FakeStreamApi, keychain: InMemoryKeychain): UnifiedAI {
+function makeSdk(api: { baseUrl: string }, keychain: InMemoryKeychain): UnifiedAI {
   return new UnifiedAI({
     appId: CLIENT,
     apiUrl: api.baseUrl,
@@ -736,3 +737,183 @@ describe("LLM streaming", () => {
     expect((caught as UnifiedAIError).status).toBe(400);
   });
 });
+
+// Raw TCP server speaking chunked HTTP/1.1 SSE that destroys the socket after
+// its frames WITHOUT sending the terminal 0-length chunk — a genuine abrupt
+// transport drop (Bun.serve can't simulate this: erroring its response stream
+// surfaces to clients as a clean EOF). The client's body read rejects with a
+// plain socket error, which the shared SSE scaffold must wrap in
+// StreamInterruptedError for every streaming resource.
+interface DroppingApi {
+  baseUrl: string;
+  stop: () => Promise<void>;
+  setFrames: (frames: string[]) => void;
+}
+
+async function startDroppingApi(): Promise<DroppingApi> {
+  let frames: string[] = [];
+  const server = net.createServer((socket) => {
+    socket.on("error", () => {});
+    socket.once("data", () => {
+      socket.write(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n",
+      );
+      for (const f of frames) {
+        socket.write(`${Buffer.byteLength(f).toString(16)}\r\n${f}\r\n`);
+      }
+      // Give the client a beat to read the frames, then drop the connection.
+      setTimeout(() => socket.destroy(), 30);
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const addr = server.address() as net.AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${addr.port}`,
+    stop: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      }),
+    setFrames: (f) => {
+      frames = f;
+    },
+  };
+}
+
+describe("mid-stream transport drop", () => {
+  let api: DroppingApi;
+  let sdk: UnifiedAI;
+
+  beforeEach(async () => {
+    api = await startDroppingApi();
+    const keychain = new InMemoryKeychain();
+    await seedTokens(keychain);
+    sdk = makeSdk(api, keychain);
+    await sdk.bootstrap();
+  });
+
+  afterEach(async () => {
+    await api.stop();
+  });
+
+  test("chat.completions stream wraps an abrupt drop in StreamInterruptedError", async () => {
+    api.setFrames([
+      `data: ${JSON.stringify({
+        id: "x",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "m",
+        choices: [{ index: 0, delta: { content: "hel" }, finish_reason: null }],
+      })}\n\n`,
+      // No [DONE]; the socket is destroyed after this frame.
+    ]);
+    const stream = sdk.chat.completions.create({
+      model: "auto",
+      messages: [{ role: "user", content: "hi" }],
+      stream: true,
+    });
+    let received = 0;
+    let caught: unknown;
+    try {
+      for await (const _ of stream) received++;
+    } catch (err) {
+      caught = err;
+    }
+    // The drop happened mid-stream: content arrived, then the typed error.
+    expect(received).toBe(1);
+    expect(caught).toBeInstanceOf(StreamInterruptedError);
+    expect((caught as StreamInterruptedError).code).toBe("stream_interrupted");
+    // The original transport error is preserved as `cause`.
+    expect((caught as StreamInterruptedError).cause).toBeDefined();
+  });
+
+  test("messages stream wraps an abrupt drop in StreamInterruptedError", async () => {
+    api.setFrames([
+      `event: message_start\ndata: ${JSON.stringify({
+        message: {
+          id: "m1",
+          type: "message",
+          role: "assistant",
+          model: "m",
+          content: [],
+          stop_reason: null,
+          usage: { input_tokens: 1, output_tokens: 0 },
+        },
+      })}\n\n`,
+      `event: content_block_delta\ndata: ${JSON.stringify({
+        index: 0,
+        delta: { type: "text_delta", text: "hi" },
+      })}\n\n`,
+      // No message_stop; the socket is destroyed after these frames.
+    ]);
+    const stream = sdk.messages.create({
+      model: "auto",
+      max_tokens: 64,
+      messages: [{ role: "user", content: "hi" }],
+      stream: true,
+    });
+    let received = 0;
+    let caught: unknown;
+    try {
+      for await (const _ of stream) received++;
+    } catch (err) {
+      caught = err;
+    }
+    expect(received).toBe(2);
+    expect(caught).toBeInstanceOf(StreamInterruptedError);
+    expect((caught as StreamInterruptedError).code).toBe("stream_interrupted");
+    expect((caught as StreamInterruptedError).cause).toBeDefined();
+  });
+
+  test("responses stream wraps an abrupt drop in StreamInterruptedError", async () => {
+    api.setFrames([
+      `event: response.created\ndata: ${JSON.stringify({ response: { id: "r1" } })}\n\n`,
+      `event: response.output_text.delta\ndata: ${JSON.stringify({
+        output_index: 0,
+        content_index: 0,
+        delta: "yo",
+      })}\n\n`,
+      // No response.completed; the socket is destroyed after these frames.
+    ]);
+    const stream = sdk.responses.create({ model: "auto", input: "hi", stream: true });
+    let received = 0;
+    let caught: unknown;
+    try {
+      for await (const _ of stream) received++;
+    } catch (err) {
+      caught = err;
+    }
+    expect(received).toBe(2);
+    expect(caught).toBeInstanceOf(StreamInterruptedError);
+    expect((caught as StreamInterruptedError).code).toBe("stream_interrupted");
+    expect((caught as StreamInterruptedError).cause).toBeDefined();
+  });
+
+  test("caller-signal abort still surfaces as AbortError, not StreamInterruptedError", async () => {
+    // Guard the abort-vs-interruption distinction: when the CALLER aborts via
+    // options.signal, the failure must keep surfacing as the fetch's own
+    // AbortError — the factory must not relabel it as an interruption.
+    api.setFrames([
+      `data: ${JSON.stringify({
+        id: "x",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "m",
+        choices: [{ index: 0, delta: { content: "hel" }, finish_reason: null }],
+      })}\n\n`,
+    ]);
+    const ac = new AbortController();
+    const stream = sdk.chat.completions.create(
+      { model: "auto", messages: [{ role: "user", content: "hi" }], stream: true },
+      { signal: ac.signal },
+    );
+    let caught: unknown;
+    try {
+      for await (const _ of stream) ac.abort();
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught).not.toBeInstanceOf(StreamInterruptedError);
+  });
+});
+

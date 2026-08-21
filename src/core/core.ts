@@ -2,7 +2,7 @@ import type { FsBackend } from "../resources/fs/types";
 import type { StorageBackend } from "../resources/storage/types";
 import type { SnapshotBackend } from "../resources/sync/types";
 import type { CacheConfig } from "./_internal/cache";
-import type { RetryAttempt, RetryConfig, RetryListener } from "./_internal/retry";
+import type { RetryConfig, RetryListener } from "./_internal/retry";
 import { UnifiedError } from "./errors";
 
 export type TokenProvider = string | (() => string | Promise<string>);
@@ -33,10 +33,38 @@ export interface CoreOptions {
    *
    * Intended for first-party apps that already manage their own auth lifecycle.
    * External integrations should leave this unset and use the OAuth flow.
+   *
+   * `token` and `appId` select between the two auth modes: set `token` for
+   * trusted-token mode, or (node entry only) leave it unset and set `appId`
+   * for OAuth mode. When both are set, `token` wins for authentication.
+   * `appId` still namespaces `sdk.storage` / `sdk.fs` and is sent as
+   * `X-Unified-App` on every request (usage attribution).
+   *
+   * @see appId for OAuth mode.
    */
   token?: TokenProvider;
   apiUrl?: string;
   workspaceId?: string;
+  /**
+   * OAuth application (client) id. Selects OAuth mode — but only in the node
+   * entry (`@unifiedai/sdk/node`), whose client runs the sign-in ladder
+   * (keychain → desktop handoff → browser PKCE) on `bootstrap()` or lazily on
+   * the first request. The browser entry has no OAuth machinery: there,
+   * `appId` never authenticates and a token-less client's requests fail with
+   * `not_implemented`.
+   *
+   * Auth-wise this is mutually exclusive with `token`: supplying `token`
+   * puts the client in trusted-token mode and `appId` is not used for auth.
+   * It still serves two mode-independent roles — namespacing the
+   * app-scoped resources (`sdk.storage`, `sdk.fs`), and stamping
+   * `X-Unified-App` on every request so a shared `uapi_` testing key can
+   * still attribute `user_activity.app_name` per app. In OAuth mode with no
+   * `appId`, the node client falls back to the UNIFIEDAI_CLIENT_ID environment
+   * variable and throws `not_bootstrapped` with guidance when neither is
+   * present.
+   *
+   * @see token for trusted-token mode.
+   */
   appId?: string;
   fetch?: typeof globalThis.fetch;
   /**

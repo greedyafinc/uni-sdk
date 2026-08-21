@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { UnifiedAI, UnifiedError } from "../../src/index";
+import { UnifiedAI, UnifiedAIAuthError, UnifiedError } from "../../src/index";
+import type { SessionEvent } from "../../src/core/session";
 
 // Exercises the browser-safe UnifiedAI directly from source. These tests
 // stand alone — they do not require a build artifact.
@@ -70,6 +71,41 @@ describe("browser UnifiedAI (trusted-token mode)", () => {
     expect(captured?.headers.has("authorization")).toBe(false);
   });
 
+  test("appId stamps X-Unified-App on every request", async () => {
+    let captured: Request | undefined;
+    const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      captured = new Request(input as string, init);
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    const sdk = new UnifiedAI({
+      apiUrl: "https://example.test",
+      fetch: fakeFetch,
+      token: "uapi_test",
+      appId: "notes",
+    });
+
+    await sdk.usage.get();
+    expect(captured?.headers.get("x-unified-app")).toBe("notes");
+  });
+
+  test("empty appId omits X-Unified-App", async () => {
+    let captured: Request | undefined;
+    const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      captured = new Request(input as string, init);
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    const sdk = new UnifiedAI({
+      apiUrl: "https://example.test",
+      fetch: fakeFetch,
+      token: "uapi_test",
+    });
+
+    await sdk.usage.get();
+    expect(captured?.headers.has("x-unified-app")).toBe(false);
+  });
+
   test("single-flight: concurrent 401s share exactly one refresh", async () => {
     // The SDK calls the provider once per request to get the initial token
     // (cheap read, no coalescing), then ONCE per 401 burst for refresh
@@ -126,5 +162,68 @@ describe("browser UnifiedAI (trusted-token mode)", () => {
     // No further provider calls happen after the burst clears.
     expect(providerCalls).toBe(N + 1);
     expect(refreshCalls).toBe(1);
+  });
+
+  test("failed trusted refresh marks the session expired and notifies observers", async () => {
+    const fakeFetch = (async () =>
+      new Response(JSON.stringify({ message: "nope" }), {
+        status: 401,
+      })) as unknown as typeof fetch;
+    let calls = 0;
+    const providerFailure = new Error("keychain locked");
+    const sdk = new UnifiedAI({
+      apiUrl: "https://example.test",
+      fetch: fakeFetch,
+      token: async () => {
+        calls++;
+        if (calls === 1) return "stale-token";
+        throw providerFailure; // refresh path fails terminally
+      },
+    });
+    const events: SessionEvent[] = [];
+    sdk.session.onChange((e) => events.push(e));
+    expect(sdk.session.status).toBe("active");
+
+    let thrown: unknown;
+    try {
+      await sdk.usage.get();
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(UnifiedAIAuthError);
+    expect((thrown as UnifiedAIAuthError).code).toBe("auth_refresh_failed");
+    // The provider's original failure rides along as Error.cause.
+    expect((thrown as Error).cause).toBe(providerFailure);
+    // The host learns auth is dead: status flips and an expired event fires.
+    expect(sdk.session.status).toBe("expired");
+    expect(sdk.session.isAuthenticated()).toBe(false);
+    expect(events.map((e) => e.type)).toContain("expired");
+  });
+
+  test("retry that still 401s after refresh marks the session expired", async () => {
+    const fakeFetch = (async () =>
+      new Response(JSON.stringify({ message: "still no" }), {
+        status: 401,
+      })) as unknown as typeof fetch;
+    const sdk = new UnifiedAI({
+      apiUrl: "https://example.test",
+      fetch: fakeFetch,
+      token: async () => "always-rejected-token",
+    });
+    const events: SessionEvent[] = [];
+    sdk.session.onChange((e) => events.push(e));
+
+    let thrown: unknown;
+    try {
+      await sdk.usage.get();
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(UnifiedAIAuthError);
+    expect((thrown as UnifiedAIAuthError).code).toBe("auth_retry_still_unauthorized");
+    expect(sdk.session.status).toBe("expired");
+    // The successful refresh emits `refreshed` before the retried request
+    // fails again; the terminal state must still be a single `expired`.
+    expect(events.filter((e) => e.type === "expired").length).toBe(1);
   });
 });

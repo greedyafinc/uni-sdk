@@ -1,4 +1,4 @@
-import { parseSSE } from "../core/_internal/sse";
+import { createSSEStream } from "../core/_internal/sse-stream";
 import { UnifiedStream } from "../core/_internal/stream";
 import type { Core, RequestOptions } from "../core/core";
 import { UnifiedAIError } from "../core/errors";
@@ -260,27 +260,19 @@ export class Messages {
     params: MessageCreateParams & { stream: true },
     options: MessageCreateOptions,
   ): MessageStream {
-    const controller = new AbortController();
-    if (options.signal) {
-      if (options.signal.aborted) controller.abort();
-      else options.signal.addEventListener("abort", () => controller.abort(), { once: true });
-    }
-    const client = this.client;
-    const iter = (async function* (): AsyncGenerator<MessageStreamEvent, void, void> {
-      const body = await client.stream("/v1/messages", {
-        method: "POST",
-        body: { ...params, compression: params.compression ?? client.defaultCompression },
-        signal: controller.signal,
-      });
-      for await (const msg of parseSSE(body)) {
-        let parsed: Record<string, unknown>;
-        try {
-          parsed = JSON.parse(msg.data) as Record<string, unknown>;
-        } catch {
-          continue;
-        }
-        const type = msg.event ?? (typeof parsed.type === "string" ? parsed.type : undefined);
-        if (!type) continue;
+    // Anthropic splits usage across events: input_tokens land on `message_start`,
+    // final output_tokens on `message_delta`. Hold input across events and emit
+    // the combined usage once both are seen.
+    let inputTokens = 0;
+    return createSSEStream<MessageStreamEvent, MessageStream>({
+      client: this.client,
+      path: "/v1/messages",
+      params,
+      signal: options.signal,
+      streamClass: MessageStream,
+      interpret: (parsed, eventName) => {
+        const type = eventName ?? (typeof parsed.type === "string" ? parsed.type : undefined);
+        if (!type) return null;
         if (type === "error") {
           const err = (parsed.error ?? parsed) as { message?: string };
           throw new UnifiedAIError(
@@ -290,31 +282,29 @@ export class Messages {
             parsed,
           );
         }
-        yield { ...parsed, type } as MessageStreamEvent;
-        if (type === "message_stop") return;
-      }
-    })();
-    // Anthropic splits usage across events: input_tokens land on `message_start`,
-    // final output_tokens on `message_delta`. Hold input across events and emit
-    // the combined usage once both are seen.
-    let inputTokens = 0;
-    return new MessageStream(iter, controller, (ev) => {
-      if (ev.type === "message_start") {
-        const u = (
-          ev as { message?: { usage?: { input_tokens?: number; output_tokens?: number } } }
-        ).message?.usage;
-        if (u) inputTokens = u.input_tokens ?? 0;
-        return null;
-      }
-      if (ev.type === "message_delta") {
-        const out = (ev as { usage?: { output_tokens?: number } }).usage?.output_tokens ?? 0;
         return {
-          input_tokens: inputTokens,
-          output_tokens: out,
-          total_tokens: inputTokens + out,
+          event: { ...parsed, type } as MessageStreamEvent,
+          terminal: type === "message_stop",
         };
-      }
-      return null;
+      },
+      usage: (ev) => {
+        if (ev.type === "message_start") {
+          const u = (
+            ev as { message?: { usage?: { input_tokens?: number; output_tokens?: number } } }
+          ).message?.usage;
+          if (u) inputTokens = u.input_tokens ?? 0;
+          return null;
+        }
+        if (ev.type === "message_delta") {
+          const out = (ev as { usage?: { output_tokens?: number } }).usage?.output_tokens ?? 0;
+          return {
+            input_tokens: inputTokens,
+            output_tokens: out,
+            total_tokens: inputTokens + out,
+          };
+        }
+        return null;
+      },
     });
   }
 }

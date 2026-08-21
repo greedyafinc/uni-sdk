@@ -87,7 +87,7 @@ export class Users {
    * Ids are trimmed, empties dropped, and duplicates deduped client-side
    * before the request; no SDK-side caching is applied — every call hits the
    * network. An empty result after dedupe resolves `{ users: [] }` without a
-   * request. More than {@link MAX_LIST_IDS} deduped ids throws (matching the
+   * request. More than 100 deduped ids throws (matching the
    * gateway's cap) rather than silently truncating — chunk the request
    * yourself if you need to look up more.
    */
