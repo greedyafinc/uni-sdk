@@ -16,7 +16,7 @@ import {
   setOverrideOp,
   updateItemOp,
 } from "../../src/resources/calendar";
-import { FakeSyncServer } from "../../src/resources/sync";
+import { FakeSyncServer } from "../../src/testing";
 
 const NY = "America/New_York";
 

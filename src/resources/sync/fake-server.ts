@@ -8,21 +8,13 @@
 // `sync_id`, tombstones in the delta stream, epoch bumping (`bumpEpoch()` makes
 // the next bootstrap/delta with an older cursor return 409), and the SAME
 // merge/replace/null-strips-key logic as the real server (shared `mergePatch`).
+import { pkOf } from "../_kv/keys";
+import type { SyncedRecordFields } from "../_kv/records";
 import { mergePatch } from "./merge";
 
-interface ServerRecord {
-  ns: string;
-  collection: string;
-  id: string;
-  metadata: Record<string, unknown>;
-  version: number;
-  deleted: boolean;
-  syncId: number;
-  createdAt: number;
-  updatedAt: number;
-  hasBlob: boolean;
-  blobEncoding?: string;
-}
+// A record as the fake server stores it — the shared sync record field set,
+// verbatim (tombstones stay in the map with `deleted: true`).
+type ServerRecord = SyncedRecordFields;
 
 interface WorkspaceState {
   epoch: number;
@@ -33,10 +25,6 @@ interface WorkspaceState {
 interface Cursor {
   e: number;
   a: number;
-}
-
-function pk(ns: string, collection: string, id: string): string {
-  return JSON.stringify([ns, collection, id]);
 }
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -295,7 +283,7 @@ export class FakeSyncServer {
     const ns = String(op.ns);
     const collection = String(op.collection);
     const id = String(op.id);
-    const key = pk(ns, collection, id);
+    const key = pkOf(ns, collection, id);
     const existing = ws.records.get(key);
     const now = Date.now();
     ws.seq += 1;

@@ -2,6 +2,7 @@ import { safeEmit } from "../../core/_internal/progress";
 import type { Core } from "../../core/core";
 import { UnifiedAIError, UnifiedError } from "../../core/errors";
 import type { FileObject, UploadProgressListener } from "../files";
+import { sleep } from "./poll";
 
 /**
  * Server-side chunked-upload contract (mirrors unified-api's
@@ -71,24 +72,6 @@ export interface ChunkedUploadOptions {
   signal?: AbortSignal;
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new UnifiedError("aborted", "files.create aborted during chunk retry backoff"));
-      return;
-    }
-    const t = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(t);
-      reject(new UnifiedError("aborted", "files.create aborted during chunk retry backoff"));
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 function backoffMs(attempt: number): number {
   return Math.min(RETRY_BASE_MS * 2 ** attempt, RETRY_CAP_MS);
 }
@@ -135,7 +118,11 @@ async function putChunkWithRetry(
     } catch (err) {
       lastErr = err;
       if (!isRetryable(err) || attempt === PER_CHUNK_RETRIES) throw err;
-      await sleep(backoffMs(attempt), signal);
+      await sleep(
+        backoffMs(attempt),
+        signal,
+        () => new UnifiedError("aborted", "files.create aborted during chunk retry backoff"),
+      );
     }
   }
   // Defensive: the loop above either returns on success or throws on the

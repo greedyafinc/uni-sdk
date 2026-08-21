@@ -1,4 +1,4 @@
-import { UnifiedError, type UnifiedErrorCode } from "../../core/errors";
+import { type UnifiedError, subsystemError } from "../../core/errors";
 
 /**
  * Client-side error codes raised by the sync engine before a request goes out
@@ -9,9 +9,7 @@ import { UnifiedError, type UnifiedErrorCode } from "../../core/errors";
 export type SyncErrorCode = "invalid_input";
 
 /** Construct a typed sync error (a plain `UnifiedError`, not an HTTP error). */
-export function syncError(code: SyncErrorCode, message: string): UnifiedError {
-  return new UnifiedError(code as UnifiedErrorCode, message);
-}
+export const syncError: (code: SyncErrorCode, message: string) => UnifiedError = subsystemError;
 
 /**
  * True when `err` is the server's `409 cursor_epoch_mismatch` — the signal that

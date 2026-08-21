@@ -1,7 +1,14 @@
 // A minimal current-value observable, shaped like the SDK's `Session` surface
 // (a `get()` for the latest value + a `subscribe()` that returns an
 // unsubscribe). A throwing listener is isolated so one bad host callback can't
-// break the engine or starve the other listeners.
+// break the owner or starve the other listeners. INTERNAL and browser-safe —
+// consumers expose it only through their own public interfaces (e.g. sync's
+// `SyncStatusObservable`).
+//
+// NOTE: `Session` itself is intentionally NOT built on this class. Session is
+// an event EMITTER (typed lifecycle events carrying per-emit snapshots, with
+// guarded state transitions and no stored current value), not a current-value
+// container — the only overlap is the listener set + isolation loop.
 
 export class Observable<T> {
   private readonly listeners = new Set<(value: T) => void>();
@@ -21,7 +28,7 @@ export class Observable<T> {
       try {
         listener(value);
       } catch {
-        // A host listener must never break the engine or the other listeners.
+        // A host listener must never break the owner or the other listeners.
       }
     }
   }

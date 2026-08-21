@@ -1,4 +1,5 @@
 import type { Core, RequestOptions } from "../core/core";
+import { pollUntil } from "./_internal/poll";
 
 // ── Shared types ───────────────────────────────────────────────────────────────
 
@@ -150,51 +151,34 @@ export class Videos {
    */
   async waitUntilReady(videoId: string, options: VideoWaitOptions = {}): Promise<VideoObject> {
     const timeoutMs = options.timeoutMs ?? 600_000;
-    const interval = options.pollIntervalMs ?? 5_000;
-    const deadline = Date.now() + timeoutMs;
-
-    for (;;) {
-      if (options.signal?.aborted) {
+    return pollUntil<VideoObject>({
+      timeoutMs,
+      intervalMs: options.pollIntervalMs ?? 5_000,
+      ...(options.signal && { signal: options.signal }),
+      poll: () => {
+        const reqOpts: VideoRequestOptions = {};
+        if (options.signal) reqOpts.signal = options.signal;
+        return this.retrieve(videoId, reqOpts);
+      },
+      isDone: (v) => v.status === "completed" || v.status === "failed",
+      // eagerDeadline: check the deadline BEFORE issuing a retrieve. Otherwise
+      // a slow retrieve (or any retrieve at all when timeoutMs <= retrieve
+      // latency) burns one extra network round-trip past the user's deadline.
+      eagerDeadline: true,
+      abortError: () => {
         // DOMException with name "AbortError" matches what fetch throws on
         // aborted signals, so callers can use the same catch shape.
         const err = new Error("Video poll aborted");
         err.name = "AbortError";
-        throw err;
-      }
-      // Check the deadline BEFORE issuing a retrieve. Otherwise a slow
-      // retrieve (or any retrieve at all when timeoutMs <= retrieve latency)
-      // burns one extra network round-trip past the user's deadline.
-      if (Date.now() >= deadline) {
-        throw new Error(`Video ${videoId} did not reach a terminal state within ${timeoutMs}ms`);
-      }
-      const reqOpts: VideoRequestOptions = {};
-      if (options.signal) reqOpts.signal = options.signal;
-      const v = await this.retrieve(videoId, reqOpts);
-      if (v.status === "completed" || v.status === "failed") return v;
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
+        return err;
+      },
+      onTimeout: (last) => {
         throw new Error(
-          `Video ${videoId} did not reach a terminal state within ${timeoutMs}ms (last status: ${v.status})`,
+          last
+            ? `Video ${videoId} did not reach a terminal state within ${timeoutMs}ms (last status: ${last.status})`
+            : `Video ${videoId} did not reach a terminal state within ${timeoutMs}ms`,
         );
-      }
-      await sleep(Math.min(interval, remaining), options.signal);
-    }
+      },
+    });
   }
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (ms <= 0) return resolve();
-    const t = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(t);
-      const err = new Error("Aborted");
-      err.name = "AbortError";
-      reject(err);
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
 }

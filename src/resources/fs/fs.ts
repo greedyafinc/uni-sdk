@@ -11,6 +11,12 @@
 // OpenDesign's `unified-agent.ts` `edit_file` tool, so porting that loop onto
 // `sdk.fs` is a direct mapping. See docs/capability-platform.md.
 import type { Core } from "../../core/core";
+import {
+  BackendResolver,
+  assertWritableNamespace,
+  deriveNamespace,
+  requireAvailableBackend,
+} from "../_kv/namespace";
 import { CloudFsBackend } from "./cloud";
 import { fsError } from "./errors";
 import { normalizePrefix, normalizeRelPath } from "./path";
@@ -35,16 +41,11 @@ class FsNamespaceImpl implements FsNamespace {
   ) {}
 
   private requireBackend(): FsBackend {
-    if (!this.backend || !this.backend.available()) {
-      throw fsError("fs_unavailable", "no fs backend is available in this runtime");
-    }
-    return this.backend;
+    return requireAvailableBackend(this.backend, "fs");
   }
 
   private assertWritable(): void {
-    if (this.mode === "read") {
-      throw fsError("fs_read_only", `namespace "${this.id}" is read-only`);
-    }
+    assertWritableNamespace(this.mode, this.id, "fs");
   }
 
   async read(path: string): Promise<string> {
@@ -92,9 +93,9 @@ class FsNamespaceImpl implements FsNamespace {
     const backend = this.requireBackend();
     const prefix = normalizePrefix(opts.prefix);
     const entries = await backend.list(this.id, prefix || undefined);
-    // Sort here so every backend returns identical, stable ordering — the host
-    // backend sorts internally but OPFS yields raw iteration order, so doing it
-    // once in the facade guarantees cross-runtime parity.
+    // Sort here so every backend returns identical, stable ordering — backends
+    // may or may not sort internally, so doing it once in the facade
+    // guarantees cross-runtime parity.
     entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
     return entries;
   }
@@ -127,36 +128,27 @@ class FsNamespaceImpl implements FsNamespace {
  * the `ns` is cooperative and the read-only `mode` is enforced only here.
  */
 export class Fs {
-  constructor(private readonly client: Core) {}
+  // Shared resolution machinery: injected backend wins → server-capable clients
+  // get a lazily-built (cached) CloudFsBackend → null (Supabase-only; there is
+  // no local OPFS fallback).
+  private readonly resolver: BackendResolver<FsBackend>;
 
-  // Cached cloud backend (built lazily once).
-  private cloud: FsBackend | null = null;
-
-  private resolveBackend(): FsBackend | null {
-    // Injected backend wins; else server-capable clients use the cloud backend
-    // (unified-api → Supabase) so the file workspace follows the user. With no
-    // token and nothing injected, fs is unavailable — there is no local OPFS
-    // fallback (Supabase-only).
-    if (this.client.fsBackend) return this.client.fsBackend;
-    if (this.client.serverCapable) {
-      this.cloud ??= new CloudFsBackend(this.client);
-      return this.cloud;
-    }
-    return null;
+  constructor(private readonly client: Core) {
+    this.resolver = new BackendResolver(
+      () => client.fsBackend,
+      () => client.serverCapable,
+      () => new CloudFsBackend(client),
+    );
   }
 
   /** Whether a usable fs backend exists in the current runtime. */
   available(): boolean {
-    const b = this.resolveBackend();
-    return !!b && b.available();
+    return this.resolver.available();
   }
 
   /** Open a namespace handle (defaults to the calling app's own workspace). */
   namespace(appId?: string, opts: FsNamespaceOptions = {}): FsNamespace {
-    const own = (this.client.appId || "").trim() || "default";
-    const target = appId?.trim() || own;
-    const crossApp = target !== own;
-    const mode: FsNamespaceMode = opts.mode ?? (crossApp ? "read" : "readwrite");
-    return new FsNamespaceImpl(this.resolveBackend(), target, mode);
+    const { id, mode } = deriveNamespace(this.client.appId, appId, opts.mode);
+    return new FsNamespaceImpl(this.resolver.resolve(), id, mode);
   }
 }

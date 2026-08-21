@@ -4,6 +4,7 @@
 // behind NAT needs no reachable endpoint. The invoker side (`invoke` + `awaitResult`)
 // mirrors it. App identity is server-derived from the credential.
 import type { Core, RequestOptions } from "../core/core";
+import { pollUntil } from "./_internal/poll";
 
 /** An action declaration. `id` is the actionId; the rest is the opaque, shell-owned spec. */
 export interface ActionSpec {
@@ -125,14 +126,16 @@ export class Actions {
     id: string,
     options: { timeoutMs?: number; intervalMs?: number } = {},
   ): Promise<InvocationResult> {
-    const timeoutMs = options.timeoutMs ?? 30_000;
-    const intervalMs = options.intervalMs ?? 400;
-    const start = Date.now();
-    for (;;) {
-      const r = await this.result(id);
-      if (r.status === "done" || Date.now() - start > timeoutMs) return r;
-      await new Promise((res) => setTimeout(res, intervalMs));
-    }
+    return pollUntil<InvocationResult>({
+      timeoutMs: options.timeoutMs ?? 30_000,
+      intervalMs: options.intervalMs ?? 400,
+      poll: () => this.result(id),
+      isDone: (r) => r.status === "done",
+      // On timeout, return the last (still-pending) result — the caller checks
+      // `status`. Without eagerDeadline, at least one poll always runs, so
+      // `last` is always defined here.
+      onTimeout: (last) => last as InvocationResult,
+    });
   }
 
   // ── Serving side ────────────────────────────────────────────────────────────

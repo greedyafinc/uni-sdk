@@ -6,6 +6,12 @@
 // With no token and no injected backend, `sdk.storage` is unavailable — there is
 // no local browser fallback. See STORAGE-SPEC.md.
 import type { Core } from "../../core/core";
+import {
+  BackendResolver,
+  assertWritableNamespace,
+  deriveNamespace,
+  requireAvailableBackend,
+} from "../_kv/namespace";
 import { CloudStorageBackend } from "./cloud";
 import { storageError } from "./errors";
 import type {
@@ -65,16 +71,11 @@ class CollectionImpl<T extends StorageRecord> implements Collection<T> {
   }
 
   private requireBackend(): StorageBackend {
-    if (!this.backend || !this.backend.available()) {
-      throw storageError("storage_unavailable", "no storage backend is available in this runtime");
-    }
-    return this.backend;
+    return requireAvailableBackend(this.backend, "storage");
   }
 
   private assertWritable(): void {
-    if (this.mode === "read") {
-      throw storageError("storage_read_only", `namespace "${this.ns}" is read-only`);
-    }
+    assertWritableNamespace(this.mode, this.ns, "storage");
   }
 
   private ensure(backend: StorageBackend): Promise<void> {
@@ -246,39 +247,27 @@ class NamespaceImpl implements Namespace {
  * boundary, not here.
  */
 export class Storage {
-  constructor(private readonly client: Core) {}
+  // Shared resolution machinery: injected backend wins → server-capable clients
+  // get a lazily-built (cached) CloudStorageBackend → null (Supabase-only;
+  // there is no local browser IndexedDB fallback).
+  private readonly resolver: BackendResolver<StorageBackend>;
 
-  // Cached cloud backend (built lazily once, so repeated namespace() calls reuse
-  // one instance).
-  private cloud: StorageBackend | null = null;
-
-  private resolveBackend(): StorageBackend | null {
-    // 1. An explicitly injected backend always wins (tests inject Memory; a host
-    //    could inject a custom one).
-    if (this.client.storageBackend) return this.client.storageBackend;
-    // 2. Server-capable clients (a token is configured) use the cloud backend so
-    //    data lives in Supabase (via unified-api) and follows the user.
-    if (this.client.serverCapable) {
-      this.cloud ??= new CloudStorageBackend(this.client);
-      return this.cloud;
-    }
-    // 3. No token and nothing injected: storage is unavailable. Supabase-only —
-    //    there is no local browser (IndexedDB) fallback.
-    return null;
+  constructor(private readonly client: Core) {
+    this.resolver = new BackendResolver(
+      () => client.storageBackend,
+      () => client.serverCapable,
+      () => new CloudStorageBackend(client),
+    );
   }
 
   /** Whether a usable storage backend exists in the current runtime. */
   available(): boolean {
-    const b = this.resolveBackend();
-    return !!b && b.available();
+    return this.resolver.available();
   }
 
   /** Open a namespace handle (defaults to the calling app's own namespace). */
   namespace(appId?: string, opts: NamespaceOptions = {}): Namespace {
-    const own = (this.client.appId || "").trim() || "default";
-    const target = appId?.trim() || own;
-    const crossApp = target !== own;
-    const mode: NamespaceMode = opts.mode ?? (crossApp ? "read" : "readwrite");
-    return new NamespaceImpl(this.resolveBackend(), target, mode);
+    const { id, mode } = deriveNamespace(this.client.appId, appId, opts.mode);
+    return new NamespaceImpl(this.resolver.resolve(), id, mode);
   }
 }

@@ -8,19 +8,12 @@
 //
 // A reference handle is a compact `uniref://<projectId>/<linkId>` URI an app can
 // embed inline (a doc link, a design reference card) and resolve later.
+import { base64ToBytes, bytesToBase64 } from "../core/_internal/base64";
 import type { Core, RequestOptions } from "../core/core";
 import type { TargetKind } from "./projects";
 
 const SCHEME = "uniref://";
 const utf8Decoder = new TextDecoder();
-
-function b64ToBytes(b64: string): Uint8Array {
-  if (typeof Buffer !== "undefined") return new Uint8Array(Buffer.from(b64, "base64"));
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
 
 export interface ReferenceHandle {
   projectId: string;
@@ -76,7 +69,7 @@ function decode(w: WireResolved): ResolvedReference {
   let text: string | null = null;
   let bytes: Uint8Array | null = null;
   if (w.blobB64 != null) {
-    const raw = b64ToBytes(w.blobB64);
+    const raw = base64ToBytes(w.blobB64);
     if (w.blobEncoding === "utf8") text = utf8Decoder.decode(raw);
     else bytes = raw;
   }
@@ -176,10 +169,7 @@ export class References {
       bytes = new Uint8Array(c);
       encoding = "arraybuffer";
     }
-    const snapshotB64 =
-      typeof Buffer !== "undefined"
-        ? Buffer.from(bytes).toString("base64")
-        : btoa(String.fromCharCode(...bytes));
+    const snapshotB64 = bytesToBase64(bytes);
     const { reference } = await this.client.request<{ reference: WireResolved }>(
       `/api/v1/references/${encodeURIComponent(linkId)}/resync`,
       {

@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { UnifiedAI } from "../../src/core/client";
 import {
-  FakeSyncServer,
   type SnapshotBackend,
   type SyncTiming,
   WorkspaceSync,
   encodeSnapshot,
 } from "../../src/resources/sync";
+import { FakeSyncServer } from "../../src/testing";
 
 const NS = "app";
 const COL = "notes";

@@ -6,9 +6,11 @@
 // Two layers, exactly like storage:
 //   1. The PUBLIC surface (`Fs`, `FsNamespace`) the app programs against. Paths
 //      are project-relative POSIX strings; the namespace is the jail root.
-//   2. The untyped `FsBackend` contract every runtime implements (browser OPFS
-//      here; a host-injected SQLite/disk backend under Tauri). The backend deals
-//      only in `(ns, path, bytes)` — never in app types or absolute paths.
+//   2. The untyped `FsBackend` contract every runtime implements (the
+//      server-backed Cloud backend against unified-api; or a host-injected
+//      disk-backed one under Tauri). There is no local browser fallback. The
+//      backend deals only in `(ns, path, bytes)` — never in app types or
+//      absolute paths.
 //
 // Path safety is layered: the facade normalizes paths and rejects any that
 // escape the namespace (`normalizeRelPath`), and the host backend independently
@@ -98,8 +100,8 @@ export interface FsWriteReq {
 }
 
 /**
- * The file transport. The browser ships an OPFS implementation; the Tauri host
- * injects a disk-backed one via `UnifiedAIOptions.fs`. Like `StorageBackend`,
+ * The file transport. The default is the server-backed Cloud backend; the
+ * Tauri host injects a disk-backed one via `UnifiedAIOptions.fs`. Like `StorageBackend`,
  * it is untyped and trust-agnostic: in the host the calling app's identity
  * (`ns`) is re-derived and authorized at the IPC boundary, not taken on faith.
  *
@@ -107,7 +109,7 @@ export interface FsWriteReq {
  * the facade's job (read-modify-write), so a new backend stays small.
  */
 export interface FsBackend {
-  /** Short identifier, e.g. `"opfs"` / `"tauri-fs"` — for diagnostics. */
+  /** Short identifier, e.g. `"cloud"` / `"tauri-fs"` — for diagnostics. */
   readonly name: string;
   /** Whether the backend can operate in the current runtime right now. */
   available(): boolean;

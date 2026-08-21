@@ -1,5 +1,5 @@
-// Server-backed StorageBackend — the cloud sibling of the local IndexedDB/Memory
-// backends. It implements the same contract by calling unified-api's generic
+// Server-backed StorageBackend — the cloud sibling of the in-memory backend
+// (tests only). It implements the same contract by calling unified-api's generic
 // app-object store (`/api/v1/storage/*`) through the SDK's own request transport,
 // so a signed-in user's `sdk.storage` data is the SAME across devices and is
 // reachable by any SDK consumer (first-party host or third-party OAuth app) —
@@ -9,6 +9,7 @@
 // Blobs cross the wire base64-encoded inside the JSON body. unified-api stores
 // them content-addressed in private Storage and returns them base64 too;
 // responses are object-enveloped so a raw blob string never breaks JSON parsing.
+import { base64ToBytes, bytesToBase64 } from "../../core/_internal/base64";
 import type { Core } from "../../core/core";
 import type {
   BackendQuery,
@@ -18,24 +19,6 @@ import type {
   StorageBackend,
   StoredRef,
 } from "./types";
-
-function bytesToB64(bytes: Uint8Array): string {
-  if (typeof Buffer !== "undefined") return Buffer.from(bytes).toString("base64");
-  let bin = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(bin);
-}
-
-function b64ToBytes(b64: string): Uint8Array {
-  if (typeof Buffer !== "undefined") return new Uint8Array(Buffer.from(b64, "base64"));
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
 
 export class CloudStorageBackend implements StorageBackend {
   readonly name = "cloud";
@@ -63,7 +46,7 @@ export class CloudStorageBackend implements StorageBackend {
       id: req.id,
       metadata: req.metadata,
       versioned: req.versioned,
-      blobB64: req.blob ? bytesToB64(req.blob) : null,
+      blobB64: req.blob ? bytesToBase64(req.blob) : null,
       blobEncoding: req.blobEncoding ?? null,
     });
   }
@@ -102,7 +85,7 @@ export class CloudStorageBackend implements StorageBackend {
       collection,
       id,
     });
-    return blobB64 ? b64ToBytes(blobB64) : null;
+    return blobB64 ? base64ToBytes(blobB64) : null;
   }
 
   async listVersions(ns: string, collection: string, id: string): Promise<BackendVersion[]> {
@@ -141,7 +124,7 @@ export class CloudStorageBackend implements StorageBackend {
       id,
       version,
     });
-    return blobB64 ? b64ToBytes(blobB64) : null;
+    return blobB64 ? base64ToBytes(blobB64) : null;
   }
 
   revert(ns: string, collection: string, id: string, version: number): Promise<StoredRef> {

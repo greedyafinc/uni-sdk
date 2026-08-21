@@ -1,4 +1,4 @@
-import { UnifiedError, type UnifiedErrorCode } from "../../core/errors";
+import { type UnifiedError, subsystemError } from "../../core/errors";
 
 /**
  * Error codes raised by the fs subsystem. `quota_exceeded` is reserved for a
@@ -16,6 +16,4 @@ export type FsErrorCode =
   | "invalid_input";
 
 /** Construct a typed fs error (a plain `UnifiedError`, not an HTTP error). */
-export function fsError(code: FsErrorCode, message: string): UnifiedError {
-  return new UnifiedError(code as UnifiedErrorCode, message);
-}
+export const fsError: (code: FsErrorCode, message: string) => UnifiedError = subsystemError;

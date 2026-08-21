@@ -1,4 +1,4 @@
-import { UnifiedError, type UnifiedErrorCode } from "../../core/errors";
+import { type UnifiedError, subsystemError } from "../../core/errors";
 
 /**
  * Error codes raised by the storage subsystem. `conflict` (optimistic-write
@@ -13,6 +13,5 @@ export type StorageErrorCode =
   | "invalid_input";
 
 /** Construct a typed storage error (a plain `UnifiedError`, not an HTTP error). */
-export function storageError(code: StorageErrorCode, message: string): UnifiedError {
-  return new UnifiedError(code as UnifiedErrorCode, message);
-}
+export const storageError: (code: StorageErrorCode, message: string) => UnifiedError =
+  subsystemError;

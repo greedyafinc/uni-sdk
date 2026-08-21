@@ -1,3 +1,4 @@
+import { base64ToBytes } from "../core/_internal/base64";
 import type { Core, RequestOptions, UploadProgressListener } from "../core/core";
 import { UnifiedError } from "../core/errors";
 import {
@@ -6,6 +7,7 @@ import {
   performChunkedUpload,
 } from "./_internal/chunkedUpload";
 import { parseContentDispositionFilename } from "./_internal/contentDisposition";
+import { sniffMime } from "./_internal/mime";
 
 export type { UploadProgressEvent, UploadProgressListener } from "../core/core";
 export type { ChunkedUploadPersist } from "./_internal/chunkedUpload";
@@ -145,77 +147,6 @@ function defaultFilenameFor(mime: string | undefined): string {
   return ext ? `upload${ext}` : "upload";
 }
 
-// Minimal magic-byte sniffer for the mime types the upload endpoint accepts.
-// Mirrors the broader detector in helpers.ts but kept local to avoid coupling
-// the resource to that module's internals.
-function sniffMime(bytes: Uint8Array): string | undefined {
-  if (
-    bytes.length >= 8 &&
-    bytes[0] === 0x89 &&
-    bytes[1] === 0x50 &&
-    bytes[2] === 0x4e &&
-    bytes[3] === 0x47 &&
-    bytes[4] === 0x0d &&
-    bytes[5] === 0x0a &&
-    bytes[6] === 0x1a &&
-    bytes[7] === 0x0a
-  ) {
-    return "image/png";
-  }
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
-    return "image/jpeg";
-  }
-  if (
-    bytes.length >= 6 &&
-    bytes[0] === 0x47 &&
-    bytes[1] === 0x49 &&
-    bytes[2] === 0x46 &&
-    bytes[3] === 0x38 &&
-    (bytes[4] === 0x37 || bytes[4] === 0x39) &&
-    bytes[5] === 0x61
-  ) {
-    return "image/gif";
-  }
-  // RIFF....WEBP
-  if (
-    bytes.length >= 12 &&
-    bytes[0] === 0x52 &&
-    bytes[1] === 0x49 &&
-    bytes[2] === 0x46 &&
-    bytes[3] === 0x46 &&
-    bytes[8] === 0x57 &&
-    bytes[9] === 0x45 &&
-    bytes[10] === 0x42 &&
-    bytes[11] === 0x50
-  ) {
-    return "image/webp";
-  }
-  return undefined;
-}
-
-function decodeBase64(b64: string): Uint8Array {
-  // Strip whitespace — pretty-printed / line-wrapped base64 is common (PEM,
-  // `openssl base64`, copy-paste from textareas). Node's Buffer tolerates it
-  // but browser `atob` throws InvalidCharacterError on `\n`/spaces.
-  const cleaned = b64.replace(/\s+/g, "");
-  const g = globalThis as {
-    Buffer?: {
-      from(s: string, enc: string): { buffer: ArrayBuffer; byteOffset: number; byteLength: number };
-    };
-  };
-  if (g.Buffer) {
-    const buf = g.Buffer.from(cleaned, "base64");
-    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-  }
-  if (typeof atob === "function") {
-    const bin = atob(cleaned);
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
-  }
-  throw inputError("no base64 decoder available (neither Buffer nor atob)");
-}
-
 interface NormalisedUpload {
   blob: Blob;
   filename: string;
@@ -274,7 +205,7 @@ async function normalise(
       throw inputError("data URL must be base64-encoded (data:<mime>;base64,<payload>)");
     }
     const mimeFromUrl = meta.split(";")[0] || undefined;
-    const bytes = decodeBase64(payload);
+    const bytes = base64ToBytes(payload);
     // Prefer explicit override → declared mime → magic-byte sniff → default.
     const mime = opts.contentType || mimeFromUrl || sniffMime(bytes) || DEFAULT_CT;
     return {

@@ -10,11 +10,14 @@
 // free — the engine never re-implements transport. Transport-level retry is
 // disabled per request (`retry: false`) because the engine owns its own poll
 // backoff.
+import { bytesToBase64 } from "../../core/_internal/base64";
+import { Observable } from "../../core/_internal/observable";
 import type { Core } from "../../core/core";
-import { cpkOf, matchesWhere, pkOf } from "../storage/backend-util";
+import { cpkOf, pkOf } from "../_kv/keys";
+import { matchesWhere } from "../_kv/query";
+import type { SyncedRecordFields } from "../_kv/records";
 import { isEpochMismatch, syncError } from "./errors";
 import { mergePatch } from "./merge";
-import { Observable } from "./observable";
 import { type SyncSnapshot, decodeSnapshot, encodeSnapshot } from "./snapshot";
 import type {
   SnapshotBackend,
@@ -61,19 +64,9 @@ export const defaultTiming: SyncTiming = {
 };
 
 // ─── Wire shapes (internal) ──────────────────────────────────────────────────
-interface WireRecord {
-  ns: string;
-  collection: string;
-  id: string;
-  metadata: Record<string, unknown>;
-  version: number;
-  deleted: boolean;
-  syncId: number;
-  createdAt: number;
-  updatedAt: number;
-  hasBlob: boolean;
-  blobEncoding?: string;
-}
+// A record as `/bootstrap` and `/delta` return it — the shared sync record
+// field set, verbatim.
+type WireRecord = SyncedRecordFields;
 interface BootstrapResponse {
   records: WireRecord[];
   cursor: string;
@@ -86,16 +79,6 @@ interface DeltaResponse {
 }
 interface ApplyResponse {
   results: SyncApplyResult[];
-}
-
-// ─── Byte → base64 (browser-safe; no node Buffer) ────────────────────────────
-function bytesToB64(bytes: Uint8Array): string {
-  let bin = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(bin);
 }
 
 function fromWire(rec: WireRecord): SyncRecord {
@@ -133,7 +116,7 @@ function toWireOp(op: SyncOp): Record<string, unknown> {
   if (op.delete !== undefined) w.delete = op.delete;
   if (op.blobHash !== undefined) w.blob_hash = op.blobHash;
   if (op.blobEncoding !== undefined) w.blob_encoding = op.blobEncoding;
-  if (op.bytes !== undefined) w.bytes = bytesToB64(op.bytes);
+  if (op.bytes !== undefined) w.bytes = bytesToBase64(op.bytes);
   return w;
 }
 

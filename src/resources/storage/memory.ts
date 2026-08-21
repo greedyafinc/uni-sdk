@@ -1,6 +1,7 @@
-// In-memory StorageBackend. Used by tests and as an explicit backend for
-// runtimes without IndexedDB. Not persistent — everything is lost on reload.
-import { applyQuery, cpkOf, pkOf, vpkOf } from "./backend-util";
+// In-memory StorageBackend. Used by tests and as an explicit opt-in backend
+// when no server is available. Not persistent — everything is lost on reload.
+import { cpkOf, pkOf, vpkOf } from "../_kv/keys";
+import { applyQuery } from "../_kv/query";
 import { storageError } from "./errors";
 import type {
   BackendQuery,
