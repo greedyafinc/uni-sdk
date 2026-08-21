@@ -125,13 +125,15 @@ describe("signOut() server-side revoke", () => {
     }
   });
 
-  test("UNIFIEDAI_REVOKE_URL env override is honored", async () => {
+  test("revokeUrl override via the EnvReader is honored", async () => {
+    // The environment override for the revoke endpoint flows through the
+    // injectable EnvReader (UNIFIEDAI_REVOKE_URL under the default reader —
+    // covered by the env unit tests). An injected reader's revokeUrl must win
+    // over the derive-from-tokenUrl fallback.
     const web1 = await startFakeWebAuth({ userId: USER, expectedClientId: CLIENT });
     const web2 = await startFakeWebAuth({ userId: USER, expectedClientId: CLIENT });
     const api = await startFakeApi();
     const keychain = new InMemoryKeychain();
-    const prev = process.env.UNIFIEDAI_REVOKE_URL;
-    process.env.UNIFIEDAI_REVOKE_URL = web2.revokeUrl;
     try {
       const sdk = new UnifiedAI({
         appId: CLIENT,
@@ -139,7 +141,13 @@ describe("signOut() server-side revoke", () => {
         tokenUrl: web1.tokenUrl,
         authorizeUrl: web1.authorizeUrl,
         keychain,
-        env: { read: () => ({ handoffPort: undefined, clientId: undefined }) },
+        env: {
+          read: () => ({
+            handoffPort: undefined,
+            clientId: undefined,
+            revokeUrl: web2.revokeUrl,
+          }),
+        },
         discovery: { read: async () => null },
         openUrl: async (url) => {
           await fetch(url, { redirect: "follow" });
@@ -150,7 +158,6 @@ describe("signOut() server-side revoke", () => {
       expect(web1.revokeCalls().length).toBe(0);
       expect(web2.revokeCalls().length).toBe(1);
     } finally {
-      process.env.UNIFIEDAI_REVOKE_URL = prev;
       await api.stop();
       await web1.stop();
       await web2.stop();

@@ -1,3 +1,5 @@
+import { coerceTimeoutMs, withTimeoutSignal } from "./fetch-timeout";
+
 export interface RevokeArgs {
   readonly revokeUrl: string;
   readonly clientId: string;
@@ -27,32 +29,17 @@ export async function revokeToken(args: RevokeArgs): Promise<void> {
   };
   if (args.tokenTypeHint) body.token_type_hint = args.tokenTypeHint;
 
-  const controller = new AbortController();
-  // Coerce defensively: 0, NaN, and negative values all degenerate to
-  // `setTimeout(_, 0)` (or 1ms), aborting the revoke before it can send.
-  // A caller passing env-var-derived `Number(process.env.X)` for an unset
-  // var would otherwise silently skip every revoke. Only finite positive
-  // numbers are honored; anything else falls back to the default.
-  const requested = args.timeoutMs;
-  const timeoutMs =
-    typeof requested === "number" && Number.isFinite(requested) && requested > 0
-      ? requested
-      : DEFAULT_REVOKE_TIMEOUT_MS;
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  // CLIs that fire-and-forget signOut shouldn't have process exit blocked by
-  // this timer; unref where supported.
-  (timer as { unref?: () => void }).unref?.();
   try {
-    await args.fetch(args.revokeUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
+    await withTimeoutSignal(coerceTimeoutMs(args.timeoutMs, DEFAULT_REVOKE_TIMEOUT_MS), (signal) =>
+      args.fetch(args.revokeUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+      }),
+    );
   } catch {
     // swallow network errors, AbortError, anything else
-  } finally {
-    clearTimeout(timer);
   }
 }
 

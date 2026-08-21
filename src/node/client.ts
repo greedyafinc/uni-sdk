@@ -1,8 +1,8 @@
+import { type LoopbackServer, type OpenUrl, runBrowserPkce } from "../auth/browser-sign-in";
 import type { TokenSet } from "../core/_internal/tokens";
 import { type UnifiedAIOptions as BaseOptions, UnifiedAI as BaseUnifiedAI } from "../core/client";
 import { UnifiedAIAuthError, UnifiedError } from "../core/errors";
 import type { Identity } from "../core/identity";
-import { type LoopbackServer, type OpenUrl, runBrowserPkce } from "./_internal/browser-auth";
 import { type DiscoveryReader, createDefaultDiscoveryReader } from "./_internal/discovery";
 import { type EnvReader, defaultEnvReader } from "./_internal/env";
 import { requestHandoff } from "./_internal/handoff";
@@ -15,6 +15,21 @@ import { deriveRevokeUrl, revokeToken } from "./_internal/revoke";
 const DEFAULT_AUTHORIZE_URL = "https://web.unifiedai.app/oauth/authorize";
 const DEFAULT_TOKEN_URL = "https://api.unifiedai.app/oauth/token";
 
+/**
+ * Rejection surfaced by bootstrap() when a concurrent signOut() invalidated
+ * the in-flight sign-in. Code "aborted" matches the SDK-wide "caller ended
+ * this operation" code (files/chunked uploads use the same one) — the sign-in
+ * itself didn't fail, the host deliberately ended the session mid-flow.
+ */
+function abortedSignInError(cause?: unknown): UnifiedError {
+  return new UnifiedError(
+    "aborted",
+    "sign-in aborted: signOut() was called while bootstrap was in flight",
+    undefined,
+    cause,
+  );
+}
+
 // Refresh this many seconds before the access token's expiry by default. One
 // minute gives an ample window for the refresh round-trip while keeping the
 // token live for in-flight requests.
@@ -25,10 +40,27 @@ const DEFAULT_REFRESH_SKEW_SECONDS = 60;
 // re-evaluate and reschedule the remainder.
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
-function envVar(name: string): string | undefined {
-  if (typeof process === "undefined" || !process.env) return undefined;
-  return process.env[name];
-}
+/**
+ * Structured observability event fired at each step of the node client's auth
+ * machinery: the bootstrap ladder (keychain → env handoff → discovery handoff
+ * → browser PKCE), token refresh, and sign-out. Events carry only minimal,
+ * non-sensitive fields — never token values.
+ */
+export type AuthEvent =
+  | { type: "keychain_lookup"; result: "hit" | "miss" | "unavailable" }
+  | { type: "handoff_attempt"; source: "env" | "discovery"; port: number }
+  | {
+      type: "handoff_result";
+      source: "env" | "discovery";
+      result: "success" | "unreachable" | "not_installed" | "error";
+    }
+  | { type: "browser_pkce_start" }
+  | { type: "refresh_start" }
+  | { type: "refresh_success" }
+  | { type: "refresh_failure"; code: string | undefined }
+  | { type: "sign_out" };
+
+export type AuthEventListener = (event: AuthEvent) => void;
 
 /**
  * Options for the node UnifiedAI client. Extends the browser-safe base with
@@ -53,11 +85,28 @@ export interface UnifiedAIOptions extends BaseOptions {
    */
   revokeTimeoutMs?: number;
   /**
+   * Deadline in milliseconds for the browser PKCE sign-in to complete (the
+   * time between opening the consent page and the OAuth redirect hitting the
+   * loopback listener). On timeout, bootstrap() rejects with `auth_timeout`
+   * and the loopback server is closed instead of waiting forever on a flow
+   * the user abandoned. Ignored when a custom `loopback` is supplied (the
+   * custom server owns its own deadline). Defaults to 5 minutes.
+   */
+  signInTimeoutMs?: number;
+  /**
    * Refresh the access token this many seconds before it expires, instead of
    * waiting for a 401. Set to `0` to disable proactive refresh entirely (the
    * reactive 401-retry path still applies). Defaults to 60.
    */
   refreshSkewSeconds?: number;
+  /**
+   * Observability hook for the auth machinery. Fired synchronously at each
+   * auth-ladder step (keychain lookup, handoff attempts, browser PKCE start),
+   * on token refresh start/success/failure, and on sign-out. Events never
+   * contain token values. A throwing listener is isolated — it cannot break
+   * auth. Use for telemetry and debugging "why did my CLI open a browser?".
+   */
+  onAuthEvent?: AuthEventListener;
 }
 
 /**
@@ -77,6 +126,15 @@ export class UnifiedAI extends BaseUnifiedAI {
   private readonly loopback: LoopbackServer;
   private readonly revokeTimeoutMs: number | undefined;
   private readonly refreshSkewSeconds: number;
+  private readonly onAuthEvent: AuthEventListener | undefined;
+  // Lazy auto-bootstrap gate. Armed for the life of the instance UNTIL either
+  // (a) a bootstrap succeeds — later token loss then means signOut or expiry,
+  // both of which require an explicit re-bootstrap under the pre-existing
+  // contract — or (b) signOut() runs (signed-out is terminal until an explicit
+  // bootstrap()). Gating on "never bootstrapped this instance" rather than
+  // "no tokens" is what keeps a signed-out client from silently re-opening a
+  // browser on its next request.
+  private autoBootstrapArmed = true;
   private bootstrapPromise: Promise<void> | undefined;
   private refreshPromise: Promise<TokenSet> | undefined;
   private proactiveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -91,18 +149,38 @@ export class UnifiedAI extends BaseUnifiedAI {
 
   constructor(options: UnifiedAIOptions = {}) {
     super(options);
-    this.authorizeUrl =
-      options.authorizeUrl ?? envVar("UNIFIEDAI_AUTHORIZE_URL") ?? DEFAULT_AUTHORIZE_URL;
-    this.tokenUrl = options.tokenUrl ?? envVar("UNIFIEDAI_TOKEN_URL") ?? DEFAULT_TOKEN_URL;
-    this.revokeUrl =
-      options.revokeUrl ?? envVar("UNIFIEDAI_REVOKE_URL") ?? deriveRevokeUrl(this.tokenUrl);
     this.env = options.env ?? defaultEnvReader;
+    // All environment-derived config flows through the (injectable) EnvReader.
+    // The default reader consults the same UNIFIEDAI_* variables as before, so
+    // default behavior is unchanged; hosts/tests can now inject overrides.
+    const envSnapshot = this.env.read();
+    this.authorizeUrl = options.authorizeUrl ?? envSnapshot.authorizeUrl ?? DEFAULT_AUTHORIZE_URL;
+    this.tokenUrl = options.tokenUrl ?? envSnapshot.tokenUrl ?? DEFAULT_TOKEN_URL;
+    this.revokeUrl = options.revokeUrl ?? envSnapshot.revokeUrl ?? deriveRevokeUrl(this.tokenUrl);
     this.discovery = options.discovery ?? createDefaultDiscoveryReader();
     this.keychain = options.keychain ?? createDefaultKeychain();
     this.openUrl = options.openUrl ?? defaultOpenUrl;
-    this.loopback = options.loopback ?? createNodeLoopback();
+    this.loopback =
+      options.loopback ??
+      createNodeLoopback(
+        options.signInTimeoutMs !== undefined ? { timeoutMs: options.signInTimeoutMs } : {},
+      );
     this.revokeTimeoutMs = options.revokeTimeoutMs;
     this.refreshSkewSeconds = options.refreshSkewSeconds ?? DEFAULT_REFRESH_SKEW_SECONDS;
+    this.onAuthEvent = options.onAuthEvent;
+  }
+
+  /**
+   * Deliver an auth event to the host's listener. A throwing listener is
+   * isolated — telemetry must never break the auth machinery.
+   */
+  private emitAuthEvent(event: AuthEvent): void {
+    if (!this.onAuthEvent) return;
+    try {
+      this.onAuthEvent(event);
+    } catch {
+      // Host listeners must not break auth.
+    }
   }
 
   // The node client always reaches the server — via trusted-token OR the OAuth
@@ -113,11 +191,43 @@ export class UnifiedAI extends BaseUnifiedAI {
     return true;
   }
 
+  /**
+   * Run the auth ladder (keychain → handoff → browser PKCE) and establish a
+   * session.
+   *
+   * Racing with signOut(): if the host calls signOut() while a bootstrap is
+   * still in flight (e.g. a browser PKCE consent page is open), the signOut
+   * wins — bootstrap() rejects with a UnifiedError of code `"aborted"`, the
+   * session stays `signed_out` (no `signedIn` event fires after the
+   * `signedOut` event), no tokens are kept in memory or in the keychain, and
+   * any token set minted mid-ladder is revoked server-side best-effort so the
+   * fresh refresh-token family isn't left live. Call bootstrap() again to
+   * sign back in deliberately.
+   */
   override bootstrap(): Promise<void> {
     if (this.options.token !== undefined) return Promise.resolve();
     if (!this.bootstrapPromise) {
-      this.bootstrapPromise = this.doBootstrap()
+      // Snapshot the generation at ladder START (mirrors ensureFreshToken's
+      // pre-network snapshot). A signOut() landing anywhere during the ladder
+      // bumps the generation; every terminal step below compares against this
+      // snapshot so a signed-out session is never resurrected by a
+      // late-completing sign-in.
+      const generationAtStart = this.sessionGeneration;
+      const p: Promise<void> = this.doBootstrap(generationAtStart)
         .then(() => {
+          // doBootstrap rejects on a mid-ladder signOut, but a signOut can
+          // still land in the microtask gap between its resolution and this
+          // handler. In that window the fresh tokens were already visible in
+          // this.tokens, so signOut's own snapshot/revoke/clear covered them —
+          // only the "signed in" announcement must be suppressed here.
+          if (this.sessionGeneration !== generationAtStart) {
+            throw abortedSignInError();
+          }
+          // A successful bootstrap consumes the lazy auto-bootstrap arming:
+          // any FUTURE tokenless state on this instance is the result of a
+          // signOut or an expiry, and both require an explicit bootstrap()
+          // (never a silent re-auth from the request path).
+          this.autoBootstrapArmed = false;
           // Establishing tokens — from the keychain cache, a handoff, or a
           // fresh PKCE flow — is "signed in" from this instance's view. Emit
           // once (bootstrap is single-flight) and arm the proactive timer.
@@ -130,9 +240,14 @@ export class UnifiedAI extends BaseUnifiedAI {
           }
         })
         .catch((err) => {
-          this.bootstrapPromise = undefined;
+          // Only clear our own registration: a mid-flight signOut already set
+          // bootstrapPromise to undefined, and a subsequent explicit
+          // bootstrap() may have installed a NEW promise that this stale
+          // rejection must not evict from the single-flight slot.
+          if (this.bootstrapPromise === p) this.bootstrapPromise = undefined;
           throw err;
         });
+      this.bootstrapPromise = p;
     }
     return this.bootstrapPromise;
   }
@@ -156,6 +271,11 @@ export class UnifiedAI extends BaseUnifiedAI {
       // to clear. Fall through to the base no-op for consistency.
       return super.signOut();
     }
+    // Signed-out is terminal for lazy auto-bootstrap: after an explicit
+    // signOut, the request path must never silently re-trigger sign-in (which
+    // could open a browser). Only an explicit bootstrap() re-authenticates.
+    this.autoBootstrapArmed = false;
+    this.emitAuthEvent({ type: "sign_out" });
     let clientId: string | undefined;
     try {
       clientId = this.resolveClientId();
@@ -264,6 +384,18 @@ export class UnifiedAI extends BaseUnifiedAI {
 
   protected override async getInitialAccessToken(): Promise<string> {
     if (this.options.token !== undefined) return super.getInitialAccessToken();
+    if (!this.tokens && this.autoBootstrapArmed) {
+      // Lazy auto-bootstrap: a fresh OAuth-mode instance runs the full ladder
+      // (keychain → handoff → browser PKCE — the last CAN open a browser, as
+      // an explicit bootstrap() would) on its first request instead of
+      // throwing not_bootstrapped. Concurrent first requests share the
+      // single-flight bootstrapPromise, so the ladder runs at most once. A
+      // failed attempt leaves the gate armed — the next request retries,
+      // mirroring explicit-bootstrap retry semantics. Once this instance has
+      // bootstrapped (or signed out), the gate closes and a tokenless state
+      // throws not_bootstrapped exactly as before.
+      await this.bootstrap();
+    }
     if (!this.tokens) {
       throw new UnifiedError("not_bootstrapped", "call bootstrap() before making requests");
     }
@@ -277,7 +409,9 @@ export class UnifiedAI extends BaseUnifiedAI {
   }
 
   protected override async onAuthFailure(): Promise<void> {
-    if (this.options.token !== undefined) return; // trusted-token: nothing local to clear
+    // Trusted-token: nothing local to clear, but the base hook still marks
+    // the session expired so onChange observers learn auth is dead.
+    if (this.options.token !== undefined) return super.onAuthFailure();
     // Prefer the live token's client_id; fall back to the cached id from the
     // last successful persist() so we still clear the keychain when tokens
     // were nulled out by a racing signOut between the 401 and this hook.
@@ -306,6 +440,7 @@ export class UnifiedAI extends BaseUnifiedAI {
     // refresh after the fact — without this guard, the .then(persist) below
     // would re-write valid tokens onto an instance the user already cleared.
     const generationAtStart = this.sessionGeneration;
+    this.emitAuthEvent({ type: "refresh_start" });
     const p = refreshTokens({
       tokenUrl: this.tokenUrl,
       clientId: current.client_id,
@@ -318,10 +453,18 @@ export class UnifiedAI extends BaseUnifiedAI {
         // resulting `expired` event comes later from onAuthFailure. The
         // generation-guard rejection below is NOT a refresh failure, so it's
         // intentionally outside this catch.
+        this.emitAuthEvent({
+          type: "refresh_failure",
+          code: err instanceof UnifiedError ? err.code : undefined,
+        });
         this.session.emitError(err);
         throw err;
       })
       .then(async (next) => {
+        // The network refresh itself succeeded — emit before the generation
+        // guard so observability reflects the wire outcome even when a racing
+        // signOut discards the result.
+        this.emitAuthEvent({ type: "refresh_success" });
         if (this.sessionGeneration !== generationAtStart) {
           // signOut (or some other clearLocalSession) ran while we were
           // refreshing. Don't restore tokens or write to the keychain;
@@ -331,7 +474,7 @@ export class UnifiedAI extends BaseUnifiedAI {
             "session was cleared while refresh was in flight",
           );
         }
-        await this.persist(next.client_id, next);
+        await this.persist(next.client_id, next, generationAtStart);
         // persist() guards a narrower window: a signOut landing DURING
         // keychain.set rolls back the just-written tokens. If that happened,
         // don't announce a refresh on a session the user already ended.
@@ -380,34 +523,66 @@ export class UnifiedAI extends BaseUnifiedAI {
     }
   }
 
-  private async doBootstrap(): Promise<void> {
+  /**
+   * The auth ladder. `generationAtStart` is the sessionGeneration snapshot
+   * taken by bootstrap() before the ladder's first await; every step that
+   * installs tokens re-checks it so a concurrent signOut() aborts the ladder
+   * instead of being silently resurrected.
+   */
+  private async doBootstrap(generationAtStart: number): Promise<void> {
     const clientId = this.resolveClientId();
 
-    const cached = await this.keychain.get(clientId);
+    // An unavailable keychain (headless CI, Linux without Secret Service,
+    // missing prebuilt binary) is a cache miss, not a fatal error — the rest
+    // of the ladder (handoff → browser PKCE) works fine with in-memory
+    // tokens, and persist()/clearLocalSession already tolerate the same
+    // failure on their write paths. Any other keychain error still propagates.
+    let cached: TokenSet | null = null;
+    let lookup: "hit" | "miss" | "unavailable";
+    try {
+      cached = await this.keychain.get(clientId);
+      lookup = cached ? "hit" : "miss";
+    } catch (err) {
+      if (err instanceof UnifiedError && err.code === "keychain_unavailable") {
+        lookup = "unavailable";
+      } else {
+        throw err;
+      }
+    }
+    this.emitAuthEvent({ type: "keychain_lookup", result: lookup });
     if (cached) {
+      if (this.sessionGeneration !== generationAtStart) {
+        // signOut ran while keychain.get was resolving. It owns this token
+        // family (its snapshot falls back to the keychain when in-memory
+        // tokens are absent), so revoke is signOut's job here — just refuse
+        // to install the cached set on the signed-out instance.
+        throw abortedSignInError();
+      }
       this.tokens = cached;
       this.lastClientId = clientId;
       return;
     }
 
     const envSnapshot = this.env.read();
+    const handoffToken = envSnapshot.handoffToken;
     if (envSnapshot.handoffPort !== undefined) {
-      const tokens = await this.tryHandoff(envSnapshot.handoffPort, clientId);
+      const tokens = await this.tryHandoff(envSnapshot.handoffPort, clientId, "env", handoffToken);
       if (tokens) {
-        await this.persist(clientId, tokens);
+        await this.persistBootstrapTokens(clientId, tokens, generationAtStart);
         return;
       }
     }
 
     const disc = await this.discovery.read();
     if (disc) {
-      const tokens = await this.tryHandoff(disc.port, clientId);
+      const tokens = await this.tryHandoff(disc.port, clientId, "discovery", handoffToken);
       if (tokens) {
-        await this.persist(clientId, tokens);
+        await this.persistBootstrapTokens(clientId, tokens, generationAtStart);
         return;
       }
     }
 
+    this.emitAuthEvent({ type: "browser_pkce_start" });
     const tokens = await runBrowserPkce({
       clientId,
       authorizeUrl: this.authorizeUrl,
@@ -416,7 +591,63 @@ export class UnifiedAI extends BaseUnifiedAI {
       openUrl: this.openUrl,
       loopback: this.loopback,
     });
-    await this.persist(clientId, tokens);
+    await this.persistBootstrapTokens(clientId, tokens, generationAtStart);
+  }
+
+  /**
+   * Persist a token set minted mid-ladder (handoff or browser PKCE), honoring
+   * a concurrent signOut(). Unlike the keychain-cached path, these tokens are
+   * a NEW refresh-token family the racing signOut could not have snapshotted —
+   * so when the generation moved during the ladder, persist() has rolled the
+   * write back and we additionally revoke the fresh family server-side
+   * (best-effort, mirroring signOut) before rejecting with `aborted`.
+   */
+  private async persistBootstrapTokens(
+    clientId: string,
+    tokens: TokenSet,
+    generationAtStart: number,
+  ): Promise<void> {
+    try {
+      await this.persist(clientId, tokens, generationAtStart);
+    } catch (err) {
+      if (this.sessionGeneration !== generationAtStart) {
+        // keychain.set failed AND a signOut raced us. The abort is the
+        // semantically dominant outcome — clean up in-memory state that the
+        // throwing persist may have left behind, revoke the orphaned family,
+        // and surface the abort (keychain failure attached as cause).
+        this.tokens = undefined;
+        this.lastClientId = undefined;
+        await this.revokeAbandonedTokens(tokens);
+        throw abortedSignInError(err);
+      }
+      throw err;
+    }
+    if (this.sessionGeneration !== generationAtStart) {
+      await this.revokeAbandonedTokens(tokens);
+      throw abortedSignInError();
+    }
+  }
+
+  /**
+   * Best-effort server-side revoke of a token set that was minted during a
+   * bootstrap ladder a concurrent signOut() invalidated. Mirrors signOut's
+   * revoke call (same endpoint, bounded by revokeTimeoutMs) so the
+   * freshly-created refresh-token family isn't left live. Never throws.
+   */
+  private async revokeAbandonedTokens(tokens: TokenSet): Promise<void> {
+    try {
+      await revokeToken({
+        revokeUrl: this.revokeUrl,
+        clientId: tokens.client_id,
+        token: tokens.refresh_token,
+        tokenTypeHint: "refresh_token",
+        fetch: this.options.fetch,
+        ...(this.revokeTimeoutMs !== undefined ? { timeoutMs: this.revokeTimeoutMs } : {}),
+      });
+    } catch {
+      // revokeToken is contracted never to throw; defend against custom fetch
+      // adapters anyway — an abort cleanup must not mask the abort itself.
+    }
   }
 
   private resolveClientId(): string {
@@ -430,45 +661,101 @@ export class UnifiedAI extends BaseUnifiedAI {
     );
   }
 
-  private async tryHandoff(port: number, clientId: string): Promise<TokenSet | null> {
+  /**
+   * Attempt a token handoff against a local broker port. Returns null to fall
+   * through to the next bootstrap ladder step; throws to abort bootstrap.
+   *
+   * requestHandoff produces exactly two error codes:
+   *
+   * - `handoff_unreachable` — network failure, timeout, malformed payload, or
+   *   any non-404 HTTP error (including a broker refusing the request). Always
+   *   fall-through-able: there is no live, cooperating broker on this port.
+   * - `app_not_installed` — the endpoint answered 404. How much that means
+   *   depends on where the port came from, hence `source`:
+   *     - `"env"`: the desktop app injected UNIFIEDAI_HANDOFF_PORT into this
+   *       exact child process, so the 404 came from the real, live broker and
+   *       is authoritative — this app genuinely isn't installed. Abort so the
+   *       caller sees the real problem instead of a surprise browser prompt.
+   *     - `"discovery"`: the port came from a JSON file on disk that can
+   *       outlive the desktop app; an unrelated local server that recycled
+   *       the port also answers 404. Not authoritative — treat it like
+   *       unreachable and fall through to browser PKCE.
+   */
+  private async tryHandoff(
+    port: number,
+    clientId: string,
+    source: "env" | "discovery",
+    handoffToken: string | undefined,
+  ): Promise<TokenSet | null> {
+    this.emitAuthEvent({ type: "handoff_attempt", source, port });
     try {
-      return await requestHandoff({ port, clientId, fetch: this.options.fetch });
+      const tokens = await requestHandoff({
+        port,
+        clientId,
+        fetch: this.options.fetch,
+        ...(handoffToken !== undefined ? { handoffToken } : {}),
+      });
+      this.emitAuthEvent({ type: "handoff_result", source, result: "success" });
+      return tokens;
     } catch (err) {
       if (err instanceof UnifiedError && err.code === "handoff_unreachable") {
+        this.emitAuthEvent({ type: "handoff_result", source, result: "unreachable" });
         return null;
       }
+      if (err instanceof UnifiedError && err.code === "app_not_installed") {
+        this.emitAuthEvent({ type: "handoff_result", source, result: "not_installed" });
+        // Authoritative only for source "env" (see the doc comment above);
+        // a stale discovery port answering 404 falls through instead.
+        if (source === "discovery") return null;
+        throw err;
+      }
+      this.emitAuthEvent({ type: "handoff_result", source, result: "error" });
       throw err;
     }
   }
 
-  private async persist(clientId: string, tokens: TokenSet): Promise<void> {
-    // Snapshot the generation so we can detect a signOut that races with
-    // keychain.set's underlying I/O. The check at the start of
-    // ensureFreshToken's .then guards the common case; this second check
-    // catches the narrower window where signOut runs DURING this method
-    // (between the synchronous assignments below and keychain.set's await).
-    const generationAtStart = this.sessionGeneration;
+  /**
+   * Install a token set in memory and the keychain, unless a signOut has
+   * moved the session generation past `generationAtStart` — in which case
+   * both writes are rolled back. Callers supply the generation snapshot taken
+   * at the START of their flow (the bootstrap ladder or the refresh network
+   * call), not at persist entry: snapshotting here would miss a signOut that
+   * landed earlier in the flow, silently resurrecting a session the user
+   * already ended.
+   */
+  private async persist(
+    clientId: string,
+    tokens: TokenSet,
+    generationAtStart: number,
+  ): Promise<void> {
     this.tokens = tokens;
     this.lastClientId = clientId;
+    // Track whether anything reached the keychain so the rollback below can
+    // skip a pointless clear when the keychain was unavailable — but the
+    // in-memory rollback must run in BOTH cases.
+    let wroteKeychain = true;
     try {
       await this.keychain.set(clientId, tokens);
     } catch (err) {
       if (err instanceof UnifiedError && err.code === "keychain_unavailable") {
-        return;
+        wroteKeychain = false;
+      } else {
+        throw err;
       }
-      throw err;
     }
     if (this.sessionGeneration !== generationAtStart) {
-      // signOut (or some other clearLocalSession) ran while keychain.set was
-      // resolving. Roll back both the in-memory and on-disk writes so we
-      // don't end up with a freshly-persisted token family that the user
-      // explicitly cleared. Best-effort: keychain.clear errors are swallowed.
+      // signOut (or some other clearLocalSession) ran during this flow. Roll
+      // back both the in-memory and on-disk writes so we don't end up with a
+      // freshly-persisted token family that the user explicitly cleared.
+      // Best-effort: keychain.clear errors are swallowed.
       this.tokens = undefined;
       this.lastClientId = undefined;
-      try {
-        await this.keychain.clear(clientId);
-      } catch {
-        // ignore — clearLocalSession will have already attempted its own clear
+      if (wroteKeychain) {
+        try {
+          await this.keychain.clear(clientId);
+        } catch {
+          // ignore — clearLocalSession will have already attempted its own clear
+        }
       }
     }
   }

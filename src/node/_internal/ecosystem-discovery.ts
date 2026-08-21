@@ -1,6 +1,6 @@
-import { readFile } from "node:fs/promises";
-import { homedir, platform } from "node:os";
 import { join } from "node:path";
+import { defaultDiscoveryDir, readDiscoveryJson } from "./discovery-file";
+import { withTimeoutSignal } from "./fetch-timeout";
 
 // Local-first discovery of the LOCAL Ecosystem API hosting, per PROTOCOL.md
 // "Local ecosystem hosting & discovery". Mirrors discovery.ts (the auth handoff
@@ -24,22 +24,14 @@ export interface LocalEcosystem {
 }
 
 export function defaultEcosystemDiscoveryPath(): string {
-  if (platform() === "win32") {
-    const appData = process.env.APPDATA ?? join(homedir(), "AppData", "Roaming");
-    return join(appData, "UnifiedAI", "ecosystem.json");
-  }
-  return join(homedir(), ".unifiedai", "ecosystem.json");
+  return join(defaultDiscoveryDir(), "ecosystem.json");
 }
 
-async function readRecord(path: string): Promise<EcosystemDiscoveryRecord | null> {
-  try {
-    const raw = await readFile(path, "utf8");
-    const parsed = JSON.parse(raw) as Partial<EcosystemDiscoveryRecord>;
-    if (typeof parsed.url !== "string" || typeof parsed.token !== "string") return null;
-    return parsed as EcosystemDiscoveryRecord;
-  } catch {
-    return null;
-  }
+function readRecord(path: string): Promise<EcosystemDiscoveryRecord | null> {
+  return readDiscoveryJson<EcosystemDiscoveryRecord>(path, (parsed) => {
+    const p = parsed as Partial<EcosystemDiscoveryRecord> | null;
+    return typeof p?.url === "string" && typeof p?.token === "string";
+  });
 }
 
 export interface DiscoverOptions {
@@ -58,21 +50,19 @@ async function enrollLocal(
   oauthToken: string,
   timeoutMs: number,
 ): Promise<string | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${baseUrl}/enroll`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${oauthToken}` },
-      signal: controller.signal,
+    return await withTimeoutSignal(timeoutMs, async (signal) => {
+      const res = await fetch(`${baseUrl}/enroll`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${oauthToken}` },
+        signal,
+      });
+      if (!res.ok) return null;
+      const body = (await res.json()) as { token?: string };
+      return typeof body.token === "string" ? body.token : null;
     });
-    if (!res.ok) return null;
-    const body = (await res.json()) as { token?: string };
-    return typeof body.token === "string" ? body.token : null;
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -101,22 +91,20 @@ export async function discoverLocalEcosystem(
   const record = await readRecord(opts.path ?? defaultEcosystemDiscoveryPath());
   if (!record) return null;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 500);
   try {
-    const res = await fetch(`${record.url}/health`, { signal: controller.signal });
-    if (!res.ok) return null;
-    const body = (await res.json()) as { service?: string };
-    if (body?.service !== "ecosystem") return null;
-    // Class-4: upgrade the powerless anonymous discovery token to a scoped one.
-    if (opts.oauthToken) {
-      const scoped = await enrollLocal(record.url, opts.oauthToken, opts.timeoutMs ?? 500);
-      if (scoped) return { baseUrl: record.url, token: scoped };
-    }
-    return { baseUrl: record.url, token: record.token };
+    return await withTimeoutSignal(opts.timeoutMs ?? 500, async (signal) => {
+      const res = await fetch(`${record.url}/health`, { signal });
+      if (!res.ok) return null;
+      const body = (await res.json()) as { service?: string };
+      if (body?.service !== "ecosystem") return null;
+      // Class-4: upgrade the powerless anonymous discovery token to a scoped one.
+      if (opts.oauthToken) {
+        const scoped = await enrollLocal(record.url, opts.oauthToken, opts.timeoutMs ?? 500);
+        if (scoped) return { baseUrl: record.url, token: scoped };
+      }
+      return { baseUrl: record.url, token: record.token };
+    });
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }

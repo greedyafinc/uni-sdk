@@ -1,3 +1,5 @@
+import { bytesToBase64Url } from "./base64";
+
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
 
 function randomString(len: number): string {
@@ -22,11 +24,5 @@ export function generateState(): string {
 export async function challengeFor(verifier: string): Promise<string> {
   const data = new TextEncoder().encode(verifier);
   const digest = await crypto.subtle.digest("SHA-256", data);
-  return base64url(new Uint8Array(digest));
-}
-
-function base64url(bytes: Uint8Array): string {
-  let s = "";
-  for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  return bytesToBase64Url(new Uint8Array(digest));
 }
