@@ -14,6 +14,16 @@ describe("getProviderLogo", () => {
     expect(getProviderLogo({ model_author: { name: "Meta" } })).toBe(fromString);
     expect(getProviderLogo({ owned_by: "Meta" })).toBe(fromString);
   });
+  test("maps the Claude Code provider surface onto the Claude mark", () => {
+    const claude = getProviderLogo("Claude");
+    expect(claude).not.toBe(getProviderLogo(null));
+    // The catalog author string clients display and group by, in every shape.
+    expect(getProviderLogo("Claude Code")).toBe(claude);
+    expect(getProviderLogo({ author: "Claude Code" })).toBe(claude);
+    expect(getProviderLogo({ owned_by: "claude-code" })).toBe(claude);
+    // No -dark variant exists, so dark resolves to the same (visible) mark.
+    expect(getProviderLogo("Claude Code", "dark")).toBe(claude);
+  });
   test("falls back to a data-URI for unknown / null input", () => {
     expect(getProviderLogo(null).startsWith("data:")).toBe(true);
     expect(getProviderLogo("totally-unknown-provider").startsWith("data:")).toBe(true);

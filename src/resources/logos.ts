@@ -36,9 +36,25 @@ function hasSlug(slug: string): slug is LogoSlug {
   return slug in LOGO_DATA_URIS;
 }
 
+/**
+ * Provider names that share another provider's brand mark. Keys are already
+ * normalized (lowercased, whitespace and dots stripped).
+ *
+ * "Claude Code" is its own provider surface in a catalog — a local CLI running on
+ * the user's own subscription, listed apart from gateway Anthropic models — but it
+ * carries the Claude mark, and clients group by the author string they display.
+ */
+const SLUG_ALIASES: Record<string, string> = {
+  // Both spellings: normalization strips whitespace but not hyphens, so the
+  // display name ("Claude Code") and the slug (`owned_by: "claude-code"`) differ.
+  claudecode: "claude",
+  "claude-code": "claude",
+};
+
 function resolveSlug(input: ProviderLogoInput, theme: LogoTheme): LogoSlug {
-  const key = normalizeKey(input);
-  if (!key) return FALLBACK_SLUG;
+  const normalized = normalizeKey(input);
+  if (!normalized) return FALLBACK_SLUG;
+  const key = SLUG_ALIASES[normalized] ?? normalized;
   if (theme === "dark") {
     const dark = `${key}-dark`;
     if (hasSlug(dark)) return dark;
