@@ -10,13 +10,16 @@
 // them content-addressed in private Storage and returns them base64 too;
 // responses are object-enveloped so a raw blob string never breaks JSON parsing.
 import { base64ToBytes, bytesToBase64 } from "../../core/_internal/base64";
-import type { Core } from "../../core/core";
+import type { Core, RequestOptions } from "../../core/core";
+import { throwIfAborted } from "./errors";
 import type {
+  BackendPage,
   BackendQuery,
   BackendRecord,
   BackendVersion,
   PutReq,
   StorageBackend,
+  StorageCallOptions,
   StoredRef,
 } from "./types";
 
@@ -25,8 +28,13 @@ export class CloudStorageBackend implements StorageBackend {
 
   constructor(private readonly client: Core) {}
 
-  private post<T>(path: string, body: unknown): Promise<T> {
-    return this.client.request<T>(`/api/v1/storage${path}`, { method: "POST", body });
+  private post<T>(path: string, body: unknown, opts?: StorageCallOptions): Promise<T> {
+    const req: RequestOptions = { method: "POST", body };
+    // `exactOptionalPropertyTypes` rejects assigning a possibly-`undefined`
+    // value to an optional property, hence the conditional form rather than
+    // `req.signal = opts?.signal`.
+    if (opts?.signal) req.signal = opts.signal;
+    return this.client.request<T>(`/api/v1/storage${path}`, req);
   }
 
   available(): boolean {
@@ -51,26 +59,53 @@ export class CloudStorageBackend implements StorageBackend {
     });
   }
 
-  async get(ns: string, collection: string, id: string): Promise<BackendRecord | null> {
-    const { record } = await this.post<{ record: BackendRecord | null }>("/get", {
-      ns,
-      collection,
-      id,
-    });
+  async get(
+    ns: string,
+    collection: string,
+    id: string,
+    opts?: StorageCallOptions,
+  ): Promise<BackendRecord | null> {
+    const { record } = await this.post<{ record: BackendRecord | null }>(
+      "/get",
+      { ns, collection, id },
+      opts,
+    );
     return record;
   }
 
-  async query(ns: string, collection: string, query: BackendQuery): Promise<BackendRecord[]> {
-    const { records } = await this.post<{ records: BackendRecord[] }>("/query", {
-      ns,
-      collection,
-      query,
-    });
-    return records;
+  // `/query-v2` is the SQL-pushed-down path: `where` becomes PostgREST filters
+  // and paging is a keyset cursor. The legacy `/query` selected the whole
+  // (user, ns, collection) slice and filtered it in JS — it is deliberately no
+  // longer called from anywhere in this SDK.
+  query(
+    ns: string,
+    collection: string,
+    query: BackendQuery,
+    opts?: StorageCallOptions,
+  ): Promise<BackendPage> {
+    return this.post<BackendPage>("/query-v2", { ns, collection, query }, opts);
   }
 
-  async count(ns: string, collection: string, query: BackendQuery): Promise<number> {
-    const { count } = await this.post<{ count: number }>("/count", { ns, collection, query });
+  /**
+   * `/count-v2` shares `/query-v2`'s exact where-compilation, so every
+   * operator (including `match`) counts consistently with `query()` — in a
+   * single request. It rejects `limit`/`after` (a page-scoped count would be
+   * a wrong answer dressed as a right one), so those are stripped here even
+   * though callers shouldn't be passing them for a count.
+   */
+  async count(
+    ns: string,
+    collection: string,
+    query: BackendQuery,
+    opts?: StorageCallOptions,
+  ): Promise<number> {
+    throwIfAborted(opts?.signal, `count on "${collection}"`);
+    const { limit: _limit, after: _after, ...rest } = query;
+    const { count } = await this.post<{ count: number }>(
+      "/count-v2",
+      { ns, collection, query: rest },
+      opts,
+    );
     return count;
   }
 
@@ -79,12 +114,17 @@ export class CloudStorageBackend implements StorageBackend {
     return deleted;
   }
 
-  async readBlob(ns: string, collection: string, id: string): Promise<Uint8Array | null> {
-    const { blobB64 } = await this.post<{ blobB64: string | null }>("/read-blob", {
-      ns,
-      collection,
-      id,
-    });
+  async readBlob(
+    ns: string,
+    collection: string,
+    id: string,
+    opts?: StorageCallOptions,
+  ): Promise<Uint8Array | null> {
+    const { blobB64 } = await this.post<{ blobB64: string | null }>(
+      "/read-blob",
+      { ns, collection, id },
+      opts,
+    );
     return blobB64 ? base64ToBytes(blobB64) : null;
   }
 

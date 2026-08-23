@@ -3,24 +3,33 @@
 export { Storage } from "./storage";
 export { CloudStorageBackend } from "./cloud";
 export { MemoryBackend } from "./memory";
-export { storageError } from "./errors";
+export { storageAbortError, storageError } from "./errors";
 export type { StorageErrorCode } from "./errors";
 export type {
+  BackendPage,
   BackendQuery,
   BackendRecord,
   BackendSchema,
   BackendVersion,
+  BackendWhere,
   BlobEncoding,
   Collection,
   CollectionSchema,
   Namespace,
   NamespaceMode,
   NamespaceOptions,
+  OrderBy,
+  OrderType,
+  Page,
+  Predicate,
+  PredicateOps,
   PutReq,
   Query,
   SortOrder,
   StorageBackend,
+  StorageCallOptions,
   StorageRecord,
   StoredRef,
   VersionMeta,
+  WhereOp,
 } from "./types";

@@ -14,7 +14,6 @@ import { bytesToBase64 } from "../../core/_internal/base64";
 import { Observable } from "../../core/_internal/observable";
 import type { Core } from "../../core/core";
 import { cpkOf, pkOf } from "../_kv/keys";
-import { matchesWhere } from "../_kv/query";
 import type { SyncedRecordFields } from "../_kv/records";
 import { isEpochMismatch, syncError } from "./errors";
 import { mergePatch } from "./merge";
@@ -99,6 +98,24 @@ function fromWire(rec: WireRecord): SyncRecord {
 
 function cloneRecord(rec: SyncRecord): SyncRecord {
   return { ...rec, metadata: { ...rec.metadata } };
+}
+
+/**
+ * Equality-only `where` matching for the local materialized view (`collection().list()`
+ * above). Every `where` field must strict-equal the record's metadata field. This is a
+ * purely local, in-memory read model with a much smaller filter contract than
+ * `sdk.storage`'s predicates (which are compiled and pushed down to SQL), so it keeps
+ * plain JS strict-equality semantics on purpose rather than mirroring Postgres semantics.
+ */
+function matchesEquality(
+  metadata: Record<string, unknown>,
+  where: Record<string, unknown> | undefined,
+): boolean {
+  if (!where) return true;
+  for (const k of Object.keys(where)) {
+    if (metadata[k] !== where[k]) return false;
+  }
+  return true;
 }
 
 function toWireOp(op: SyncOp): Record<string, unknown> {
@@ -220,7 +237,7 @@ export class WorkspaceSync {
       list: (filter?: SyncListFilter): SyncRecord[] => {
         const rows = this.listCollection(ns, collection).map(cloneRecord);
         const where = filter?.where;
-        return where ? rows.filter((r) => matchesWhere(r.metadata, where)) : rows;
+        return where ? rows.filter((r) => matchesEquality(r.metadata, where)) : rows;
       },
       subscribe: (listener: () => void): (() => void) => {
         let set = this.collectionListeners.get(cpk);

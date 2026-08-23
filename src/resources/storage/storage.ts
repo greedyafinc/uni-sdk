@@ -13,7 +13,8 @@ import {
   requireAvailableBackend,
 } from "../_kv/namespace";
 import { CloudStorageBackend } from "./cloud";
-import { storageError } from "./errors";
+import { storageError, throwIfAborted } from "./errors";
+import { MAX_PAGE, compileWhere } from "./predicate";
 import type {
   BackendQuery,
   BackendRecord,
@@ -23,9 +24,12 @@ import type {
   Namespace,
   NamespaceMode,
   NamespaceOptions,
+  OrderType,
+  Page,
   PutReq,
   Query,
   StorageBackend,
+  StorageCallOptions,
   StorageRecord,
   StoredRef,
   VersionMeta,
@@ -33,6 +37,14 @@ import type {
 
 const utf8Encoder = new TextEncoder();
 const utf8Decoder = new TextDecoder();
+
+/**
+ * Safety net for the unbounded `query()` scan. The server caps a page at 1000
+ * rows, so this bounds one call at 100k. Hitting it means the caller wanted a
+ * `limit` (or `page()`) and didn't say so — fail loudly rather than quietly
+ * hammering the API.
+ */
+const MAX_SCAN_PAGES = 100;
 
 function encodeBlob(raw: unknown): { bytes: Uint8Array; encoding: BlobEncoding } {
   if (typeof raw === "string") return { bytes: utf8Encoder.encode(raw), encoding: "utf8" };
@@ -107,7 +119,15 @@ class CollectionImpl<T extends StorageRecord> implements Collection<T> {
     return out as T;
   }
 
+  /** Declared cast for a sort field. Range predicates infer theirs from the
+   * operand; `orderBy` has none, so it comes from the schema (default text). */
+  private fieldType(field: string): OrderType {
+    const declared = (this.schema.fieldTypes as Record<string, OrderType> | undefined)?.[field];
+    return declared ?? "text";
+  }
+
   private toBackendQuery(q: Query<T>): BackendQuery {
+    const orderField = typeof q.orderBy === "string" ? q.orderBy : q.orderBy?.field;
     // The blob field is stored out-of-line and is absent from the queryable
     // metadata, so filtering/ordering by it can never match. Fail loud instead
     // of silently returning an empty set.
@@ -115,17 +135,44 @@ class CollectionImpl<T extends StorageRecord> implements Collection<T> {
       if (q.where && this.blobField in q.where) {
         throw storageError("invalid_input", `cannot filter on blob field "${this.blobField}"`);
       }
-      if (q.orderBy === this.blobField) {
+      if (orderField === this.blobField) {
         throw storageError("invalid_input", `cannot order by blob field "${this.blobField}"`);
       }
     }
     const out: BackendQuery = {};
-    if (q.where) out.where = q.where as Record<string, unknown>;
-    if (q.orderBy) out.orderBy = q.orderBy;
-    if (q.order) out.order = q.order;
+    const where = compileWhere<T>(q.where);
+    if (where.length > 0) out.where = where;
+    if (orderField) {
+      const explicit = typeof q.orderBy === "string" ? undefined : q.orderBy;
+      out.orderBy = {
+        field: orderField,
+        type: explicit?.type ?? this.fieldType(orderField),
+        dir: explicit?.dir ?? q.order ?? "asc",
+      };
+    }
     if (q.limit !== undefined) out.limit = q.limit;
-    if (q.offset !== undefined) out.offset = q.offset;
+    if (q.after !== undefined) out.after = q.after;
     return out;
+  }
+
+  /**
+   * Runs `run()` under an abort guard: pre-checks `signal` (redundant with the
+   * caller's own pre-check, but this is also what re-checks the signal at the
+   * top of every pagination loop iteration), then on failure prefers the
+   * abort reason over whatever error the interrupted call itself raised.
+   */
+  private async abortable<R>(
+    signal: AbortSignal | undefined,
+    what: string,
+    run: () => Promise<R>,
+  ): Promise<R> {
+    throwIfAborted(signal, what);
+    try {
+      return await run();
+    } catch (err) {
+      throwIfAborted(signal, what, err);
+      throw err;
+    }
   }
 
   async put(value: T): Promise<StoredRef> {
@@ -156,29 +203,102 @@ class CollectionImpl<T extends StorageRecord> implements Collection<T> {
     return backend.put(req);
   }
 
-  async get(id: string): Promise<T | null> {
+  async get(id: string, opts: StorageCallOptions = {}): Promise<T | null> {
+    const signal = opts.signal;
+    const what = `get on "${this.name}"`;
     const backend = this.requireBackend();
+    throwIfAborted(signal, what);
     await this.ensure(backend);
-    const rec = await backend.get(this.ns, this.name, id);
+    const call = signal ? { signal } : undefined;
+    const rec = await this.abortable(signal, what, () => backend.get(this.ns, this.name, id, call));
     if (!rec) return null;
     const blob =
-      this.blobField && rec.hasBlob ? await backend.readBlob(this.ns, this.name, id) : null;
+      this.blobField && rec.hasBlob
+        ? await this.abortable(signal, what, () => backend.readBlob(this.ns, this.name, id, call))
+        : null;
     return this.hydrate(rec, blob);
   }
 
   async query(q: Query<T> = {}): Promise<T[]> {
+    const signal = q.signal;
+    const what = `query on "${this.name}"`;
     const backend = this.requireBackend();
+    throwIfAborted(signal, what);
     await this.ensure(backend);
-    const recs = await backend.query(this.ns, this.name, this.toBackendQuery(q));
+    const bq = this.toBackendQuery(q);
+    const call = signal ? { signal } : undefined;
+    // The wire query is PAGED (keyset), but `query()`'s contract is "every
+    // match". Walk the cursor here so callers keep the simple array they had
+    // before the pushdown — a bare `query()` must not silently truncate at the
+    // server's default page size.
+    const want = q.limit;
+    const rows: BackendRecord[] = [];
+    let after = bq.after;
+    let seen: string | undefined;
+    for (let pages = 0; ; pages++) {
+      const remaining = want === undefined ? MAX_PAGE : want - rows.length;
+      if (remaining <= 0) break;
+      // Re-checked at the top of every loop iteration via `abortable`'s
+      // pre-check — this is what stops the walk BETWEEN pages, not just before
+      // the first one.
+      const page = await this.abortable(signal, what, () =>
+        backend.query(
+          this.ns,
+          this.name,
+          {
+            ...bq,
+            limit: Math.min(MAX_PAGE, remaining),
+            ...(after === undefined ? {} : { after }),
+          },
+          call,
+        ),
+      );
+      rows.push(...page.records);
+      if (!page.nextCursor) break;
+      if (want !== undefined && rows.length >= want) break;
+      // A cursor that fails to advance would spin forever.
+      if (page.nextCursor === seen) break;
+      seen = page.nextCursor;
+      after = page.nextCursor;
+      if (pages + 1 >= MAX_SCAN_PAGES) {
+        throw storageError(
+          "invalid_input",
+          `query on "${this.name}" exceeded ${MAX_SCAN_PAGES * MAX_PAGE} rows — pass a limit, narrow the where, or page with page()/after`,
+        );
+      }
+    }
     // Blob field is intentionally omitted from scans — use get() for it.
-    return recs.map((r) => ({ ...r.metadata }) as T);
+    const out = want === undefined ? rows : rows.slice(0, want);
+    return out.map((r) => ({ ...r.metadata }) as T);
+  }
+
+  async page(q: Query<T> = {}): Promise<Page<T>> {
+    const signal = q.signal;
+    const what = `page on "${this.name}"`;
+    const backend = this.requireBackend();
+    throwIfAborted(signal, what);
+    await this.ensure(backend);
+    const call = signal ? { signal } : undefined;
+    const { records, nextCursor } = await this.abortable(signal, what, () =>
+      backend.query(this.ns, this.name, this.toBackendQuery(q), call),
+    );
+    return {
+      items: records.map((r) => ({ ...r.metadata }) as T),
+      ...(nextCursor ? { nextCursor } : {}),
+    };
   }
 
   async count(q: Query<T> = {}): Promise<number> {
+    const signal = q.signal;
+    const what = `count on "${this.name}"`;
     const backend = this.requireBackend();
+    throwIfAborted(signal, what);
     await this.ensure(backend);
     const bq = this.toBackendQuery(q);
-    return backend.count(this.ns, this.name, bq.where ? { where: bq.where } : {});
+    const call = signal ? { signal } : undefined;
+    return this.abortable(signal, what, () =>
+      backend.count(this.ns, this.name, bq.where ? { where: bq.where } : {}, call),
+    );
   }
 
   async delete(id: string): Promise<boolean> {

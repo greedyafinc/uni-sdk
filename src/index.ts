@@ -93,6 +93,8 @@ export * from "./resources/models";
 export * from "./resources/projects";
 export * from "./resources/references";
 export * from "./resources/responses";
+// Types-only cross-app search contract (no runtime `sdk.search` yet).
+export * from "./resources/search/types";
 // Explicit /index: storage is a directory barrel, so the emitted .d.ts must
 // reference ".../storage/index.js" (the dts-fixup would otherwise produce a
 // non-resolving ".../storage.js").

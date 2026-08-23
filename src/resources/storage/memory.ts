@@ -1,17 +1,44 @@
 // In-memory StorageBackend. Used by tests and as an explicit opt-in backend
 // when no server is available. Not persistent — everything is lost on reload.
+//
+// It is a CONFORMANCE TWIN of the cloud backend, not a convenience mock: the
+// predicate semantics, the null-stripping write path, the id tiebreak, the page
+// clamps, and the keyset cursor all mirror unified-api exactly (see
+// predicate.ts). A JS-flavoured shortcut here would make every test that runs
+// against it lie about production.
 import { cpkOf, pkOf, vpkOf } from "../_kv/keys";
-import { applyQuery } from "../_kv/query";
-import { storageError } from "./errors";
+import { storageError, throwIfAborted } from "./errors";
+import { clampPage, compareValues, cursorForRow, decodeCursor, matchesWhere } from "./predicate";
 import type {
+  BackendPage,
   BackendQuery,
   BackendRecord,
   BackendVersion,
   BlobEncoding,
   PutReq,
   StorageBackend,
+  StorageCallOptions,
   StoredRef,
 } from "./types";
+
+/**
+ * Mirror of Postgres `jsonb_strip_nulls`, which the server's write RPC applies
+ * to every metadata patch. Without it "stored null" and "absent key" would be
+ * distinguishable here but not in the cloud, and `{ exists: false }` /
+ * `where: { x: null }` would disagree between the two backends.
+ * Like Postgres, it strips null OBJECT members and does not touch arrays.
+ */
+function stripNulls(value: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (v === null || v === undefined) continue;
+    out[k] =
+      v && typeof v === "object" && !Array.isArray(v) && v.constructor === Object
+        ? stripNulls(v as Record<string, unknown>)
+        : v;
+  }
+  return out;
+}
 
 interface ObjRow {
   ns: string;
@@ -65,6 +92,7 @@ export class MemoryBackend implements StorageBackend {
 
   put(req: PutReq): Promise<StoredRef> {
     const now = Date.now();
+    const metadata = stripNulls(req.metadata);
     const pk = pkOf(req.ns, req.collection, req.id);
     const existing = this.objects.get(pk);
     const version = (existing?.version ?? 0) + 1;
@@ -74,7 +102,7 @@ export class MemoryBackend implements StorageBackend {
       collection: req.collection,
       id: req.id,
       cpk: cpkOf(req.ns, req.collection),
-      metadata: req.metadata,
+      metadata,
       version,
       createdAt,
       updatedAt: now,
@@ -88,7 +116,7 @@ export class MemoryBackend implements StorageBackend {
       this.versions.set(vpkOf(req.ns, req.collection, req.id, version), {
         opk: pk,
         version,
-        metadata: req.metadata,
+        metadata,
         createdAt: now,
         hasBlob: req.blob !== undefined,
         ...(req.blobEncoding ? { blobEncoding: req.blobEncoding } : {}),
@@ -98,24 +126,89 @@ export class MemoryBackend implements StorageBackend {
     return Promise.resolve({ id: req.id, version, updatedAt: now });
   }
 
-  get(ns: string, collection: string, id: string): Promise<BackendRecord | null> {
+  get(
+    ns: string,
+    collection: string,
+    id: string,
+    opts?: StorageCallOptions,
+  ): Promise<BackendRecord | null> {
+    throwIfAborted(opts?.signal, `get on "${collection}"`);
     const row = this.objects.get(pkOf(ns, collection, id));
     return Promise.resolve(row ? toRecord(row) : null);
   }
 
-  query(ns: string, collection: string, q: BackendQuery): Promise<BackendRecord[]> {
+  private matching(ns: string, collection: string, q: BackendQuery): ObjRow[] {
     const cpk = cpkOf(ns, collection);
     const rows: ObjRow[] = [];
-    for (const row of this.objects.values()) if (row.cpk === cpk) rows.push(row);
-    return Promise.resolve(applyQuery(rows, q).map(toRecord));
+    for (const row of this.objects.values()) {
+      if (row.cpk === cpk && matchesWhere(row.metadata, q.where)) rows.push(row);
+    }
+    return rows;
   }
 
-  count(ns: string, collection: string, q: BackendQuery): Promise<number> {
-    const cpk = cpkOf(ns, collection);
-    const rows: ObjRow[] = [];
-    for (const row of this.objects.values()) if (row.cpk === cpk) rows.push(row);
-    const where = q.where;
-    return Promise.resolve(applyQuery(rows, where ? { where } : {}).length);
+  query(
+    ns: string,
+    collection: string,
+    q: BackendQuery,
+    opts?: StorageCallOptions,
+  ): Promise<BackendPage> {
+    throwIfAborted(opts?.signal, `query on "${collection}"`);
+    const field = q.orderBy?.field;
+    const type = q.orderBy?.type;
+    const dir = q.orderBy?.dir === "desc" ? -1 : 1;
+    const rows = this.matching(ns, collection, q);
+
+    // `id` ascending is ALWAYS the final tiebreak (and the sole key when there
+    // is no orderBy) — same as the server, and what makes the keyset stable.
+    rows.sort((a, b) => {
+      if (field) {
+        const c = compareValues(a.metadata[field], b.metadata[field], type) * dir;
+        if (c !== 0) return c;
+      }
+      return a.id === b.id ? 0 : a.id < b.id ? -1 : 1;
+    });
+
+    let page = rows;
+    if (q.after) {
+      const cursor = decodeCursor(q.after);
+      if (field) {
+        // `cursor.o` is absent when the row the previous page ended on had no
+        // value for `field` — i.e. it was in the null block. `compareValues`
+        // already ranks `undefined` the same way it ranks a stored null (the
+        // largest value), so passing it straight through reproduces the
+        // server's resume rule with no special case: ascending, the null
+        // block is the tail, so only later null-block rows (by id) remain;
+        // descending, the null block is the head, so every non-null row is
+        // still ahead PLUS later null-block rows (by id).
+        page = rows.filter((r) => {
+          const c = compareValues(r.metadata[field], cursor.o, type) * dir;
+          return c > 0 || (c === 0 && r.id > cursor.i);
+        });
+      } else {
+        page = rows.filter((r) => r.id > cursor.i);
+      }
+    }
+
+    const limit = clampPage(q.limit);
+    const hasMore = page.length > limit;
+    const slice = hasMore ? page.slice(0, limit) : page;
+    const last = slice[slice.length - 1];
+    return Promise.resolve({
+      records: slice.map(toRecord),
+      ...(hasMore && last
+        ? { nextCursor: cursorForRow(field ? last.metadata[field] : undefined, last.id) }
+        : {}),
+    });
+  }
+
+  count(
+    ns: string,
+    collection: string,
+    q: BackendQuery,
+    opts?: StorageCallOptions,
+  ): Promise<number> {
+    throwIfAborted(opts?.signal, `count on "${collection}"`);
+    return Promise.resolve(this.matching(ns, collection, q).length);
   }
 
   delete(ns: string, collection: string, id: string): Promise<boolean> {
@@ -126,7 +219,13 @@ export class MemoryBackend implements StorageBackend {
     return Promise.resolve(existed);
   }
 
-  readBlob(ns: string, collection: string, id: string): Promise<Uint8Array | null> {
+  readBlob(
+    ns: string,
+    collection: string,
+    id: string,
+    opts?: StorageCallOptions,
+  ): Promise<Uint8Array | null> {
+    throwIfAborted(opts?.signal, `readBlob on "${collection}"`);
     const b = this.blobs.get(pkOf(ns, collection, id));
     return Promise.resolve(b ? b.slice() : null);
   }
