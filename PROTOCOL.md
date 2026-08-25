@@ -579,6 +579,117 @@ POST /registry/webhook                  Body: { url }   // optional: push invoca
 - A registered webhook makes delivery **push-only** (not also enqueued), so an app
   that both handles the push and polls can't execute one invocation twice.
 
+### Embedded apps
+
+An **embedded app** is a web bundle the desktop shell loads in-process: a
+`manifest.json` next to an ES-module `app.js` (and, optionally, a separate
+`search.js`). The SDK-side toolkit for authors is `@unifiedai/sdk/app` (helpers),
+`@unifiedai/sdk/app/vite` (build plugin), `@unifiedai/sdk/host-api` +
+`/host-api/ambient` (bridge types), and `@unifiedai/sdk/app/testkit` (contract
+tests); the practical tutorial is [APP_GUIDE.md](APP_GUIDE.md). This section is
+the normative contract between an app bundle and any host that loads it.
+
+#### Manifest
+
+```json
+{
+  "id": "string",        // app id: developer-chosen, unique, no "__"
+  "name": "string",      // display name
+  "version": "string",   // bundle version; hosts use it as a cache key
+  "icon": "string",      // host icon name
+  "kind": "web",         // bundle kind; embedded web remotes are "web"
+  "module": "app.js",    // the ES-module entry the host imports to mount the app
+  "actions": [ /* ActionSpec[] — see below */ ],
+  "search": {            // optional: declares a cross-app search provider
+    "entry": "search.js",   // separate ES-module chunk, imported lazily
+    "kinds": ["doc"]        // lowercase kinds this provider can return
+  }
+}
+```
+
+Each `actions[]` entry is the same `ActionSpec` the standalone action registry
+declares (it is deliberately **one shape**, so the embedded and standalone
+surfaces cannot drift):
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `id` | string | Bare action id, `/^[a-zA-Z0-9-]+$/` — no `__`. |
+| `title` | string | Consent-prompt label / MCP tool title. |
+| `description` | string | Model-facing description, written for an LLM caller. |
+| `params` | JSON Schema | Param schema. Validated host-side; emitted verbatim as the MCP `inputSchema`. |
+| `tier` | `"safe"` \| `"privileged"` | Default `"safe"`. `"privileged"` ⇒ verified apps only. |
+| `mutates` | boolean | Whether a successful invocation writes anything. **Defaults to `true` (fail-closed)**: an action that omits it is treated as a write and refused on read-only paths. |
+| `surfaces` | boolean | A successful invocation puts something on screen in this app. Default `false`. |
+| `exposeToMcp` | boolean | Opt in to the external MCP surface. Default `false`. |
+
+Wire action names are `<appId>__<actionId>` (e.g. `docs__createDocument`) —
+identical to the standalone registry above. An app that can surface an artifact
+MUST declare the ecosystem-standard `openArtifact` action **verbatim** from
+`OPEN_ARTIFACT_SPEC` in `@unifiedai/sdk` (hosts may assert deep equality); at
+runtime it registers a handler for it, typically via `makeOpenArtifactAdapter`.
+Handlers are registered from the module scope of `module` through the host
+bridge's `registerActions` — the host attributes them to the loaded app's id,
+never to a self-reported one.
+
+#### Search provider load contract
+
+When `manifest.search.entry` is present, the host dynamically imports that
+module (never at app mount — search entries must not pull in the app UI) and
+instantiates a provider from it:
+
+- The module MUST export `createSearchProvider` — as a named export or as the
+  default export — matching `CreateSearchProvider` from `@unifiedai/sdk`.
+- The host calls it with a `SearchProviderContext`:
+  `{ sdk, appId, limits?, protocolVersion? }`. `appId` is host-assigned; `sdk`
+  is the host's authenticated SDK instance. `limits` and `protocolVersion` are
+  OPTIONAL runtime truth a host MAY push where its live values differ from the
+  documented defaults; when absent the provider assumes the constants below.
+- The factory returns a `SearchProvider` (sync or async): `{ kinds?, search(req) }`.
+  The host fans a query out across installed apps' providers, passing each a
+  `SearchRequest` (`query`, host-tokenized `terms`, `kinds?`, `limit`, `signal`,
+  `hints?`). Providers MUST honor `signal` and return hits in rank order — the
+  host fuses results by RANK, not by raw score.
+
+#### Host limits (`SEARCH_PROTOCOL_VERSION` 1)
+
+These are PROTOCOL CONSTANTS (exported as `HOST_LIMITS` from
+`@unifiedai/sdk/app`), not host tunables: a provider is written against exactly
+these numbers, so a host MUST honor them as stated and MAY only **lower** a cap
+alongside a bump of `SEARCH_PROTOCOL_VERSION` — silently tightening one strands
+every already-shipped provider on the old contract. (Raising a cap, and pushing
+the raised value via `SearchProviderContext.limits`, is compatible.)
+
+| Limit | Value | Host behavior past it |
+| --- | --- | --- |
+| `PER_PROVIDER_REQUEST_LIMIT` | 10 | The `limit` the host passes each provider; extra hits are truncated. |
+| `TITLE_MAX` | 200 chars | `title` silently truncated. |
+| `SNIPPET_MAX` | 300 chars | `snippet` silently truncated. |
+| `CONTAINER_TITLE_MAX` | 120 chars | `containerTitle` silently truncated. |
+| `PREVIEW_MAX_BYTES` | 2048 | JSON-serialized `preview` silently discarded (rest of the hit kept). |
+| `PER_PROVIDER_TIMEOUT_MS` | 1500 ms | Per-provider budget, INCLUDING module load; the request `signal` aborts and the provider's hits are dropped. |
+
+A host additionally bounds the whole fan-out with a total budget
+(the reference shell uses 2500 ms). The total budget is **host-discretionary**
+— it is not part of the provider contract, since each provider already sees it
+only as its per-provider `signal`.
+
+#### Hit sanitization
+
+Providers are untrusted app code; a host MUST sanitize every returned hit:
+
+- A hit missing a non-empty string `id`, `title`, or `kind` is **dropped**.
+- A non-finite/non-number `score` is coerced to `0`; a non-number `updatedAt`
+  is removed.
+- Strings are clamped to the caps above; an oversized or unserializable
+  `preview` is discarded while the rest of the hit is kept.
+- An `openRef` without a non-empty `objectId` is discarded.
+- `openRef.action` MUST name a **declared, `mutates: false` action of the same
+  app**, or the host silently strips `action` + `params` from the ref (the rest
+  survives). Because `mutates` defaults to `true`, an action that does not
+  explicitly declare `mutates: false` can never be invoked from a search hit —
+  fail-closed.
+- The host stamps the owning app id on every hit; a provider never supplies it.
+
 ### Local ecosystem hosting & discovery
 
 When the desktop app starts it writes a discovery record next to the auth

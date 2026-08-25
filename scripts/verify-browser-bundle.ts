@@ -11,15 +11,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "..");
-const BUNDLE = join(ROOT, "dist", "index.browser.js");
 
-if (!existsSync(BUNDLE)) {
-  console.error(`❌ Browser bundle not found at ${BUNDLE}`);
-  console.error("   Run `bun run build:browser` first.");
-  process.exit(1);
-}
-
-const source = readFileSync(BUNDLE, "utf8");
+// Every bundle that must stay browser-safe. dist/app/index.js is the embedded-
+// app kernel — it feeds `search.js` chunks that load inside the desktop shell's
+// webview, so a Node built-in there is just as fatal as in the main entry.
+const BUNDLES = [
+  { path: join(ROOT, "dist", "index.browser.js"), build: "bun run build:browser" },
+  { path: join(ROOT, "dist", "app", "index.js"), build: "bun run build:app" },
+];
 
 interface Check {
   pattern: RegExp;
@@ -49,31 +48,44 @@ const FORBIDDEN: Check[] = [
   },
 ];
 
-const failures: Array<{ check: Check; matches: string[] }> = [];
-for (const check of FORBIDDEN) {
-  const matches = source.match(check.pattern);
-  if (matches?.length) {
-    failures.push({ check, matches: [...new Set(matches)] });
+let failed = false;
+for (const bundle of BUNDLES) {
+  if (!existsSync(bundle.path)) {
+    console.error(`❌ Browser bundle not found at ${bundle.path}`);
+    console.error(`   Run \`${bundle.build}\` first.`);
+    process.exit(1);
   }
+  const source = readFileSync(bundle.path, "utf8");
+
+  const failures: Array<{ check: Check; matches: string[] }> = [];
+  for (const check of FORBIDDEN) {
+    const matches = source.match(check.pattern);
+    if (matches?.length) {
+      failures.push({ check, matches: [...new Set(matches)] });
+    }
+  }
+
+  if (failures.length > 0) {
+    failed = true;
+    console.error(`❌ ${bundle.path} contains forbidden imports:\n`);
+    for (const { check, matches } of failures) {
+      console.error(`  • ${check.name} (${matches.length} unique)`);
+      for (const m of matches.slice(0, 8)) {
+        console.error(`      ${m}`);
+      }
+      if (matches.length > 8) {
+        console.error(`      … and ${matches.length - 8} more`);
+      }
+      if (check.hint) {
+        console.error(`    Hint: ${check.hint}`);
+      }
+      console.error("");
+    }
+    continue;
+  }
+
+  const sizeKb = (source.length / 1024).toFixed(1);
+  console.log(`✅ ${bundle.path} is clean (${sizeKb} KB)`);
 }
 
-if (failures.length > 0) {
-  console.error("❌ Browser bundle contains forbidden imports:\n");
-  for (const { check, matches } of failures) {
-    console.error(`  • ${check.name} (${matches.length} unique)`);
-    for (const m of matches.slice(0, 8)) {
-      console.error(`      ${m}`);
-    }
-    if (matches.length > 8) {
-      console.error(`      … and ${matches.length - 8} more`);
-    }
-    if (check.hint) {
-      console.error(`    Hint: ${check.hint}`);
-    }
-    console.error("");
-  }
-  process.exit(1);
-}
-
-const sizeKb = (source.length / 1024).toFixed(1);
-console.log(`✅ Browser bundle is clean (${sizeKb} KB)`);
+if (failed) process.exit(1);

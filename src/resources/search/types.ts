@@ -5,6 +5,8 @@
 // only — no runtime code lives here, and `SearchProvider` is never exposed to
 // the model as a tool.
 
+import type { HostLimits } from "../../app/limits";
+
 /** Hints the host derives from memory + recent conversation to help a provider pinpoint items. Always optional and best-effort. */
 export interface SearchHints {
   /** Handles ("<appId>:<objectId>") the host believes the query refers to. */
@@ -94,6 +96,19 @@ export interface SearchProviderContext {
   sdk: unknown;
   /** Host-assigned app id. Never self-reported by the app. */
   appId: string;
+  /**
+   * The host's live caps, where they differ from the documented defaults —
+   * runtime truth pushed by the host; the constants in @unifiedai/sdk/app
+   * (`HOST_LIMITS`) are the documented defaults a provider assumes when this
+   * is absent.
+   */
+  limits?: Partial<HostLimits>;
+  /**
+   * The search-protocol version the host speaks — runtime truth pushed by the
+   * host; `SEARCH_PROTOCOL_VERSION` in @unifiedai/sdk/app is the documented
+   * default when this is absent.
+   */
+  protocolVersion?: number;
 }
 
 /** An app's search entry module must default-export or named-export `createSearchProvider`. */

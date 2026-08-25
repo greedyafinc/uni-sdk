@@ -76,6 +76,29 @@ import type { FakeSyncServerOptions } from "@unifiedai/sdk/testing";
 > previously exported from the root/node entries. Import them from
 > `@unifiedai/sdk/logos` and `@unifiedai/sdk/testing` now.
 
+Building an **embedded marketplace app** for the UnifiedApp shell? That's a
+first-class SDK surface with its own subpaths:
+
+```ts
+// Action + search + text helper kernel for embedded apps (dependency-free)
+import { safeRegisterActions, makeOpenArtifactAdapter, scoreFields, toSearchHit } from "@unifiedai/sdk/app";
+
+// Search-contract validator + micro-benchmark for your test suite
+import { findHitViolations, benchmark } from "@unifiedai/sdk/app/testkit";
+
+// Vite plugin that wires the @unified/host-api bridge for build + standalone dev
+import { unifiedApp } from "@unifiedai/sdk/app/vite";
+
+// Types for the host bridge; the /ambient entry declares the bare specifier
+// for your tsconfig: { "types": ["@unifiedai/sdk/host-api/ambient"] }
+import type { HostApi } from "@unifiedai/sdk/host-api";
+```
+
+Start with [APP_GUIDE.md](APP_GUIDE.md) (tutorial), the runnable
+[`templates/app-template`](templates/app-template/README.md), and
+[PROTOCOL.md § Embedded apps](PROTOCOL.md#embedded-apps) (the normative
+manifest, search-provider, and host-limits contract).
+
 When both `token` and `appId` are supplied, `token` selects trusted-token
 authentication while `appId` still namespaces `sdk.storage` and `sdk.fs`,
 and is sent as `X-Unified-App` so a shared `uapi_` testing key can attribute
