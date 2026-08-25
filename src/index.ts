@@ -93,6 +93,11 @@ export * from "./resources/models";
 export * from "./resources/projects";
 export * from "./resources/references";
 export * from "./resources/responses";
+// Types-only cross-app search contract (no runtime `sdk.search` yet).
+export * from "./resources/search/types";
+// Types-only cross-app OPEN contract: the one action every app declares so any
+// surface can put an artifact on screen. Depends on projects + search/types.
+export * from "./resources/openArtifact";
 // Explicit /index: storage is a directory barrel, so the emitted .d.ts must
 // reference ".../storage/index.js" (the dts-fixup would otherwise produce a
 // non-resolving ".../storage.js").

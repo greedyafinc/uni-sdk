@@ -125,8 +125,9 @@ uni-sdk stays domain-agnostic while the app gets full typing.
 ```ts
 interface Collection<T> {
   put(value: T): Promise<StoredRef>;            // insert or replace by key; bumps version if versioned
-  get(id: string): Promise<T | null>;           // full record incl. blob field
-  query(q?: Query<T>): Promise<T[]>;            // indexed scan; blob field omitted
+  get(id: string, opts?: StorageCallOptions): Promise<T | null>;  // full record incl. blob field
+  query(q?: Query<T>): Promise<T[]>;            // indexed scan; blob field omitted; follows cursor pages
+  page(q?: Query<T>): Promise<Page<T>>;        // one keyset page + nextCursor
   count(q?: Query<T>): Promise<number>;
   delete(id: string): Promise<boolean>;
   del(id: string): Promise<boolean>;            // alias of delete (parity with files.del)
@@ -138,13 +139,28 @@ interface Collection<T> {
   revert(id: string, version: number): Promise<StoredRef>;
 }
 
-interface Query<T> {
-  where?: Partial<T>;            // equality match (ANDed)
-  orderBy?: keyof T & string;    // field to order by
-  order?: "asc" | "desc";        // default "asc"
-  limit?: number;
-  offset?: number;
+type Predicate<V> = V | PredicateOps<V>;   // bare value = equality shorthand
+
+interface PredicateOps<V> {
+  eq?: V; neq?: V; in?: readonly V[];       // compared as TEXT server-side
+  gt?: V; gte?: V; lt?: V; lte?: V;         // cast inferred from the operand
+  exists?: boolean;                          // true = has a value, false = absent
+  match?: string;                            // full-text; ONLY on `searchText`
 }
+
+interface Query<T> {
+  where?: { [K in keyof T]?: Predicate<T[K]> };  // ANDed; multiple ops on a field also AND
+  orderBy?: (keyof T & string) | { field: keyof T & string; type?: "text" | "number"; dir?: "asc" | "desc" };
+  order?: "asc" | "desc";        // default "asc" (string orderBy form)
+  limit?: number;
+  after?: string;                // opaque keyset cursor (replaces `offset`)
+  signal?: AbortSignal;          // client-side only; never sent to the server (see StorageCallOptions)
+}
+
+interface Page<T> { items: T[]; nextCursor?: string }
+
+/** Per-call options that are purely client-side and never serialized onto the wire. */
+interface StorageCallOptions { signal?: AbortSignal }
 
 interface StoredRef { id: string; version: number; updatedAt: number }
 interface VersionMeta { version: number; createdAt: number }
@@ -160,8 +176,33 @@ Notes:
   `invalid_input` (it's stored out-of-line, so it could never match).
 - **Indexed vs non-indexed.** The in-process backends (IndexedDB / Memory) filter and order over *any* metadata
   field. The Tauri SQLite backend can only filter/order by columns materialized from `schema.indexes`, so for
-  **cross-backend portability, query/order only on indexed fields** — declare them in `schema.indexes`. Richer
-  predicates (ranges, `in`, text) are §13 follow-ups.
+  **cross-backend portability, query/order only on indexed fields** — declare them in `schema.indexes`. Against the
+  cloud backend `schema.indexes` is still inert (`ensureCollection` is a no-op — the server store is schemaless);
+  server-side expression indexes are provisioned by unified-db migrations, not by the SDK.
+- **Predicates are pushed into SQL.** `query()` compiles to unified-api's `/query-v2` and `count()` to its sibling
+  `/count-v2`, which evaluate `where` as the SAME PostgREST filters instead of selecting the whole collection and
+  filtering it in JS. The consequences are load-bearing:
+  - **SQL, not JS, semantics.** `eq`/`neq`/`in` compare the field's *text* extraction, so `where: { n: 5 }` matches
+    a stored `5`. Rows **missing** the field satisfy no operator except `exists: false` — including `neq`.
+  - **`null` means absent.** The write path runs `jsonb_strip_nulls`, so a stored `null` is an absent key.
+    `where: { x: null }` therefore compiles to `{ exists: false }` (it used to silently match nothing).
+  - **Numeric vs text ordering.** Range ops infer their cast from the operand. `orderBy` cannot — declare numeric
+    sort fields in `schema.fieldTypes`, or `10` sorts before `9`. Epoch-ms timestamps happen to sort the same
+    either way; counters, ranks, and sequence numbers do not.
+  - **`match` only works on `searchText`** — the one field with a generated tsvector column server-side.
+  - **Pagination is a keyset cursor, not an offset.** `query()` transparently follows `nextCursor` so it still
+    returns every match; `page()` exposes the cursor for real paging. `offset` is gone — a pushed-down query
+    cannot express it. The effective order is a strict total order on `(has-the-field, order value, id)` — rows
+    missing the `orderBy` field form a contiguous NULL block, sorted last ascending / first descending (Postgres'
+    default), with `id` ascending as the tiebreak throughout. A page boundary landing inside that block still
+    resumes correctly: the cursor a page ends on simply omits the order value, which the next page reads as
+    "resume from the null block," not as an error. A full walk therefore visits every matching row exactly once
+    and terminates, no matter how sparse the field is.
+  - **`count()` is one request, not a walk.** `/count-v2` shares `/query-v2`'s exact where-compilation — every
+    operator, including `match`, counts consistently with what `query()` would return — but it answers with a
+    single `{ count }` round trip instead of paging through matches. It **rejects `limit` and `after`** with a 400
+    `unsupported_query` (a page-scoped count would be a wrong answer dressed as a right one); `orderBy` is accepted
+    and ignored, since ordering is meaningless for a count.
 
 ### 3.4 Versioning
 
@@ -182,11 +223,11 @@ interface StorageBackend {
   available(): boolean;
   ensureCollection(ns: string, collection: string, schema: BackendSchema): Promise<void>;  // idempotent
   put(req: PutReq): Promise<StoredRef>;
-  get(ns: string, collection: string, id: string): Promise<BackendRecord | null>;
-  query(ns: string, collection: string, q: BackendQuery): Promise<BackendRecord[]>;
-  count(ns: string, collection: string, q: BackendQuery): Promise<number>;
+  get(ns: string, collection: string, id: string, opts?: StorageCallOptions): Promise<BackendRecord | null>;
+  query(ns: string, collection: string, q: BackendQuery, opts?: StorageCallOptions): Promise<BackendPage>;  // { records, nextCursor? }
+  count(ns: string, collection: string, q: BackendQuery, opts?: StorageCallOptions): Promise<number>;
   delete(ns: string, collection: string, id: string): Promise<boolean>;
-  readBlob(ns: string, collection: string, id: string): Promise<Uint8Array | null>;
+  readBlob(ns: string, collection: string, id: string, opts?: StorageCallOptions): Promise<Uint8Array | null>;
   listVersions(ns: string, collection: string, id: string): Promise<BackendVersion[]>;
   getVersion(ns: string, collection: string, id: string, version: number): Promise<BackendRecord | null>;
   readVersionBlob(ns: string, collection: string, id: string, version: number): Promise<Uint8Array | null>;

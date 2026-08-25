@@ -1,0 +1,68 @@
+{
+  "id": "my-app",
+  "name": "My App",
+  "version": "0.1.0",
+  "icon": "file",
+  "kind": "web",
+  "module": "app.js",
+  "search": {
+    "entry": "search.js",
+    "kinds": ["item"]
+  },
+  "actions": [
+    {
+      "id": "openItem",
+      "title": "Open an item",
+      "description": "Open an existing item in My App so the user SEES it. Params: itemId (required) — the id of an existing item, as carried on a My App search hit; never invent or guess an id. Returns { ok: true }. Errors if no item with that id exists.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "itemId": {
+            "type": "string",
+            "description": "The id of the item to open."
+          }
+        },
+        "required": ["itemId"],
+        "additionalProperties": false
+      },
+      "tier": "safe",
+      "mutates": false,
+      "surfaces": true
+    },
+    {
+      "id": "openArtifact",
+      "title": "Open an artifact",
+      "description": "Bring one of this app's artifacts on screen. Invoked by the shell when the user follows a cross-app pointer — a search result, an @-mention, a project link, a reference. Not intended for agent use; the app's own open actions are the model-facing ones.",
+      "params": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "objectId": {
+            "type": "string",
+            "description": "App-local id of the artifact to open."
+          },
+          "path": {
+            "type": "string",
+            "description": "Storage path, for file-backed artifacts that have no object id."
+          },
+          "collection": {
+            "type": "string",
+            "description": "App-local collection the object lives in, when the caller knows it."
+          },
+          "kind": {
+            "type": "string",
+            "description": "The app's own artifact kind, for apps that route differently per kind."
+          },
+          "fragment": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "App-interpreted portion locator (the ProjectLink/reference `fragment`). Absent or {} means the whole artifact."
+          }
+        }
+      },
+      "tier": "safe",
+      "mutates": false,
+      "exposeToMcp": false
+    }
+  ]
+}

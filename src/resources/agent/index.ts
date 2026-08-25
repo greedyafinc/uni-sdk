@@ -9,7 +9,7 @@ export { fsTools } from "./fs-tools";
 export { webTools } from "./web-tools";
 export type {
   SearchBackend,
-  SearchHit,
+  WebSearchHit,
   SearchOptions,
   WebToolsOptions,
   FetchLike,

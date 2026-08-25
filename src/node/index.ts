@@ -87,6 +87,9 @@ export * from "../resources/models";
 export * from "../resources/projects";
 export * from "../resources/references";
 export * from "../resources/responses";
+// Types-only cross-app search contract (no runtime `sdk.search` yet).
+export * from "../resources/search/types";
+export * from "../resources/openArtifact";
 // Explicit /index: storage is a directory barrel (see src/index.ts note).
 export * from "../resources/storage/index";
 // Explicit /index: sync is a directory barrel (see src/index.ts note).
