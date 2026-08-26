@@ -3,6 +3,7 @@
 export { Storage } from "./storage";
 export { CloudStorageBackend } from "./cloud";
 export { MemoryBackend } from "./memory";
+export type { MemoryBackendOptions } from "./memory";
 export { storageAbortError, storageError } from "./errors";
 export type { StorageErrorCode } from "./errors";
 export type {

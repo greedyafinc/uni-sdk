@@ -86,7 +86,9 @@ export declare class UnifiedAI extends Core {
      * App-namespaced storage (`STORAGE-SPEC.md`). Typed collections over a
      * swappable backend — the server-backed Cloud store (unified-api → Supabase)
      * when a token is configured, or a host-injected backend. Requires a token (or
-     * an injected backend): there is no local browser fallback.
+     * an injected backend): there is no local browser fallback. Cross-app and
+     * agent access go through {@link Storage.grants}. Cloud paths are Pro-gated
+     * (`PlanRequiredError`).
      */
     get storage(): Storage;
     /**
@@ -102,14 +104,17 @@ export declare class UnifiedAI extends Core {
      * returns a live-first `WorkspaceSync` that hydrates from an optional injected
      * `SnapshotBackend`, catches up (bootstrap → delta) against unified-api, polls
      * deltas, and applies optimistic writes. One cached engine per workspace id.
+     * `sync.grants` publishes a namespace to other apps and authenticated agents.
+     * Cloud bootstrap/delta/apply are Pro-gated.
      */
     get sync(): Sync;
     /**
      * Unopinionated tool-loop scaffolding (`docs/capability-platform.md`).
      * `sdk.agent.run({ system, prompt, tools, … })` runs the model with the app's
-     * OWN prompt and tools (compose `fsTools(sdk.fs.namespace())` / `webTools()` with your own),
-     * dispatching tool-calls until the model stops. No prompt or tool policy is
-     * baked in — the app orchestrates.
+     * OWN prompt and tools (compose `fsTools(sdk.fs.namespace())` /
+     * `storageTools(sdk.storage.namespace())` / `syncTools(ws, ns)` / `webTools()`
+     * with your own), dispatching tool-calls until the model stops. No prompt or
+     * tool policy is baked in — the app orchestrates.
      */
     get agent(): Agent;
     /**

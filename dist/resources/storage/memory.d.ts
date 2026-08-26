@@ -1,9 +1,20 @@
+import { MemoryGrantStore } from "../_kv/sharing.js";
 import type { BackendPage, BackendQuery, BackendRecord, BackendVersion, PutReq, StorageBackend, StorageCallOptions, StoredRef } from "./types.js";
+export interface MemoryBackendOptions {
+    /**
+     * Share this grant table with `FakeSyncServer` / other SDK clients in the
+     * same local host process. Omit to create a private table.
+     */
+    grants?: MemoryGrantStore;
+}
 export declare class MemoryBackend implements StorageBackend {
     readonly name = "memory";
+    /** Local grant table shared with any SDK that injects this same backend. */
+    readonly grants: MemoryGrantStore;
     private readonly objects;
     private readonly blobs;
     private readonly versions;
+    constructor(opts?: MemoryBackendOptions);
     available(): boolean;
     ensureCollection(): Promise<void>;
     put(req: PutReq): Promise<StoredRef>;

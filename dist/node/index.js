@@ -155,8 +155,8 @@ class UnifiedAIAuthError extends AuthenticationError {
 }
 
 class ForbiddenError extends UnifiedAIError {
-  constructor(message, status, body, headers) {
-    super("forbidden", message, status, body, headers);
+  constructor(message, status, body, headers, code = "forbidden") {
+    super(code, message, status, body, headers);
     this.name = "ForbiddenError";
   }
 }
@@ -204,11 +204,53 @@ class UsageLimitError extends UnifiedAIError {
   }
 }
 
+class PlanRequiredError extends UnifiedAIError {
+  isPlanRequired = true;
+  requiredPlan;
+  currentPlanId;
+  constructor(message, status, body, headers) {
+    super("plan_required", message, status, body, headers);
+    this.name = "PlanRequiredError";
+    const parsed = parsePlanRequiredFields(body);
+    this.requiredPlan = parsed.requiredPlan;
+    this.currentPlanId = parsed.currentPlanId;
+  }
+}
+
 class ServerError extends UnifiedAIError {
   constructor(message, status, body, headers) {
     super("server_error", message, status, body, headers);
     this.name = "ServerError";
   }
+}
+function parsePlanRequiredFields(body) {
+  let requiredPlan = "Pro";
+  let currentPlanId;
+  if (body && typeof body === "object") {
+    const obj = body;
+    if (typeof obj.required_plan === "string" && obj.required_plan) {
+      requiredPlan = obj.required_plan;
+    }
+    if (typeof obj.current_plan_id === "number" && Number.isFinite(obj.current_plan_id)) {
+      currentPlanId = obj.current_plan_id;
+    }
+  }
+  return { requiredPlan, currentPlanId };
+}
+function isPlanRequiredBody(body) {
+  if (!body || typeof body !== "object")
+    return false;
+  return body.code === "plan_required";
+}
+var NOT_GRANTED_CODES = new Set(["storage_not_granted", "sync_not_granted", "fs_not_granted"]);
+function notGrantedCodeFromBody(body) {
+  if (!body || typeof body !== "object")
+    return;
+  const code = body.code;
+  if (typeof code === "string" && NOT_GRANTED_CODES.has(code)) {
+    return code;
+  }
+  return;
 }
 function parseUsageFields(body) {
   let periodCost;
@@ -268,9 +310,25 @@ function httpErrorCodeFromStatus(status) {
     return "server_error";
   return "request_failed";
 }
+function planRequiredError(currentPlanId = 0, requiredPlan = "Pro") {
+  const body = {
+    code: "plan_required",
+    required_plan: requiredPlan,
+    current_plan_id: currentPlanId,
+    message: `Cloud sync and persistence require a ${requiredPlan} plan.`
+  };
+  return new PlanRequiredError(body.message, 403, body);
+}
 function buildHttpError(message, status, body, headers) {
   if (isDeprecatedModelBody(body)) {
     return new DeprecatedModelError(message, status, body, headers);
+  }
+  if (isPlanRequiredBody(body)) {
+    return new PlanRequiredError(message, status, body, headers);
+  }
+  const notGranted = notGrantedCodeFromBody(body);
+  if (notGranted) {
+    return new ForbiddenError(message, status, body, headers, notGranted);
   }
   if (status === 400)
     return new BadRequestError(message, status, body, headers);
@@ -311,7 +369,9 @@ class Core {
       compression: options.compression,
       storage: options.storage,
       fs: options.fs,
-      sync: options.sync
+      sync: options.sync,
+      callerKind: options.callerKind ?? "app",
+      grantStore: options.grantStore
     });
   }
   get defaultCompression() {
@@ -328,6 +388,12 @@ class Core {
   }
   get snapshotBackend() {
     return this.options.sync;
+  }
+  get callerKind() {
+    return this.options.callerKind;
+  }
+  get grantStore() {
+    return this.options.grantStore;
   }
   get serverCapable() {
     return this.options.token !== undefined;
@@ -1659,6 +1725,260 @@ async function readBodyCapped(res, maxBytes, signal) {
       reader.releaseLock();
     } catch {}
   }
+}
+// src/resources/agent/storage-tools.ts
+function errText3(e) {
+  return e instanceof Error ? e.message : String(e);
+}
+function asRecord(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value;
+  }
+  return { value };
+}
+function storageTools(ns, opts = {}) {
+  const allowed = opts.collections ? new Set(opts.collections) : null;
+  const write = opts.write === true;
+  const collection = (name) => {
+    if (allowed && !allowed.has(name)) {
+      throw new Error(`collection "${name}" is not in the tool allowlist`);
+    }
+    return ns.collection(name, { key: "id" });
+  };
+  const tools = [
+    {
+      definition: {
+        type: "function",
+        function: {
+          name: "storage_get",
+          description: "Get one record by collection and id from the bound namespace.",
+          parameters: {
+            type: "object",
+            properties: {
+              collection: { type: "string" },
+              id: { type: "string" }
+            },
+            required: ["collection", "id"]
+          }
+        }
+      },
+      async execute(input) {
+        try {
+          const rec = await collection(String(input.collection ?? "")).get(String(input.id ?? ""));
+          return { content: rec ? JSON.stringify(rec) : "null" };
+        } catch (e) {
+          return { content: errText3(e), isError: true };
+        }
+      }
+    },
+    {
+      definition: {
+        type: "function",
+        function: {
+          name: "storage_query",
+          description: "List records in a collection. Optional equality `where` object.",
+          parameters: {
+            type: "object",
+            properties: {
+              collection: { type: "string" },
+              where: { type: "object", additionalProperties: true },
+              limit: { type: "number" }
+            },
+            required: ["collection"]
+          }
+        }
+      },
+      async execute(input) {
+        try {
+          const where = input.where && typeof input.where === "object" ? input.where : undefined;
+          const limit = typeof input.limit === "number" ? input.limit : undefined;
+          const rows = await collection(String(input.collection ?? "")).query({
+            ...where ? { where } : {},
+            ...limit !== undefined ? { limit } : {}
+          });
+          return { content: JSON.stringify(rows) };
+        } catch (e) {
+          return { content: errText3(e), isError: true };
+        }
+      }
+    }
+  ];
+  if (write) {
+    tools.push({
+      definition: {
+        type: "function",
+        function: {
+          name: "storage_put",
+          description: "Insert or replace a record. `record` must include an `id` string key.",
+          parameters: {
+            type: "object",
+            properties: {
+              collection: { type: "string" },
+              record: { type: "object", additionalProperties: true }
+            },
+            required: ["collection", "record"]
+          }
+        }
+      },
+      async execute(input) {
+        try {
+          const record = asRecord(input.record);
+          if (!record.id) {
+            return { content: "record.id is required", isError: true };
+          }
+          const ref = await collection(String(input.collection ?? "")).put(record);
+          return { content: JSON.stringify(ref) };
+        } catch (e) {
+          return { content: errText3(e), isError: true };
+        }
+      }
+    }, {
+      definition: {
+        type: "function",
+        function: {
+          name: "storage_delete",
+          description: "Delete a record by collection and id.",
+          parameters: {
+            type: "object",
+            properties: {
+              collection: { type: "string" },
+              id: { type: "string" }
+            },
+            required: ["collection", "id"]
+          }
+        }
+      },
+      async execute(input) {
+        try {
+          const deleted = await collection(String(input.collection ?? "")).delete(String(input.id ?? ""));
+          return { content: deleted ? "deleted" : "not found" };
+        } catch (e) {
+          return { content: errText3(e), isError: true };
+        }
+      }
+    });
+  }
+  return tools;
+}
+// src/resources/agent/sync-tools.ts
+function errText4(e) {
+  return e instanceof Error ? e.message : String(e);
+}
+function syncTools(ws, ns, opts = {}) {
+  const allowed = opts.collections ? new Set(opts.collections) : null;
+  const write = opts.write === true;
+  const check = (collection) => {
+    if (allowed && !allowed.has(collection)) {
+      throw new Error(`collection "${collection}" is not in the tool allowlist`);
+    }
+  };
+  const tools = [
+    {
+      definition: {
+        type: "function",
+        function: {
+          name: "sync_get",
+          description: "Get one live sync record by collection and id.",
+          parameters: {
+            type: "object",
+            properties: {
+              collection: { type: "string" },
+              id: { type: "string" }
+            },
+            required: ["collection", "id"]
+          }
+        }
+      },
+      execute(input) {
+        try {
+          const collection = String(input.collection ?? "");
+          check(collection);
+          const rec = ws.collection(ns, collection).get(String(input.id ?? ""));
+          return { content: rec ? JSON.stringify(rec.metadata) : "null" };
+        } catch (e) {
+          return { content: errText4(e), isError: true };
+        }
+      }
+    },
+    {
+      definition: {
+        type: "function",
+        function: {
+          name: "sync_list",
+          description: "List live records in a collection. Optional equality `where` object.",
+          parameters: {
+            type: "object",
+            properties: {
+              collection: { type: "string" },
+              where: { type: "object", additionalProperties: true }
+            },
+            required: ["collection"]
+          }
+        }
+      },
+      execute(input) {
+        try {
+          const collection = String(input.collection ?? "");
+          check(collection);
+          const where = input.where && typeof input.where === "object" ? input.where : undefined;
+          const rows = ws.collection(ns, collection).list(where ? { where } : undefined).map((r) => ({ id: r.id, ...r.metadata }));
+          return { content: JSON.stringify(rows) };
+        } catch (e) {
+          return { content: errText4(e), isError: true };
+        }
+      }
+    }
+  ];
+  if (write) {
+    tools.push({
+      definition: {
+        type: "function",
+        function: {
+          name: "sync_apply",
+          description: "Apply one mutation: pass exactly one of patch, replace (object), or delete (true).",
+          parameters: {
+            type: "object",
+            properties: {
+              collection: { type: "string" },
+              id: { type: "string" },
+              patch: { type: "object", additionalProperties: true },
+              replace: { type: "object", additionalProperties: true },
+              delete: { type: "boolean" }
+            },
+            required: ["collection", "id"]
+          }
+        }
+      },
+      async execute(input) {
+        try {
+          const collection = String(input.collection ?? "");
+          check(collection);
+          const op = {
+            ns,
+            collection,
+            id: String(input.id ?? "")
+          };
+          if (input.delete === true)
+            op.delete = true;
+          else if (input.replace && typeof input.replace === "object") {
+            op.replace = input.replace;
+          } else if (input.patch && typeof input.patch === "object") {
+            op.patch = input.patch;
+          } else {
+            return {
+              content: "exactly one of patch, replace, or delete is required",
+              isError: true
+            };
+          }
+          const results = await ws.apply([op]);
+          return { content: JSON.stringify(results[0] ?? null) };
+        } catch (e) {
+          return { content: errText4(e), isError: true };
+        }
+      }
+    });
+  }
+  return tools;
 }
 // src/resources/audio.ts
 var ACCEPTED_AUDIO_TYPES = ["audio/", "application/octet-stream"];
@@ -4405,6 +4725,180 @@ function artifactRefFromHit(app, hit) {
     ...openRef?.action ? { action: openRef.action, params: openRef.params } : {}
   };
 }
+// src/resources/_kv/sharing.ts
+var grantSeq = 0;
+function nextGrantId() {
+  grantSeq += 1;
+  return `ngr_${grantSeq.toString(36)}`;
+}
+function granteeKey(g) {
+  return g.type === "agent" ? "agent" : `app:${g.appId}`;
+}
+function validateGrantee(g) {
+  if (g.type === "agent")
+    return { type: "agent" };
+  if (g.type === "app") {
+    const appId = g.appId.trim();
+    if (!appId) {
+      throw subsystemError("invalid_input", "grantee.appId must be a non-empty string");
+    }
+    return { type: "app", appId };
+  }
+  throw subsystemError("invalid_input", 'grantee.type must be "app" or "agent"');
+}
+
+class MemoryGrantStore {
+  byId = new Map;
+  byNsGrantee = new Map;
+  list(ns) {
+    const out = [];
+    for (const g of this.byId.values()) {
+      if (g.ns === ns)
+        out.push({ ...g, grantee: { ...g.grantee } });
+    }
+    out.sort((a, b) => a.createdAt - b.createdAt);
+    return out;
+  }
+  get(id) {
+    const g = this.byId.get(id);
+    return g ? { ...g, grantee: { ...g.grantee } } : undefined;
+  }
+  upsert(ns, grantee, mode) {
+    const g = validateGrantee(grantee);
+    const key = `${ns}\x00${granteeKey(g)}`;
+    const now = Date.now();
+    const existingId = this.byNsGrantee.get(key);
+    if (existingId) {
+      const prev = this.byId.get(existingId);
+      if (prev) {
+        const next = { ...prev, mode, updatedAt: now, grantee: g };
+        this.byId.set(existingId, next);
+        return { ...next, grantee: { ...next.grantee } };
+      }
+    }
+    const id = nextGrantId();
+    const grant = {
+      id,
+      ns,
+      grantee: g,
+      mode,
+      createdAt: now,
+      updatedAt: now
+    };
+    this.byId.set(id, grant);
+    this.byNsGrantee.set(key, id);
+    return { ...grant, grantee: { ...grant.grantee } };
+  }
+  delete(id) {
+    const g = this.byId.get(id);
+    if (!g)
+      return false;
+    this.byId.delete(id);
+    this.byNsGrantee.delete(`${g.ns}\x00${granteeKey(g.grantee)}`);
+    return true;
+  }
+  allows(caller, ns, mode) {
+    return namespaceAccess(this, caller, ns, mode);
+  }
+}
+function namespaceAccess(store, caller, ns, mode) {
+  const own = (caller.appId || "").trim();
+  if (own && ns === own)
+    return true;
+  for (const g of store.list(ns)) {
+    if (!granteeMatches(g.grantee, caller))
+      continue;
+    if (mode === "read" || g.mode === "readwrite")
+      return true;
+  }
+  return false;
+}
+function granteeMatches(grantee, caller) {
+  if (grantee.type === "agent")
+    return caller.kind === "agent";
+  return caller.kind === "app" && grantee.appId === caller.appId;
+}
+function notGrantedError(subsystem, ns) {
+  return subsystemError(`${subsystem}_not_granted`, `no grant to access namespace "${ns}"`);
+}
+
+// src/resources/_kv/grants.ts
+class NamespaceSharing {
+  opts;
+  constructor(opts) {
+    this.opts = opts;
+  }
+  caller() {
+    return { appId: this.opts.ownNs(), kind: this.opts.client.callerKind };
+  }
+  own() {
+    const ns = this.opts.ownNs().trim();
+    if (!ns) {
+      throw new UnifiedError("invalid_input", `cannot manage ${this.opts.resource} grants without an appId`);
+    }
+    return ns;
+  }
+  resolveNs(ns) {
+    const trimmed = ns?.trim();
+    return trimmed || this.own();
+  }
+  async list(opts = {}) {
+    const ns = this.resolveNs(opts.ns);
+    this.assertOwner(ns);
+    if (this.opts.local)
+      return this.opts.local.list(ns);
+    const res = await this.opts.client.request(this.collectionPath(), {
+      method: "GET",
+      query: { ns }
+    });
+    return res.grants;
+  }
+  async grant(input) {
+    const ns = this.resolveNs(input.ns);
+    this.assertOwner(ns);
+    const mode = input.mode ?? "read";
+    if (this.opts.local)
+      return this.opts.local.upsert(ns, input.grantee, mode);
+    return this.opts.client.request(this.collectionPath(), {
+      method: "POST",
+      body: { ns, grantee: input.grantee, mode }
+    });
+  }
+  async revoke(id) {
+    if (!id.trim())
+      throw new UnifiedError("invalid_input", "grant id is required");
+    if (this.opts.local) {
+      const g = this.opts.local.get(id);
+      if (g)
+        this.assertOwner(g.ns);
+      return this.opts.local.delete(id);
+    }
+    const res = await this.opts.client.request(this.itemPath(id), {
+      method: "DELETE"
+    });
+    return res.revoked;
+  }
+  assertLocalAccess(targetNs, mode) {
+    const local = this.opts.local;
+    if (!local)
+      return;
+    if (namespaceAccess(local, this.caller(), targetNs, mode))
+      return;
+    throw notGrantedError(this.opts.resource, targetNs);
+  }
+  assertOwner(ns) {
+    if (ns !== this.own()) {
+      throw new UnifiedError("invalid_input", `only the owning app can manage grants for namespace "${ns}"`);
+    }
+  }
+  collectionPath() {
+    return `/api/v1/${this.opts.resource}/grants`;
+  }
+  itemPath(id) {
+    return `${this.collectionPath()}/${encodeURIComponent(id)}`;
+  }
+}
+
 // src/resources/storage/errors.ts
 var storageError = subsystemError;
 function storageAbortError(what, reason) {
@@ -4496,6 +4990,17 @@ class CloudStorageBackend {
   revert(ns, collection, id, version) {
     return this.post("/revert", { ns, collection, id, version });
   }
+}
+
+// src/resources/_kv/keys.ts
+function pkOf(ns, collection, id) {
+  return JSON.stringify([ns, collection, id]);
+}
+function cpkOf(ns, collection) {
+  return JSON.stringify([ns, collection]);
+}
+function vpkOf(ns, collection, id, version) {
+  return JSON.stringify([ns, collection, id, version]);
 }
 
 // src/resources/storage/predicate.ts
@@ -4726,295 +5231,6 @@ function clampPage(raw) {
   return Math.min(MAX_PAGE, Math.trunc(raw));
 }
 
-// src/resources/storage/storage.ts
-var utf8Encoder4 = new TextEncoder;
-var utf8Decoder4 = new TextDecoder;
-var MAX_SCAN_PAGES = 100;
-function encodeBlob(raw) {
-  if (typeof raw === "string")
-    return { bytes: utf8Encoder4.encode(raw), encoding: "utf8" };
-  if (raw instanceof Uint8Array)
-    return { bytes: raw, encoding: "binary" };
-  if (raw instanceof ArrayBuffer)
-    return { bytes: new Uint8Array(raw), encoding: "arraybuffer" };
-  throw storageError("invalid_input", "blob field must be a string, Uint8Array, or ArrayBuffer");
-}
-function decodeBlob(bytes, encoding) {
-  if (encoding === "utf8")
-    return utf8Decoder4.decode(bytes);
-  if (encoding === "arraybuffer")
-    return bytes.slice().buffer;
-  return bytes;
-}
-
-class CollectionImpl {
-  backend;
-  ns;
-  name;
-  schema;
-  mode;
-  blobField;
-  versioned;
-  ensurePromise = null;
-  constructor(backend, ns, name, schema, mode) {
-    this.backend = backend;
-    this.ns = ns;
-    this.name = name;
-    this.schema = schema;
-    this.mode = mode;
-    this.blobField = schema.blob;
-    this.versioned = schema.versioned === true;
-  }
-  requireBackend() {
-    return requireAvailableBackend(this.backend, "storage");
-  }
-  assertWritable() {
-    assertWritableNamespace(this.mode, this.ns, "storage");
-  }
-  ensure(backend) {
-    if (!this.ensurePromise) {
-      this.ensurePromise = backend.ensureCollection(this.ns, this.name, {
-        key: this.schema.key,
-        indexes: Array.from(this.schema.indexes ?? []),
-        ...this.blobField ? { blobField: this.blobField } : {},
-        versioned: this.versioned
-      });
-    }
-    return this.ensurePromise;
-  }
-  idOf(value) {
-    const keyVal = value[this.schema.key];
-    const id = keyVal === undefined || keyVal === null ? "" : String(keyVal);
-    if (!id) {
-      throw storageError("invalid_input", `record is missing required key "${this.schema.key}"`);
-    }
-    return id;
-  }
-  hydrate(rec, blob) {
-    const out = { ...rec.metadata };
-    if (this.blobField && blob) {
-      out[this.blobField] = decodeBlob(blob, rec.blobEncoding);
-    }
-    return out;
-  }
-  fieldType(field) {
-    const declared = this.schema.fieldTypes?.[field];
-    return declared ?? "text";
-  }
-  toBackendQuery(q) {
-    const orderField = typeof q.orderBy === "string" ? q.orderBy : q.orderBy?.field;
-    if (this.blobField) {
-      if (q.where && this.blobField in q.where) {
-        throw storageError("invalid_input", `cannot filter on blob field "${this.blobField}"`);
-      }
-      if (orderField === this.blobField) {
-        throw storageError("invalid_input", `cannot order by blob field "${this.blobField}"`);
-      }
-    }
-    const out = {};
-    const where = compileWhere(q.where);
-    if (where.length > 0)
-      out.where = where;
-    if (orderField) {
-      const explicit = typeof q.orderBy === "string" ? undefined : q.orderBy;
-      out.orderBy = {
-        field: orderField,
-        type: explicit?.type ?? this.fieldType(orderField),
-        dir: explicit?.dir ?? q.order ?? "asc"
-      };
-    }
-    if (q.limit !== undefined)
-      out.limit = q.limit;
-    if (q.after !== undefined)
-      out.after = q.after;
-    return out;
-  }
-  async abortable(signal, what, run) {
-    throwIfAborted(signal, what);
-    try {
-      return await run();
-    } catch (err) {
-      throwIfAborted(signal, what, err);
-      throw err;
-    }
-  }
-  async put(value) {
-    this.assertWritable();
-    const backend = this.requireBackend();
-    await this.ensure(backend);
-    const id = this.idOf(value);
-    const metadata = { ...value };
-    let blob;
-    let blobEncoding;
-    if (this.blobField) {
-      const raw = metadata[this.blobField];
-      delete metadata[this.blobField];
-      if (raw !== undefined && raw !== null) {
-        const enc = encodeBlob(raw);
-        blob = enc.bytes;
-        blobEncoding = enc.encoding;
-      }
-    }
-    const req = {
-      ns: this.ns,
-      collection: this.name,
-      id,
-      metadata,
-      versioned: this.versioned,
-      ...blob !== undefined && blobEncoding !== undefined ? { blob, blobEncoding } : {}
-    };
-    return backend.put(req);
-  }
-  async get(id, opts = {}) {
-    const signal = opts.signal;
-    const what = `get on "${this.name}"`;
-    const backend = this.requireBackend();
-    throwIfAborted(signal, what);
-    await this.ensure(backend);
-    const call = signal ? { signal } : undefined;
-    const rec = await this.abortable(signal, what, () => backend.get(this.ns, this.name, id, call));
-    if (!rec)
-      return null;
-    const blob = this.blobField && rec.hasBlob ? await this.abortable(signal, what, () => backend.readBlob(this.ns, this.name, id, call)) : null;
-    return this.hydrate(rec, blob);
-  }
-  async query(q = {}) {
-    const signal = q.signal;
-    const what = `query on "${this.name}"`;
-    const backend = this.requireBackend();
-    throwIfAborted(signal, what);
-    await this.ensure(backend);
-    const bq = this.toBackendQuery(q);
-    const call = signal ? { signal } : undefined;
-    const want = q.limit;
-    const rows = [];
-    let after = bq.after;
-    let seen;
-    for (let pages = 0;; pages++) {
-      const remaining = want === undefined ? MAX_PAGE : want - rows.length;
-      if (remaining <= 0)
-        break;
-      const page = await this.abortable(signal, what, () => backend.query(this.ns, this.name, {
-        ...bq,
-        limit: Math.min(MAX_PAGE, remaining),
-        ...after === undefined ? {} : { after }
-      }, call));
-      rows.push(...page.records);
-      if (!page.nextCursor)
-        break;
-      if (want !== undefined && rows.length >= want)
-        break;
-      if (page.nextCursor === seen)
-        break;
-      seen = page.nextCursor;
-      after = page.nextCursor;
-      if (pages + 1 >= MAX_SCAN_PAGES) {
-        throw storageError("invalid_input", `query on "${this.name}" exceeded ${MAX_SCAN_PAGES * MAX_PAGE} rows — pass a limit, narrow the where, or page with page()/after`);
-      }
-    }
-    const out = want === undefined ? rows : rows.slice(0, want);
-    return out.map((r) => ({ ...r.metadata }));
-  }
-  async page(q = {}) {
-    const signal = q.signal;
-    const what = `page on "${this.name}"`;
-    const backend = this.requireBackend();
-    throwIfAborted(signal, what);
-    await this.ensure(backend);
-    const call = signal ? { signal } : undefined;
-    const { records, nextCursor } = await this.abortable(signal, what, () => backend.query(this.ns, this.name, this.toBackendQuery(q), call));
-    return {
-      items: records.map((r) => ({ ...r.metadata })),
-      ...nextCursor ? { nextCursor } : {}
-    };
-  }
-  async count(q = {}) {
-    const signal = q.signal;
-    const what = `count on "${this.name}"`;
-    const backend = this.requireBackend();
-    throwIfAborted(signal, what);
-    await this.ensure(backend);
-    const bq = this.toBackendQuery(q);
-    const call = signal ? { signal } : undefined;
-    return this.abortable(signal, what, () => backend.count(this.ns, this.name, bq.where ? { where: bq.where } : {}, call));
-  }
-  async delete(id) {
-    this.assertWritable();
-    const backend = this.requireBackend();
-    await this.ensure(backend);
-    return backend.delete(this.ns, this.name, id);
-  }
-  del(id) {
-    return this.delete(id);
-  }
-  async blob(id) {
-    const backend = this.requireBackend();
-    await this.ensure(backend);
-    return backend.readBlob(this.ns, this.name, id);
-  }
-  async versions(id) {
-    const backend = this.requireBackend();
-    await this.ensure(backend);
-    const list = await backend.listVersions(this.ns, this.name, id);
-    return list.map((v) => ({ version: v.version, createdAt: v.createdAt }));
-  }
-  async getVersion(id, version) {
-    const backend = this.requireBackend();
-    await this.ensure(backend);
-    const rec = await backend.getVersion(this.ns, this.name, id, version);
-    if (!rec)
-      return null;
-    const blob = this.blobField && rec.hasBlob ? await backend.readVersionBlob(this.ns, this.name, id, version) : null;
-    return this.hydrate(rec, blob);
-  }
-  async revert(id, version) {
-    this.assertWritable();
-    const backend = this.requireBackend();
-    await this.ensure(backend);
-    return backend.revert(this.ns, this.name, id, version);
-  }
-}
-
-class NamespaceImpl {
-  backend;
-  id;
-  mode;
-  constructor(backend, id, mode) {
-    this.backend = backend;
-    this.id = id;
-    this.mode = mode;
-  }
-  collection(name, schema) {
-    return new CollectionImpl(this.backend, this.id, name, schema, this.mode);
-  }
-}
-
-class Storage {
-  client;
-  resolver;
-  constructor(client) {
-    this.client = client;
-    this.resolver = new BackendResolver(() => client.storageBackend, () => client.serverCapable, () => new CloudStorageBackend(client));
-  }
-  available() {
-    return this.resolver.available();
-  }
-  namespace(appId, opts = {}) {
-    const { id, mode } = deriveNamespace(this.client.appId, appId, opts.mode);
-    return new NamespaceImpl(this.resolver.resolve(), id, mode);
-  }
-}
-// src/resources/_kv/keys.ts
-function pkOf(ns, collection, id) {
-  return JSON.stringify([ns, collection, id]);
-}
-function cpkOf(ns, collection) {
-  return JSON.stringify([ns, collection]);
-}
-function vpkOf(ns, collection, id, version) {
-  return JSON.stringify([ns, collection, id, version]);
-}
-
 // src/resources/storage/memory.ts
 function stripNulls(value) {
   const out = {};
@@ -5039,9 +5255,13 @@ function toRecord(row) {
 
 class MemoryBackend {
   name = "memory";
+  grants;
   objects = new Map;
   blobs = new Map;
   versions = new Map;
+  constructor(opts = {}) {
+    this.grants = opts.grants ?? new MemoryGrantStore;
+  }
   available() {
     return true;
   }
@@ -5193,6 +5413,320 @@ class MemoryBackend {
       ...v.bytes !== undefined ? { blob: v.bytes.slice() } : {},
       ...v.blobEncoding ? { blobEncoding: v.blobEncoding } : {}
     });
+  }
+}
+
+// src/resources/storage/storage.ts
+var utf8Encoder4 = new TextEncoder;
+var utf8Decoder4 = new TextDecoder;
+var MAX_SCAN_PAGES = 100;
+function encodeBlob(raw) {
+  if (typeof raw === "string")
+    return { bytes: utf8Encoder4.encode(raw), encoding: "utf8" };
+  if (raw instanceof Uint8Array)
+    return { bytes: raw, encoding: "binary" };
+  if (raw instanceof ArrayBuffer)
+    return { bytes: new Uint8Array(raw), encoding: "arraybuffer" };
+  throw storageError("invalid_input", "blob field must be a string, Uint8Array, or ArrayBuffer");
+}
+function decodeBlob(bytes, encoding) {
+  if (encoding === "utf8")
+    return utf8Decoder4.decode(bytes);
+  if (encoding === "arraybuffer")
+    return bytes.slice().buffer;
+  return bytes;
+}
+
+class CollectionImpl {
+  backend;
+  ns;
+  name;
+  schema;
+  mode;
+  sharing;
+  blobField;
+  versioned;
+  ensurePromise = null;
+  constructor(backend, ns, name, schema, mode, sharing) {
+    this.backend = backend;
+    this.ns = ns;
+    this.name = name;
+    this.schema = schema;
+    this.mode = mode;
+    this.sharing = sharing;
+    this.blobField = schema.blob;
+    this.versioned = schema.versioned === true;
+  }
+  requireBackend() {
+    return requireAvailableBackend(this.backend, "storage");
+  }
+  assertReadable() {
+    this.sharing.assertLocalAccess(this.ns, "read");
+  }
+  assertWritable() {
+    assertWritableNamespace(this.mode, this.ns, "storage");
+    this.sharing.assertLocalAccess(this.ns, "readwrite");
+  }
+  ensure(backend) {
+    if (!this.ensurePromise) {
+      this.ensurePromise = backend.ensureCollection(this.ns, this.name, {
+        key: this.schema.key,
+        indexes: Array.from(this.schema.indexes ?? []),
+        ...this.blobField ? { blobField: this.blobField } : {},
+        versioned: this.versioned
+      });
+    }
+    return this.ensurePromise;
+  }
+  idOf(value) {
+    const keyVal = value[this.schema.key];
+    const id = keyVal === undefined || keyVal === null ? "" : String(keyVal);
+    if (!id) {
+      throw storageError("invalid_input", `record is missing required key "${this.schema.key}"`);
+    }
+    return id;
+  }
+  hydrate(rec, blob) {
+    const out = { ...rec.metadata };
+    if (this.blobField && blob) {
+      out[this.blobField] = decodeBlob(blob, rec.blobEncoding);
+    }
+    return out;
+  }
+  fieldType(field) {
+    const declared = this.schema.fieldTypes?.[field];
+    return declared ?? "text";
+  }
+  toBackendQuery(q) {
+    const orderField = typeof q.orderBy === "string" ? q.orderBy : q.orderBy?.field;
+    if (this.blobField) {
+      if (q.where && this.blobField in q.where) {
+        throw storageError("invalid_input", `cannot filter on blob field "${this.blobField}"`);
+      }
+      if (orderField === this.blobField) {
+        throw storageError("invalid_input", `cannot order by blob field "${this.blobField}"`);
+      }
+    }
+    const out = {};
+    const where = compileWhere(q.where);
+    if (where.length > 0)
+      out.where = where;
+    if (orderField) {
+      const explicit = typeof q.orderBy === "string" ? undefined : q.orderBy;
+      out.orderBy = {
+        field: orderField,
+        type: explicit?.type ?? this.fieldType(orderField),
+        dir: explicit?.dir ?? q.order ?? "asc"
+      };
+    }
+    if (q.limit !== undefined)
+      out.limit = q.limit;
+    if (q.after !== undefined)
+      out.after = q.after;
+    return out;
+  }
+  async abortable(signal, what, run) {
+    throwIfAborted(signal, what);
+    try {
+      return await run();
+    } catch (err) {
+      throwIfAborted(signal, what, err);
+      throw err;
+    }
+  }
+  async put(value) {
+    this.assertWritable();
+    const backend = this.requireBackend();
+    await this.ensure(backend);
+    const id = this.idOf(value);
+    const metadata = { ...value };
+    let blob;
+    let blobEncoding;
+    if (this.blobField) {
+      const raw = metadata[this.blobField];
+      delete metadata[this.blobField];
+      if (raw !== undefined && raw !== null) {
+        const enc = encodeBlob(raw);
+        blob = enc.bytes;
+        blobEncoding = enc.encoding;
+      }
+    }
+    const req = {
+      ns: this.ns,
+      collection: this.name,
+      id,
+      metadata,
+      versioned: this.versioned,
+      ...blob !== undefined && blobEncoding !== undefined ? { blob, blobEncoding } : {}
+    };
+    return backend.put(req);
+  }
+  async get(id, opts = {}) {
+    this.assertReadable();
+    const signal = opts.signal;
+    const what = `get on "${this.name}"`;
+    const backend = this.requireBackend();
+    throwIfAborted(signal, what);
+    await this.ensure(backend);
+    const call = signal ? { signal } : undefined;
+    const rec = await this.abortable(signal, what, () => backend.get(this.ns, this.name, id, call));
+    if (!rec)
+      return null;
+    const blob = this.blobField && rec.hasBlob ? await this.abortable(signal, what, () => backend.readBlob(this.ns, this.name, id, call)) : null;
+    return this.hydrate(rec, blob);
+  }
+  async query(q = {}) {
+    this.assertReadable();
+    const signal = q.signal;
+    const what = `query on "${this.name}"`;
+    const backend = this.requireBackend();
+    throwIfAborted(signal, what);
+    await this.ensure(backend);
+    const bq = this.toBackendQuery(q);
+    const call = signal ? { signal } : undefined;
+    const want = q.limit;
+    const rows = [];
+    let after = bq.after;
+    let seen;
+    for (let pages = 0;; pages++) {
+      const remaining = want === undefined ? MAX_PAGE : want - rows.length;
+      if (remaining <= 0)
+        break;
+      const page = await this.abortable(signal, what, () => backend.query(this.ns, this.name, {
+        ...bq,
+        limit: Math.min(MAX_PAGE, remaining),
+        ...after === undefined ? {} : { after }
+      }, call));
+      rows.push(...page.records);
+      if (!page.nextCursor)
+        break;
+      if (want !== undefined && rows.length >= want)
+        break;
+      if (page.nextCursor === seen)
+        break;
+      seen = page.nextCursor;
+      after = page.nextCursor;
+      if (pages + 1 >= MAX_SCAN_PAGES) {
+        throw storageError("invalid_input", `query on "${this.name}" exceeded ${MAX_SCAN_PAGES * MAX_PAGE} rows — pass a limit, narrow the where, or page with page()/after`);
+      }
+    }
+    const out = want === undefined ? rows : rows.slice(0, want);
+    return out.map((r) => ({ ...r.metadata }));
+  }
+  async page(q = {}) {
+    this.assertReadable();
+    const signal = q.signal;
+    const what = `page on "${this.name}"`;
+    const backend = this.requireBackend();
+    throwIfAborted(signal, what);
+    await this.ensure(backend);
+    const call = signal ? { signal } : undefined;
+    const { records, nextCursor } = await this.abortable(signal, what, () => backend.query(this.ns, this.name, this.toBackendQuery(q), call));
+    return {
+      items: records.map((r) => ({ ...r.metadata })),
+      ...nextCursor ? { nextCursor } : {}
+    };
+  }
+  async count(q = {}) {
+    this.assertReadable();
+    const signal = q.signal;
+    const what = `count on "${this.name}"`;
+    const backend = this.requireBackend();
+    throwIfAborted(signal, what);
+    await this.ensure(backend);
+    const bq = this.toBackendQuery(q);
+    const call = signal ? { signal } : undefined;
+    return this.abortable(signal, what, () => backend.count(this.ns, this.name, bq.where ? { where: bq.where } : {}, call));
+  }
+  async delete(id) {
+    this.assertWritable();
+    const backend = this.requireBackend();
+    await this.ensure(backend);
+    return backend.delete(this.ns, this.name, id);
+  }
+  del(id) {
+    return this.delete(id);
+  }
+  async blob(id) {
+    this.assertReadable();
+    const backend = this.requireBackend();
+    await this.ensure(backend);
+    return backend.readBlob(this.ns, this.name, id);
+  }
+  async versions(id) {
+    this.assertReadable();
+    const backend = this.requireBackend();
+    await this.ensure(backend);
+    const list = await backend.listVersions(this.ns, this.name, id);
+    return list.map((v) => ({ version: v.version, createdAt: v.createdAt }));
+  }
+  async getVersion(id, version) {
+    this.assertReadable();
+    const backend = this.requireBackend();
+    await this.ensure(backend);
+    const rec = await backend.getVersion(this.ns, this.name, id, version);
+    if (!rec)
+      return null;
+    const blob = this.blobField && rec.hasBlob ? await backend.readVersionBlob(this.ns, this.name, id, version) : null;
+    return this.hydrate(rec, blob);
+  }
+  async revert(id, version) {
+    this.assertWritable();
+    const backend = this.requireBackend();
+    await this.ensure(backend);
+    return backend.revert(this.ns, this.name, id, version);
+  }
+}
+
+class NamespaceImpl {
+  backend;
+  id;
+  mode;
+  sharing;
+  constructor(backend, id, mode, sharing) {
+    this.backend = backend;
+    this.id = id;
+    this.mode = mode;
+    this.sharing = sharing;
+  }
+  collection(name, schema) {
+    return new CollectionImpl(this.backend, this.id, name, schema, this.mode, this.sharing);
+  }
+}
+
+class Storage {
+  client;
+  resolver;
+  #sharing;
+  constructor(client) {
+    this.client = client;
+    this.resolver = new BackendResolver(() => client.storageBackend, () => client.serverCapable, () => new CloudStorageBackend(client));
+  }
+  available() {
+    return this.resolver.available();
+  }
+  get grants() {
+    if (!this.#sharing) {
+      this.#sharing = new NamespaceSharing({
+        resource: "storage",
+        client: this.client,
+        local: this.localGrantStore(),
+        ownNs: () => this.client.appId
+      });
+    }
+    return this.#sharing;
+  }
+  namespace(appId, opts = {}) {
+    const { id, mode } = deriveNamespace(this.client.appId, appId, opts.mode);
+    const sharing = this.grants;
+    sharing.assertLocalAccess(id, mode);
+    return new NamespaceImpl(this.resolver.resolve(), id, mode, sharing);
+  }
+  localGrantStore() {
+    if (this.client.grantStore)
+      return this.client.grantStore;
+    const backend = this.client.storageBackend;
+    return backend instanceof MemoryBackend ? backend.grants : null;
   }
 }
 // src/core/_internal/observable.ts
@@ -5740,8 +6274,20 @@ class WorkspaceSync {
 class Sync {
   client;
   workspaces = new Map;
+  #sharing;
   constructor(client) {
     this.client = client;
+  }
+  get grants() {
+    if (!this.#sharing) {
+      this.#sharing = new NamespaceSharing({
+        resource: "sync",
+        client: this.client,
+        local: this.client.grantStore ?? null,
+        ownNs: () => this.client.appId
+      });
+    }
+    return this.#sharing;
   }
   async listWorkspaces() {
     const res = await this.client.request("/api/v1/sync/workspaces", {
@@ -5763,6 +6309,11 @@ class Sync {
   }
 }
 // src/resources/usage.ts
+var PLAN_FREE_ID = 0;
+function isCloudPlan(plan) {
+  return Number.isFinite(plan.id) && plan.id > PLAN_FREE_ID;
+}
+
 class Usage {
   client;
   constructor(client) {
@@ -6605,6 +7156,8 @@ class UnifiedAI extends Core {
     const appId = this.appId.trim();
     if (appId)
       h["x-unified-app"] = appId;
+    if (this.callerKind === "agent")
+      h["x-unified-caller"] = "agent";
     return h;
   }
 }
@@ -7421,13 +7974,17 @@ export {
   Images,
   Memory,
   MemoryBackend,
+  MemoryGrantStore,
   MessageStream,
   Messages,
   Models,
+  NamespaceSharing,
   NotFoundError,
   OPEN_ARTIFACT_ACTION,
   OPEN_ARTIFACT_PARAMS_SCHEMA,
   OPEN_ARTIFACT_SPEC,
+  PLAN_FREE_ID,
+  PlanRequiredError,
   Projects,
   RateLimitError,
   References,
@@ -7475,18 +8032,23 @@ export {
   getTimeZoneOffsetMs,
   httpErrorCodeFromStatus,
   httpErrorMessage,
+  isCloudPlan,
   isEpochMismatch,
+  isPlanRequiredBody,
   isResolvableArtifactRef,
   isSameDayInZone,
   itemToMetadata,
   monthGrid,
+  namespaceAccess,
   newId,
   normalizeNs,
   normalizePrefix,
   normalizeRelPath,
+  notGrantedError,
   parseCalendar,
   parseCalendarItem,
   parseSSE,
+  planRequiredError,
   runBrowserPkce,
   setOverrideOp,
   signInWithBrowser,
@@ -7495,8 +8057,10 @@ export {
   startOfWeekInZone,
   storageAbortError,
   storageError,
+  storageTools,
   summarizeUsage,
   syncError,
+  syncTools,
   toChatAudioPart,
   toChatFilePart,
   toChatImagePart,
@@ -7516,5 +8080,5 @@ export {
   zonedFieldsToUtc
 };
 
-//# debugId=3C20A2B254126D0E64756E2164756E21
+//# debugId=C62947E8E22E5DD964756E2164756E21
 //# sourceMappingURL=index.js.map

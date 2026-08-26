@@ -1,6 +1,6 @@
 export { Core } from "../core/core.js";
 export type { CacheConfig, CoreOptions, RequestOptions, RetryAttempt, RetryConfig, RetryListener, TokenProvider, } from "../core/core.js";
-export { UnifiedError, UnifiedAIError, UnifiedAIAuthError, AuthenticationError, BadRequestError, ForbiddenError, NotFoundError, DeprecatedModelError, RateLimitError, UsageLimitError, ServerError, StreamInterruptedError, buildHttpError, httpErrorCodeFromStatus, } from "../core/errors.js";
+export { UnifiedError, UnifiedAIError, UnifiedAIAuthError, AuthenticationError, BadRequestError, ForbiddenError, NotFoundError, DeprecatedModelError, RateLimitError, UsageLimitError, PlanRequiredError, planRequiredError, isPlanRequiredBody, ServerError, StreamInterruptedError, buildHttpError, httpErrorCodeFromStatus, } from "../core/errors.js";
 export type { UnifiedErrorCode, UnifiedAIAuthErrorCode, UnifiedAIHttpErrorCode, } from "../core/errors.js";
 export type { Identity } from "../core/identity.js";
 export { Session } from "../core/session.js";
@@ -29,6 +29,7 @@ export * from "../resources/responses.js";
 export * from "../resources/search/types.js";
 export * from "../resources/openArtifact.js";
 export * from "../resources/storage/index.js";
+export * from "../resources/sharing.js";
 export * from "../resources/sync/index.js";
 export * from "../resources/usage.js";
 export * from "../resources/users.js";

@@ -166,7 +166,7 @@ describe("sdk.storage", () => {
     expect(await artifacts.delete("p1")).toBe(false); // idempotent
   });
 
-  test("namespaces isolate data; read-only mode blocks writes", async () => {
+  test("namespaces isolate data; ungranted cross-app throws storage_not_granted", async () => {
     const sdk = client("app-a");
     const own = sdk.storage.namespace();
     expect(own.id).toBe("app-a");
@@ -174,17 +174,13 @@ describe("sdk.storage", () => {
       .collection<Project>("projects", { key: "id" })
       .put({ id: "p", name: "n", updatedAt: 1 });
 
-    // Different namespace = different data.
-    const other = sdk.storage.namespace("app-b");
-    expect(await other.collection<Project>("projects", { key: "id" }).query()).toEqual([]);
-
-    // Cross-app defaults to read-only.
-    expect(other.mode).toBe("read");
-    await expect(
-      other
-        .collection<Project>("projects", { key: "id" })
-        .put({ id: "x", name: "n", updatedAt: 1 }),
-    ).rejects.toThrow(/read-only/);
+    expect(() => sdk.storage.namespace("app-b")).toThrow(/no grant/);
+    try {
+      sdk.storage.namespace("app-b");
+      throw new Error("expected throw");
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe("storage_not_granted");
+    }
   });
 
   test("unavailable backend throws on use", async () => {

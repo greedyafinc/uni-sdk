@@ -1,3 +1,4 @@
+import type { MemoryGrantStore } from "../resources/_kv/sharing";
 import type { FsBackend } from "../resources/fs/types";
 import type { StorageBackend } from "../resources/storage/types";
 import type { SnapshotBackend } from "../resources/sync/types";
@@ -123,6 +124,23 @@ export interface CoreOptions {
    * PROTOCOL.md ("Sync").
    */
   sync?: SnapshotBackend;
+  /**
+   * Caller class used when checking namespace grants locally (MemoryBackend /
+   * tests). `"app"` (default) matches `{ type: "app", appId }` grants;
+   * `"agent"` matches `{ type: "agent" }` grants. Sent as `x-unified-caller`
+   * so unified-api can classify the same way. The server still re-derives
+   * caller class from the credential — this is a hint, not a self-declaration.
+   */
+  callerKind?: "app" | "agent";
+  /**
+   * In-process grant table for local UnifiedApp / desktop / tests. When set,
+   * `sdk.storage.grants` and `sdk.sync.grants` stay local (no grant HTTP).
+   * Pass the **same instance** to `MemoryBackend` and `FakeSyncServer` so
+   * enforcement matches CRUD. Cloud clients omit this; unified-api is then
+   * authoritative. Production deploy is out of scope — this is the local-dev
+   * path.
+   */
+  grantStore?: MemoryGrantStore;
 }
 
 export interface RequestOptions {
@@ -187,7 +205,16 @@ export class Core {
     Required<
       Omit<
         CoreOptions,
-        "token" | "retry" | "cache" | "onRetry" | "compression" | "storage" | "fs" | "sync"
+        | "token"
+        | "retry"
+        | "cache"
+        | "onRetry"
+        | "compression"
+        | "storage"
+        | "fs"
+        | "sync"
+        | "callerKind"
+        | "grantStore"
       >
     >
   > & {
@@ -199,6 +226,8 @@ export class Core {
     storage: StorageBackend | undefined;
     fs: FsBackend | undefined;
     sync: SnapshotBackend | undefined;
+    callerKind: "app" | "agent";
+    grantStore: MemoryGrantStore | undefined;
   };
 
   constructor(options: CoreOptions = {}) {
@@ -215,6 +244,8 @@ export class Core {
       storage: options.storage,
       fs: options.fs,
       sync: options.sync,
+      callerKind: options.callerKind ?? "app",
+      grantStore: options.grantStore,
     });
   }
 
@@ -249,6 +280,24 @@ export class Core {
   /** The injected snapshot backend for `sdk.sync`, if any. `undefined` runs the engine memory-only. */
   get snapshotBackend(): SnapshotBackend | undefined {
     return this.options.sync;
+  }
+
+  /**
+   * Caller class for namespace grants (`"app"` or `"agent"`). Defaults to
+   * `"app"`. See {@link CoreOptions.callerKind}.
+   */
+  get callerKind(): "app" | "agent" {
+    return this.options.callerKind;
+  }
+
+  /**
+   * Host-injected in-process grant table, if any. Local UnifiedApp / desktop
+   * wires this so grant CRUD never leaves the process. `undefined` means
+   * storage falls back to `MemoryBackend.grants` (when that backend is
+   * injected) and sync grant CRUD goes over HTTP.
+   */
+  get grantStore(): MemoryGrantStore | undefined {
+    return this.options.grantStore;
   }
 
   /**

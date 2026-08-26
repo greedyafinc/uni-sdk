@@ -1,4 +1,19 @@
 import type { Core } from "../core/core.js";
+/**
+ * `plans.id` (and `users.me().account_type`) for the Free row. Confirmed by
+ * PROTOCOL.md `/me` (`account_type: 0`) and the billing source of truth in
+ * unified-db. Do not invent other plan ids in this client — Pro is a higher
+ * id; entitlement is `plan.id > PLAN_FREE_ID` with the server authoritative
+ * via `plan_required`.
+ */
+export declare const PLAN_FREE_ID = 0;
+/**
+ * Whether `plan` satisfies the Pro cloud-persistence gate. Free is
+ * {@link PLAN_FREE_ID} (`0`). Any higher `plans.id` is treated as entitled
+ * (this repo's usage fixtures name that paid row `"Pro"` with `id: 2`; the
+ * SDK does not hard-code that id). The server is authoritative.
+ */
+export declare function isCloudPlan(plan: Pick<UsagePlan, "id">): boolean;
 export interface UsagePlan {
     id: number;
     name: string;

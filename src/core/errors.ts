@@ -28,6 +28,8 @@ export type UnifiedErrorCode =
   | "storage_unavailable"
   | "storage_read_only"
   | "storage_not_granted"
+  // Sync subsystem (also raises "invalid_input")
+  | "sync_not_granted"
   // Fs subsystem (also raises "not_found" / "invalid_input")
   | "fs_unavailable"
   | "fs_read_only"
@@ -104,6 +106,10 @@ export type UnifiedAIHttpErrorCode =
   | "model_deprecated"
   | "rate_limited"
   | "usage_limit_exceeded"
+  | "plan_required"
+  | "storage_not_granted"
+  | "sync_not_granted"
+  | "fs_not_granted"
   | "server_error"
   | "request_failed";
 
@@ -196,8 +202,9 @@ export class ForbiddenError extends UnifiedAIError {
     status: number,
     body: unknown,
     headers?: Readonly<Record<string, string>>,
+    code: UnifiedAIHttpErrorCode = "forbidden",
   ) {
-    super("forbidden", message, status, body, headers);
+    super(code, message, status, body, headers);
     this.name = "ForbiddenError";
   }
 }
@@ -311,6 +318,37 @@ export class UsageLimitError extends UnifiedAIError {
   }
 }
 
+/**
+ * Cloud sync/persistence was refused because the caller's plan is Free.
+ * Sibling — NOT child — of {@link ForbiddenError}: a generic 403 handler
+ * that only checks `instanceof ForbiddenError` will miss this, which is
+ * correct (this is an upgrade CTA, not a permission bug). HTTP 403 with
+ * body `{ code: "plan_required", required_plan: "Pro", current_plan_id }`.
+ *
+ * Local/injected backends never emit this — only cloud paths
+ * (`/api/v1/storage/*`, `/api/v1/fs/*`, `/api/v1/sync/:id/{bootstrap,delta,apply}`).
+ */
+export class PlanRequiredError extends UnifiedAIError {
+  readonly isPlanRequired = true as const;
+  /** Plan name the caller must have. Currently always `"Pro"`. */
+  readonly requiredPlan: string;
+  /** `plans.id` / `account_type` of the caller, when the server sent it. */
+  readonly currentPlanId: number | undefined;
+
+  constructor(
+    message: string,
+    status: number,
+    body: unknown,
+    headers?: Readonly<Record<string, string>>,
+  ) {
+    super("plan_required", message, status, body, headers);
+    this.name = "PlanRequiredError";
+    const parsed = parsePlanRequiredFields(body);
+    this.requiredPlan = parsed.requiredPlan;
+    this.currentPlanId = parsed.currentPlanId;
+  }
+}
+
 export class ServerError extends UnifiedAIError {
   constructor(
     message: string,
@@ -321,6 +359,41 @@ export class ServerError extends UnifiedAIError {
     super("server_error", message, status, body, headers);
     this.name = "ServerError";
   }
+}
+
+function parsePlanRequiredFields(body: unknown): {
+  requiredPlan: string;
+  currentPlanId: number | undefined;
+} {
+  let requiredPlan = "Pro";
+  let currentPlanId: number | undefined;
+  if (body && typeof body === "object") {
+    const obj = body as Record<string, unknown>;
+    if (typeof obj.required_plan === "string" && obj.required_plan) {
+      requiredPlan = obj.required_plan;
+    }
+    if (typeof obj.current_plan_id === "number" && Number.isFinite(obj.current_plan_id)) {
+      currentPlanId = obj.current_plan_id;
+    }
+  }
+  return { requiredPlan, currentPlanId };
+}
+
+/** Body `{ code: "plan_required" }` — keyed on the code, not the 403 status. */
+export function isPlanRequiredBody(body: unknown): boolean {
+  if (!body || typeof body !== "object") return false;
+  return (body as Record<string, unknown>).code === "plan_required";
+}
+
+const NOT_GRANTED_CODES = new Set(["storage_not_granted", "sync_not_granted", "fs_not_granted"]);
+
+function notGrantedCodeFromBody(body: unknown): UnifiedAIHttpErrorCode | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const code = (body as Record<string, unknown>).code;
+  if (typeof code === "string" && NOT_GRANTED_CODES.has(code)) {
+    return code as UnifiedAIHttpErrorCode;
+  }
+  return undefined;
 }
 
 function parseUsageFields(body: unknown): {
@@ -403,6 +476,21 @@ export function httpErrorCodeFromStatus(status: number): UnifiedAIHttpErrorCode 
 }
 
 /**
+ * Client-side constructor for a Pro-gate refusal (no HTTP round-trip). The
+ * body shape matches what unified-api emits so `instanceof PlanRequiredError`
+ * and `err.code === "plan_required"` work the same as the mapped HTTP error.
+ */
+export function planRequiredError(currentPlanId = 0, requiredPlan = "Pro"): PlanRequiredError {
+  const body = {
+    code: "plan_required" as const,
+    required_plan: requiredPlan,
+    current_plan_id: currentPlanId,
+    message: `Cloud sync and persistence require a ${requiredPlan} plan.`,
+  };
+  return new PlanRequiredError(body.message, 403, body);
+}
+
+/**
  * Build the right typed error subclass for an HTTP failure. Falls back to
  * `UnifiedAIError` for statuses without a dedicated class (generic 4xx).
  */
@@ -417,6 +505,16 @@ export function buildHttpError(
   // and is shared with expired upload sessions).
   if (isDeprecatedModelBody(body)) {
     return new DeprecatedModelError(message, status, body, headers);
+  }
+  // Upgrade-shaped 403: Free caller hit a Pro-gated cloud path. Sibling of
+  // ForbiddenError so upgrade UI can catch this without treating it as a
+  // permission bug.
+  if (isPlanRequiredBody(body)) {
+    return new PlanRequiredError(message, status, body, headers);
+  }
+  const notGranted = notGrantedCodeFromBody(body);
+  if (notGranted) {
+    return new ForbiddenError(message, status, body, headers, notGranted);
   }
   if (status === 400) return new BadRequestError(message, status, body, headers);
   if (status === 401) return new AuthenticationError(message, status, body, headers);
