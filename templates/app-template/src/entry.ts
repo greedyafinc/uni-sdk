@@ -1,8 +1,3 @@
-// Remote entry (lib mode → app.js, the manifest's `module`). The host imports
-// this module to mount the app; it must register the manifest-declared action
-// handlers at MODULE SCOPE (the host may warm-load the bundle and invoke an
-// action without ever mounting the UI) and default-export the root component.
-import App from "./App.vue";
 import { registerActions } from "@unified/host-api";
 import {
   makeOpenArtifactAdapter,
@@ -10,6 +5,11 @@ import {
   requiredParam,
   safeRegisterActions,
 } from "@unifiedai/sdk/app";
+// Remote entry (lib mode → app.js, the manifest's `module`). The host imports
+// this module to mount the app; it must register the manifest-declared action
+// handlers at MODULE SCOPE (the host may warm-load the bundle and invoke an
+// action without ever mounting the UI) and default-export the root component.
+import App from "./App.vue";
 import { getItem, openItem } from "./store";
 
 const ID_HINT = "Item ids come from a My App search hit.";

@@ -3,7 +3,9 @@ node_modules
 
 # output
 out
-dist
+# dist/ JS + .d.ts are tracked so `github:` installs resolve package
+# exports without Bun lifecycle scripts. Source maps stay local.
+dist/**/*.map
 docs
 *.tgz
 

@@ -12,9 +12,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          # Pin so the committed dist/ (minified bun bundles) stays reproducible.
+          bun-version: "1.4.0"
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run typecheck
-      - run: bun test
       - run: bun run build
+      - name: Committed dist/ matches this build
+        run: |
+          # Source maps are gitignored; JS + .d.ts must match the build output.
+          if git status --porcelain dist | grep -v '\.map$' | grep -q .; then
+            echo "dist/ is stale or incomplete. Run \`bun run build\` and commit the JS/.d.ts outputs."
+            git status --porcelain dist
+            git diff -- dist ':!dist/**/*.map'
+            exit 1
+          fi
+      - run: bun run test

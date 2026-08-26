@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { UnifiedAI, UnifiedAIAuthError, UnifiedError } from "../../src/index";
 import type { SessionEvent } from "../../src/core/session";
+import { UnifiedAI, UnifiedAIAuthError, UnifiedError } from "../../src/index";
 
 // Exercises the browser-safe UnifiedAI directly from source. These tests
 // stand alone — they do not require a build artifact.

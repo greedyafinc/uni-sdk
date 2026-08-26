@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Committed build output — hide from GitHub language stats and review diffs
+dist/** linguist-generated=true

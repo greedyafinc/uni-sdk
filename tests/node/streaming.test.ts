@@ -916,4 +916,3 @@ describe("mid-stream transport drop", () => {
     expect(caught).not.toBeInstanceOf(StreamInterruptedError);
   });
 });
-

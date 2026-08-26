@@ -10,7 +10,7 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@unifiedai/sdk": "^0.2.0",
+    "@unifiedai/sdk": "github:greedyafinc/uni-sdk#main",
     "vue": "^3.5.0"
   },
   "devDependencies": {

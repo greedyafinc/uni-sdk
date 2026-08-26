@@ -25,7 +25,9 @@ const file = await sdk.files.create(body, {
     console.log(`  upload: ${percent}% (${loaded}/${total} bytes)`);
   },
 });
-console.log(`created: id=${file.id} filename=${file.filename} bytes=${file.bytes} purpose=${file.purpose}`);
+console.log(
+  `created: id=${file.id} filename=${file.filename} bytes=${file.bytes} purpose=${file.purpose}`,
+);
 
 // 2. List files (newest first).
 const { data } = await sdk.files.list();

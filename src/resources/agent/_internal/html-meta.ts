@@ -20,10 +20,7 @@ function attr(tag: string, name: string): string | undefined {
 }
 
 function relTokens(rel: string | undefined): string[] {
-  return (rel ?? "")
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean);
+  return (rel ?? "").toLowerCase().split(/\s+/).filter(Boolean);
 }
 
 function resolveUrl(href: string, baseUrl: string): string | undefined {

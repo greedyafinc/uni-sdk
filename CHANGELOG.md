@@ -75,6 +75,14 @@
   for SearXNG later. Intended for Node/CLI/node-service (browser CORS blocks
   DuckDuckGo unless you inject a custom backend).
 
+### Fixed
+
+- GitHub installs (`github:greedyafinc/uni-sdk#…`) resolve `.`, `./app`,
+  `./logos`, and the other documented subpaths on a default `bun install`.
+  `dist/` JS and `.d.ts` are committed; `prepare` skips the rebuild inside
+  `node_modules` so `trustedDependencies` is no longer required (and no
+  longer fails `bun install` when set).
+
 ### Changed
 
 - **Shared SSE stream factory.** `messages` and `responses` streams now throw

@@ -17,7 +17,11 @@ import type { ToolSpec } from "./types";
 // Re-exported as `WebSearchHit`, not `SearchHit`: the top-level barrel also
 // carries `SearchHit` from `resources/search/types` (the cross-app search
 // contract), and the two names must not collide there.
-export type { SearchBackend, SearchHit as WebSearchHit, SearchOptions } from "./_internal/search-types";
+export type {
+  SearchBackend,
+  SearchHit as WebSearchHit,
+  SearchOptions,
+} from "./_internal/search-types";
 export type { FetchLike } from "./_internal/ddg-search";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
