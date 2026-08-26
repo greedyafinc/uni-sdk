@@ -10,6 +10,13 @@
 // merge/replace/null-strips-key logic as the real server (shared `mergePatch`).
 import { pkOf } from "../_kv/keys";
 import type { SyncedRecordFields } from "../_kv/records";
+import {
+  MemoryGrantStore,
+  type NamespaceGrantee,
+  type SharingCaller,
+  namespaceAccess,
+} from "../_kv/sharing";
+import { PLAN_FREE_ID } from "../usage";
 import { mergePatch } from "./merge";
 
 // A record as the fake server stores it — the shared sync record field set,
@@ -57,11 +64,19 @@ export interface FakeSyncServerOptions {
   sharedWorkspaces?: string[];
   /** Base url the SDK is pointed at (cosmetic; routing is by path). */
   baseUrl?: string;
+  /**
+   * Caller's `plans.id`. `PLAN_FREE_ID` (0) makes bootstrap/delta/apply
+   * return 403 `plan_required`. Omit (default) to leave the caller entitled
+   * — existing tests keep working.
+   */
+  cloudPlanId?: number;
 }
 
 /** An in-memory `/api/v1/sync/*` server exposed as a `fetch` implementation. */
 export class FakeSyncServer {
   readonly baseUrl: string;
+  /** Inspectable grant table (same contract as MemoryBackend.grants). */
+  readonly grants = new MemoryGrantStore();
   private readonly shared: Set<string>;
   private readonly workspaces = new Map<string, WorkspaceState>();
   // Membership metadata for GET /sync/workspaces (id → {name, kind, role}).
@@ -71,12 +86,19 @@ export class FakeSyncServer {
   >();
   private failApply = false;
   private offline = false;
+  private cloudPlanId: number | undefined;
   /** Number of requests served — for asserting no redundant round-trips. */
   requestCount = 0;
 
   constructor(opts: FakeSyncServerOptions = {}) {
     this.baseUrl = opts.baseUrl ?? "https://fake-sync.test";
     this.shared = new Set(opts.sharedWorkspaces ?? []);
+    this.cloudPlanId = opts.cloudPlanId;
+  }
+
+  /** Override the caller's plan for the Pro gate (`0` = Free). */
+  setCloudPlanId(id: number | undefined): void {
+    this.cloudPlanId = id;
   }
 
   /** Bump the epoch so the next bootstrap/delta with an older cursor → 409. */
@@ -148,6 +170,8 @@ export class FakeSyncServer {
     const si = parts.indexOf("sync");
     if (si < 0) return errorResponse(404, "route_not_found");
     const method = (init?.method ?? "GET").toUpperCase();
+    const headers = headerMap(input, init);
+    const caller = callerFromHeaders(headers);
 
     // Discovery: GET /sync/workspaces (no :workspaceId). Checked before the
     // per-workspace routes so the static path wins, matching the real server.
@@ -155,13 +179,27 @@ export class FakeSyncServer {
       return this.listWorkspaces();
     }
 
+    // Namespace grants (also static — not scoped to a workspace id).
+    if (parts.length >= si + 2 && parts[si + 1] === "grants") {
+      return this.handleGrants(method, parts.slice(si + 2), init, caller, url);
+    }
+
     if (parts.length < si + 3) return errorResponse(404, "route_not_found");
     const workspaceId = decodeURIComponent(parts[si + 1] ?? "");
     const action = parts[si + 2];
 
-    if (action === "bootstrap" && method === "GET") return this.bootstrap(workspaceId, url);
-    if (action === "delta" && method === "GET") return this.delta(workspaceId, url);
-    if (action === "apply" && method === "POST") return this.apply(workspaceId, init);
+    const gated = this.planGate();
+    if (gated) return gated;
+
+    if (action === "bootstrap" && method === "GET") {
+      return this.bootstrap(workspaceId, url, caller);
+    }
+    if (action === "delta" && method === "GET") {
+      return this.delta(workspaceId, url, caller);
+    }
+    if (action === "apply" && method === "POST") {
+      return this.apply(workspaceId, init, caller);
+    }
     return errorResponse(404, "route_not_found");
   };
 
@@ -178,7 +216,7 @@ export class FakeSyncServer {
     return jsonResponse(200, { workspaces });
   }
 
-  private bootstrap(workspaceId: string, url: URL): Response {
+  private bootstrap(workspaceId: string, url: URL, caller: SharingCaller): Response {
     if (this.offline) return errorResponse(503, "unavailable");
     const ws = this.ws(workspaceId);
     const limit = this.limit(url);
@@ -191,7 +229,7 @@ export class FakeSyncServer {
       after = c.a;
     }
     const live = [...ws.records.values()]
-      .filter((r) => !r.deleted && r.syncId > after)
+      .filter((r) => !r.deleted && r.syncId > after && this.nsVisible(caller, r.ns, "read"))
       .sort((a, b) => a.syncId - b.syncId);
     const page = live.slice(0, limit);
     const complete = live.length <= limit;
@@ -204,7 +242,7 @@ export class FakeSyncServer {
     });
   }
 
-  private delta(workspaceId: string, url: URL): Response {
+  private delta(workspaceId: string, url: URL, caller: SharingCaller): Response {
     if (this.offline) return errorResponse(503, "unavailable");
     const ws = this.ws(workspaceId);
     const limit = this.limit(url);
@@ -217,7 +255,7 @@ export class FakeSyncServer {
       after = c.a;
     }
     const changed = [...ws.records.values()]
-      .filter((r) => r.syncId > after)
+      .filter((r) => r.syncId > after && this.nsVisible(caller, r.ns, "read"))
       .sort((a, b) => a.syncId - b.syncId);
     const page = changed.slice(0, limit);
     const hasMore = changed.length > limit;
@@ -230,7 +268,11 @@ export class FakeSyncServer {
     });
   }
 
-  private apply(workspaceId: string, init?: RequestInit): Response {
+  private apply(
+    workspaceId: string,
+    init: RequestInit | undefined,
+    caller: SharingCaller,
+  ): Response {
     if (this.failApply) return errorResponse(500, "internal");
     const ws = this.ws(workspaceId);
     let body: { ops?: unknown };
@@ -252,6 +294,13 @@ export class FakeSyncServer {
       version: number;
     }> = [];
     for (const op of ops as Array<Record<string, unknown>>) {
+      const ns = String(op.ns ?? "");
+      if (!this.nsVisible(caller, ns, "readwrite")) {
+        return jsonResponse(403, {
+          code: "sync_not_granted",
+          message: `no grant to access namespace "${ns}"`,
+        });
+      }
       if (isShared && (op.blob_hash !== undefined || op.bytes !== undefined)) {
         return errorResponse(400, "blobs_not_supported_in_shared_workspaces");
       }
@@ -352,6 +401,72 @@ export class FakeSyncServer {
     for (const r of ws.records.values()) if (r.syncId > max) max = r.syncId;
     return max;
   }
+
+  private planGate(): Response | null {
+    if (this.cloudPlanId === undefined) return null;
+    if (this.cloudPlanId > PLAN_FREE_ID) return null;
+    return jsonResponse(403, {
+      code: "plan_required",
+      required_plan: "Pro",
+      current_plan_id: this.cloudPlanId,
+      message: "Cloud sync and persistence require a Pro plan.",
+    });
+  }
+
+  /**
+   * Unscoped callers (no `x-unified-app`) are treated as first-party and see
+   * every namespace — matching existing tests and the desktop host. A stamped
+   * app identity is grant-filtered.
+   */
+  private nsVisible(caller: SharingCaller, ns: string, mode: "read" | "readwrite"): boolean {
+    if (!caller.appId.trim()) return true;
+    return namespaceAccess(this.grants, caller, ns, mode);
+  }
+
+  private handleGrants(
+    method: string,
+    rest: string[],
+    init: RequestInit | undefined,
+    caller: SharingCaller,
+    url: URL,
+  ): Response {
+    const own = caller.appId.trim();
+    if (!own) return errorResponse(400, "invalid_input");
+    if (rest.length === 0 && method === "GET") {
+      const ns = (url.searchParams.get("ns") ?? "").trim() || own;
+      if (ns !== own) return errorResponse(400, "invalid_input");
+      return jsonResponse(200, { grants: this.grants.list(ns) });
+    }
+    if (rest.length === 0 && method === "POST") {
+      let body: { ns?: unknown; grantee?: NamespaceGrantee; mode?: unknown };
+      try {
+        body = JSON.parse(String(init?.body ?? "{}")) as {
+          ns?: unknown;
+          grantee?: NamespaceGrantee;
+          mode?: unknown;
+        };
+      } catch {
+        return errorResponse(400, "bad_request");
+      }
+      const ns = typeof body.ns === "string" && body.ns.trim() ? body.ns.trim() : own;
+      if (ns !== own) return errorResponse(400, "invalid_input");
+      if (!body.grantee) return errorResponse(400, "invalid_input");
+      const mode = body.mode === "readwrite" ? "readwrite" : "read";
+      try {
+        const grant = this.grants.upsert(ns, body.grantee, mode);
+        return jsonResponse(200, grant);
+      } catch {
+        return errorResponse(400, "invalid_input");
+      }
+    }
+    if (rest.length === 1 && method === "DELETE") {
+      const id = decodeURIComponent(rest[0] ?? "");
+      const g = this.grants.get(id);
+      if (g && g.ns !== own) return errorResponse(403, "forbidden");
+      return jsonResponse(200, { revoked: this.grants.delete(id) });
+    }
+    return errorResponse(404, "route_not_found");
+  }
 }
 
 function toWire(r: ServerRecord): Record<string, unknown> {
@@ -372,4 +487,15 @@ function toWire(r: ServerRecord): Record<string, unknown> {
 
 function toTombstone(r: ServerRecord): Record<string, unknown> {
   return { ...toWire(r), deleted: true, metadata: {} };
+}
+
+function headerMap(input: string | URL | Request, init?: RequestInit): Headers {
+  if (typeof input !== "string" && !(input instanceof URL)) return input.headers;
+  return new Headers(init?.headers);
+}
+
+function callerFromHeaders(headers: Headers): SharingCaller {
+  const appId = headers.get("x-unified-app") ?? "";
+  const kind = headers.get("x-unified-caller") === "agent" ? "agent" : "app";
+  return { appId, kind };
 }

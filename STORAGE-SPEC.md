@@ -284,14 +284,17 @@ by malice.
 - **Isolation by default.** `namespace()` → the calling app's namespace only. The app cannot widen this.
 - **Identity is host-stamped.** The host knows which app a brokered SDK belongs to (same mechanism that scopes
   app-tokens) and stamps that identity on every storage call in the trusted layer. The SDK-level `ns` is a hint;
-  **Rust re-derives and enforces.**
-- **Cross-app reads are a declared capability.** To read another app's data, the consuming app declares the grant
-  in its **manifest** (e.g. `"storage": { "read": ["docs"] }`), the user approves it at install (same surface as
-  other app permissions), and only then does `namespace("docs", { mode: "read" })` succeed. Ungranted access →
-  `storage_not_granted`.
-- **Writes stay owner-only (this phase).** Cross-app *write* grants are intentionally out of scope until a real use
-  case appears; sharing is publish/consume, not co-editing.
-- **Enforcement location:** the host/Rust backend. Never trust app JS to scope itself.
+  **Rust / unified-api re-derives and enforces.**
+- **Cross-app access is a grant, not a manifest-only capability.** The owning app publishes a grant via
+  `sdk.storage.grants.grant({ grantee, mode })` (wire: `POST /storage/grants`). Grantees are
+  `{ type: "app", appId }` (another marketplace app) or `{ type: "agent" }` (authenticated agents).
+  `namespace("other-app")` without a grant → `storage_not_granted`. See PROTOCOL.md §Namespace sharing.
+- **Writes stay owner-only unless a `readwrite` grant exists** and the consumer opens
+  `{ mode: "readwrite" }`. Sharing defaults to publish/consume.
+- **Enforcement location:** injected backends (MemoryBackend) enforce in the SDK; the Cloud backend lets
+  unified-api enforce and maps `403 { code: "storage_not_granted" }`. Never trust app JS to scope itself.
+- **Cloud persistence is Pro-gated.** Free (`plans.id = 0`) hitting `/storage/*` gets `403 plan_required`
+  (`PlanRequiredError`). Injected local backends are not gated.
 
 This satisfies both halves of the requirement: data created in one app *can* be referenced in another, while the
 default remains strict per-app separation.
@@ -346,9 +349,9 @@ CREATE TABLE object_versions (
   `storage_ensure_collection` — each carrying the (host-verified) calling identity. JSON metadata + base64/binary
   blob channel.
 - **Capability declaration:** the manifest `storage.read[]` grant shape and its approval lifecycle.
-- **Error codes:** `storage_unavailable`, `storage_read_only`, `storage_not_granted`, `not_found`, `invalid_input`
-  (emitted today); `conflict` (multi-writer races — Phase 2) and `quota_exceeded` (a future quota phase) are
-  reserved and not emitted yet.
+- **Error codes:** `storage_unavailable`, `storage_read_only`, `storage_not_granted`, `plan_required` (Pro
+  gate on the cloud backend), `not_found`, `invalid_input` (emitted today); `conflict` (multi-writer races —
+  Phase 2) and `quota_exceeded` (a future quota phase) are reserved and not emitted yet.
 
 (The browser IndexedDB path needs no wire contract — it's in-process.)
 
@@ -362,6 +365,8 @@ Extend the existing `UnifiedError` hierarchy with the codes above. Conventions:
 - Writing through a read-only namespace (`put`/`delete`/`revert`) → `storage_read_only`.
 - Cross-app access without a grant → `storage_not_granted` (distinct from `not_found`, so consumers can tell
   "you may not" from "it isn't there").
+- Cloud path on a Free plan → `plan_required` (`PlanRequiredError`, HTTP 403). Local/injected backends never
+  emit this.
 - Reverting a version that doesn't exist → `not_found`; filtering/ordering by the blob field, a missing key, or a
   bad blob type → `invalid_input`.
 - `revert`/optimistic-write race → `conflict` (reserved; Phase 1 is single-writer so it isn't emitted yet).

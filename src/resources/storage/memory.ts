@@ -7,6 +7,7 @@
 // predicate.ts). A JS-flavoured shortcut here would make every test that runs
 // against it lie about production.
 import { cpkOf, pkOf, vpkOf } from "../_kv/keys";
+import { MemoryGrantStore } from "../_kv/sharing";
 import { storageError, throwIfAborted } from "./errors";
 import { clampPage, compareValues, cursorForRow, decodeCursor, matchesWhere } from "./predicate";
 import type {
@@ -77,6 +78,8 @@ function toRecord(row: ObjRow): BackendRecord {
 
 export class MemoryBackend implements StorageBackend {
   readonly name = "memory";
+  /** Local grant table shared with any SDK that injects this same backend. */
+  readonly grants = new MemoryGrantStore();
 
   private readonly objects = new Map<string, ObjRow>();
   private readonly blobs = new Map<string, Uint8Array>();

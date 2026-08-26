@@ -6,6 +6,7 @@
 // With no token and no injected backend, `sdk.storage` is unavailable — there is
 // no local browser fallback. See STORAGE-SPEC.md.
 import type { Core } from "../../core/core";
+import { NamespaceSharing } from "../_kv/grants";
 import {
   BackendResolver,
   assertWritableNamespace,
@@ -14,6 +15,7 @@ import {
 } from "../_kv/namespace";
 import { CloudStorageBackend } from "./cloud";
 import { storageError, throwIfAborted } from "./errors";
+import { MemoryBackend } from "./memory";
 import { MAX_PAGE, compileWhere } from "./predicate";
 import type {
   BackendQuery,
@@ -77,6 +79,7 @@ class CollectionImpl<T extends StorageRecord> implements Collection<T> {
     private readonly name: string,
     private readonly schema: CollectionSchema<T>,
     private readonly mode: NamespaceMode,
+    private readonly sharing: NamespaceSharing,
   ) {
     this.blobField = schema.blob;
     this.versioned = schema.versioned === true;
@@ -86,8 +89,13 @@ class CollectionImpl<T extends StorageRecord> implements Collection<T> {
     return requireAvailableBackend(this.backend, "storage");
   }
 
+  private assertReadable(): void {
+    this.sharing.assertLocalAccess(this.ns, "read");
+  }
+
   private assertWritable(): void {
     assertWritableNamespace(this.mode, this.ns, "storage");
+    this.sharing.assertLocalAccess(this.ns, "readwrite");
   }
 
   private ensure(backend: StorageBackend): Promise<void> {
@@ -204,6 +212,7 @@ class CollectionImpl<T extends StorageRecord> implements Collection<T> {
   }
 
   async get(id: string, opts: StorageCallOptions = {}): Promise<T | null> {
+    this.assertReadable();
     const signal = opts.signal;
     const what = `get on "${this.name}"`;
     const backend = this.requireBackend();
@@ -220,6 +229,7 @@ class CollectionImpl<T extends StorageRecord> implements Collection<T> {
   }
 
   async query(q: Query<T> = {}): Promise<T[]> {
+    this.assertReadable();
     const signal = q.signal;
     const what = `query on "${this.name}"`;
     const backend = this.requireBackend();
@@ -273,6 +283,7 @@ class CollectionImpl<T extends StorageRecord> implements Collection<T> {
   }
 
   async page(q: Query<T> = {}): Promise<Page<T>> {
+    this.assertReadable();
     const signal = q.signal;
     const what = `page on "${this.name}"`;
     const backend = this.requireBackend();
@@ -289,6 +300,7 @@ class CollectionImpl<T extends StorageRecord> implements Collection<T> {
   }
 
   async count(q: Query<T> = {}): Promise<number> {
+    this.assertReadable();
     const signal = q.signal;
     const what = `count on "${this.name}"`;
     const backend = this.requireBackend();
@@ -313,12 +325,14 @@ class CollectionImpl<T extends StorageRecord> implements Collection<T> {
   }
 
   async blob(id: string): Promise<Uint8Array | null> {
+    this.assertReadable();
     const backend = this.requireBackend();
     await this.ensure(backend);
     return backend.readBlob(this.ns, this.name, id);
   }
 
   async versions(id: string): Promise<VersionMeta[]> {
+    this.assertReadable();
     const backend = this.requireBackend();
     await this.ensure(backend);
     const list = await backend.listVersions(this.ns, this.name, id);
@@ -326,6 +340,7 @@ class CollectionImpl<T extends StorageRecord> implements Collection<T> {
   }
 
   async getVersion(id: string, version: number): Promise<T | null> {
+    this.assertReadable();
     const backend = this.requireBackend();
     await this.ensure(backend);
     const rec = await backend.getVersion(this.ns, this.name, id, version);
@@ -350,27 +365,29 @@ class NamespaceImpl implements Namespace {
     private readonly backend: StorageBackend | null,
     readonly id: string,
     readonly mode: NamespaceMode,
+    private readonly sharing: NamespaceSharing,
   ) {}
 
   collection<T extends StorageRecord>(name: string, schema: CollectionSchema<T>): Collection<T> {
-    return new CollectionImpl<T>(this.backend, this.id, name, schema, this.mode);
+    return new CollectionImpl<T>(this.backend, this.id, name, schema, this.mode, this.sharing);
   }
 }
 
 /**
- * Local-first, app-namespaced storage. Reached as `sdk.storage`.
+ * App-namespaced storage. Reached as `sdk.storage`.
  *
  * `namespace()` opens the calling app's own (read-write) namespace; the
  * namespace id is derived from the client's `appId` (host-stamped per app).
- * `namespace("other-app", { mode: "read" })` opens another app's data — in the
- * host this is gated by a user-granted capability and enforced at the trusted
- * boundary, not here.
+ * `namespace("other-app")` opens another app's data and requires a grant
+ * (`sdk.storage.grants.grant`). Local backends enforce grants here;
+ * cloud backends let unified-api enforce and map `storage_not_granted`.
  */
 export class Storage {
   // Shared resolution machinery: injected backend wins → server-capable clients
   // get a lazily-built (cached) CloudStorageBackend → null (Supabase-only;
   // there is no local browser IndexedDB fallback).
   private readonly resolver: BackendResolver<StorageBackend>;
+  #sharing?: NamespaceSharing;
 
   constructor(private readonly client: Core) {
     this.resolver = new BackendResolver(
@@ -385,9 +402,33 @@ export class Storage {
     return this.resolver.available();
   }
 
+  /**
+   * Grant CRUD for this app's storage namespace. Any marketplace app can
+   * expose its collections to other apps or authenticated agents without
+   * baking domain types into the SDK.
+   */
+  get grants(): NamespaceSharing {
+    if (!this.#sharing) {
+      this.#sharing = new NamespaceSharing({
+        resource: "storage",
+        client: this.client,
+        local: this.localGrantStore(),
+        ownNs: () => this.client.appId,
+      });
+    }
+    return this.#sharing;
+  }
+
   /** Open a namespace handle (defaults to the calling app's own namespace). */
   namespace(appId?: string, opts: NamespaceOptions = {}): Namespace {
     const { id, mode } = deriveNamespace(this.client.appId, appId, opts.mode);
-    return new NamespaceImpl(this.resolver.resolve(), id, mode);
+    const sharing = this.grants;
+    sharing.assertLocalAccess(id, mode);
+    return new NamespaceImpl(this.resolver.resolve(), id, mode, sharing);
+  }
+
+  private localGrantStore() {
+    const backend = this.client.storageBackend;
+    return backend instanceof MemoryBackend ? backend.grants : null;
   }
 }

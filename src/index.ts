@@ -46,6 +46,9 @@ export {
   DeprecatedModelError,
   RateLimitError,
   UsageLimitError,
+  PlanRequiredError,
+  planRequiredError,
+  isPlanRequiredBody,
   ServerError,
   StreamInterruptedError,
   buildHttpError,
@@ -102,6 +105,9 @@ export * from "./resources/openArtifact";
 // reference ".../storage/index.js" (the dts-fixup would otherwise produce a
 // non-resolving ".../storage.js").
 export * from "./resources/storage/index";
+// Generic namespace sharing (grants for storage + sync). Types live here so
+// the storage and sync barrels don't double-export them.
+export * from "./resources/sharing";
 // Explicit /index: sync is a directory barrel (same dts-fixup reason as storage).
 export * from "./resources/sync/index";
 export * from "./resources/usage";

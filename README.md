@@ -368,6 +368,7 @@ extend `UnifiedAIError` (itself a `UnifiedError`), which adds `body`,
 | `DeprecatedModelError`   | 410  | model retired; keyed off body `code: "model_deprecated"`, not the status alone (410 is also used for expired upload sessions) — switch models | `isDeprecated` |
 | `RateLimitError`         | 429  | transient throttling — wait and retry                          | `retryAfter` (seconds) |
 | `UsageLimitError`        | 429  | plan quota exhausted for the billing period — retrying won't help | `periodCost`, `limit`, `resetAt`, `isUsageLimit` |
+| `PlanRequiredError`      | 403  | Free caller hit a Pro-gated cloud storage/fs/sync path — upgrade, not a permission bug. Sibling of `ForbiddenError` (not a subclass). | `requiredPlan`, `currentPlanId`, `isPlanRequired` |
 | `ServerError`            | 5xx  | upstream provider / gateway failure                            | —            |
 
 `RateLimitError` and `UsageLimitError` are **siblings**, not parent/child —
@@ -383,7 +384,8 @@ abort surfaces as the caller's own `AbortError`.
 `err.code` is typed against a single `UnifiedErrorCode` registry covering:
 
 - **HTTP** — `bad_request`, `unauthorized`, `forbidden`, `not_found`,
-  `model_deprecated`, `rate_limited`, `usage_limit_exceeded`, `server_error`,
+  `model_deprecated`, `rate_limited`, `usage_limit_exceeded`, `plan_required`,
+  `storage_not_granted`, `sync_not_granted`, `fs_not_granted`, `server_error`,
   `request_failed`
 - **Auth / bootstrap (node)** — `not_bootstrapped`, `app_not_installed`,
   `handoff_unreachable`, `auth_user_cancelled`, `auth_state_mismatch`,
@@ -394,6 +396,7 @@ abort surfaces as the caller's own `AbortError`.
 - **Client-side** — `invalid_input`, `aborted`, `not_implemented`
 - **Storage subsystem** — `storage_unavailable`, `storage_read_only`,
   `storage_not_granted`
+- **Sync subsystem** — `sync_not_granted`
 - **Fs subsystem** — `fs_unavailable`, `fs_read_only`, `fs_not_granted`,
   `invalid_path`, `edit_not_found`, `edit_not_unique`
 
@@ -470,25 +473,29 @@ constructed on first access, so `sdk.chat` alone doesn't pay for the other 21.
 | `sdk.artifacts` | Canonical, versioned snapshots of app work (docs, sheets, designs). |
 | `sdk.memory` | Append-only agent-memory ledger with server-stamped taint origin. |
 | `sdk.actions` | Cross-app action registry — declare `ActionSpec`s, serve or invoke actions. |
-| `sdk.storage` | App-namespaced typed collections + blobs (see [`STORAGE-SPEC.md`](STORAGE-SPEC.md)). |
+| `sdk.storage` | App-namespaced typed collections + blobs (see [`STORAGE-SPEC.md`](STORAGE-SPEC.md)). Cross-app/agent access via `sdk.storage.grants`. |
 | `sdk.fs` | App-namespaced jailed file workspace — read/write/edit a directory tree. |
-| `sdk.sync` | Per-workspace sync engine: bootstrap/delta hydration + optimistic writes (see [`PROTOCOL.md`](PROTOCOL.md) §Sync; `FakeSyncServer` ships in `@unifiedai/sdk/testing`). |
-| `sdk.agent` | Unopinionated tool-loop scaffolding — run a model over app-supplied tools. Opt-in packs: `fsTools(ns)` and `webTools()` (`web_search` + `web_fetch`; compose into `tools`). `webTools()` is for Node/CLI/node-service — browser pages hit CORS on DuckDuckGo unless you inject a custom `search` backend. |
+| `sdk.sync` | Per-workspace sync engine: bootstrap/delta hydration + optimistic writes (see [`PROTOCOL.md`](PROTOCOL.md) §Sync; `FakeSyncServer` ships in `@unifiedai/sdk/testing`). Namespace grants: `sdk.sync.grants`. |
+| `sdk.agent` | Unopinionated tool-loop scaffolding — run a model over app-supplied tools. Opt-in packs: `fsTools(ns)`, `storageTools(ns)`, `syncTools(ws, ns)`, and `webTools()`. |
 
 ### App data, sync, and polling
 
 - `sdk.storage` uses the cloud backend when the client can authenticate, or a
   host-injected backend. There is no browser-local fallback. The app's own
-  namespace is read-write; cross-app namespaces default to read-only.
+  namespace is read-write; cross-app namespaces default to read-only and
+  require a grant (`sdk.storage.grants`). Cloud writes/reads are Pro-gated
+  (`PlanRequiredError` / `plan_required`); injected local backends are not.
   Collections support metadata queries, out-of-line blobs, and versioning.
 - `sdk.fs` follows the same cloud/injected/no-fallback selection. It exposes a
   jailed POSIX-style tree with text/byte reads, writes, unique-string edits,
-  listing, stat, and delete.
+  listing, stat, and delete. Cloud fs is Pro-gated the same way.
 - `sdk.sync.workspace(id)` caches a `WorkspaceSync`. `start()` hydrates an
   optional snapshot then catches up, background polling reads deltas, `sync()`
   forces catch-up, and `apply()` performs optimistic writes with rollback on
   failure. Observe `workspace.status`; cursor epoch mismatch automatically
-  discards stale state and re-bootstraps.
+  discards stale state and re-bootstraps. `sdk.sync.grants` shares a namespace
+  with other apps and authenticated agents. Bootstrap/delta/apply are
+  Pro-gated; `listWorkspaces()` is not.
 - `videos.waitUntilReady()` polls every 5 seconds for up to 10 minutes by
   default, supports abort, throws on timeout, and returns both completed and
   failed terminal jobs. `actions.awaitResult()` polls every 400 ms for up to

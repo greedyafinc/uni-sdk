@@ -7,6 +7,10 @@
 export { Agent } from "./agent";
 export { fsTools } from "./fs-tools";
 export { webTools } from "./web-tools";
+export { storageTools } from "./storage-tools";
+export type { StorageToolsOptions } from "./storage-tools";
+export { syncTools } from "./sync-tools";
+export type { SyncToolsOptions } from "./sync-tools";
 export type {
   SearchBackend,
   WebSearchHit,

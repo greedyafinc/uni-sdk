@@ -52,8 +52,9 @@ src/
 │       └── upload-progress.ts# upload progress tracking
 ├── resources/                # one file (or dir) per resource; browser-safe
 │   ├── _internal/            # chunkedUpload, contentDisposition, mime, poll
-│   ├── _kv/                  # shared keys, records, queries, and namespace/backend resolution
-│   ├── agent/                # tool-loop scaffolding (agent, fs-tools, web-tools, types)
+│   ├── _kv/                  # shared keys, records, queries, namespace/backend resolution, grants
+│   ├── agent/                # tool-loop scaffolding (agent, fs-tools, storage-tools, sync-tools, web-tools)
+│   ├── sharing.ts            # public namespace-grant types (sdk.storage.grants / sdk.sync.grants)
 │   ├── calendar/             # date math, recurrence, sync-adapter (curated barrel)
 │   ├── fs/                   # jailed file workspace (cloud backend, path jail, errors)
 │   ├── storage/              # typed collections (cloud + in-memory backends)

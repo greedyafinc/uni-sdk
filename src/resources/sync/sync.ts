@@ -3,7 +3,11 @@
 // handle) and threads through the host-injected `SnapshotBackend` (if any). The
 // engine itself works online-only when no backend is present — there is no
 // browser persistence fallback. See PROTOCOL.md ("Sync").
+//
+// `sdk.sync.grants` is the namespace-sharing surface: any marketplace app can
+// expose its `ns` (e.g. `"planner"`) to other apps and authenticated agents.
 import type { Core } from "../../core/core";
+import { NamespaceSharing } from "../_kv/grants";
 import type { SnapshotBackend, WorkspaceSummary, WorkspaceSyncOptions } from "./types";
 import { WorkspaceSync } from "./workspace";
 
@@ -13,8 +17,26 @@ interface WorkspaceListResponse {
 
 export class Sync {
   private readonly workspaces = new Map<string, WorkspaceSync>();
+  #sharing?: NamespaceSharing;
 
   constructor(private readonly client: Core) {}
+
+  /**
+   * Grant CRUD for this app's sync namespace. Grants are namespace-scoped
+   * (not workspace-scoped): the owning app publishes access to its `ns`,
+   * and unified-api filters bootstrap/delta/apply accordingly.
+   */
+  get grants(): NamespaceSharing {
+    if (!this.#sharing) {
+      this.#sharing = new NamespaceSharing({
+        resource: "sync",
+        client: this.client,
+        local: null,
+        ownNs: () => this.client.appId,
+      });
+    }
+    return this.#sharing;
+  }
 
   /**
    * List the workspaces the authenticated caller belongs to (id, name, kind,

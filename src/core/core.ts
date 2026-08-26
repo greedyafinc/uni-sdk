@@ -123,6 +123,14 @@ export interface CoreOptions {
    * PROTOCOL.md ("Sync").
    */
   sync?: SnapshotBackend;
+  /**
+   * Caller class used when checking namespace grants locally (MemoryBackend /
+   * tests). `"app"` (default) matches `{ type: "app", appId }` grants;
+   * `"agent"` matches `{ type: "agent" }` grants. Sent as `x-unified-caller`
+   * so unified-api can classify the same way. The server still re-derives
+   * caller class from the credential — this is a hint, not a self-declaration.
+   */
+  callerKind?: "app" | "agent";
 }
 
 export interface RequestOptions {
@@ -187,7 +195,15 @@ export class Core {
     Required<
       Omit<
         CoreOptions,
-        "token" | "retry" | "cache" | "onRetry" | "compression" | "storage" | "fs" | "sync"
+        | "token"
+        | "retry"
+        | "cache"
+        | "onRetry"
+        | "compression"
+        | "storage"
+        | "fs"
+        | "sync"
+        | "callerKind"
       >
     >
   > & {
@@ -199,6 +215,7 @@ export class Core {
     storage: StorageBackend | undefined;
     fs: FsBackend | undefined;
     sync: SnapshotBackend | undefined;
+    callerKind: "app" | "agent";
   };
 
   constructor(options: CoreOptions = {}) {
@@ -215,6 +232,7 @@ export class Core {
       storage: options.storage,
       fs: options.fs,
       sync: options.sync,
+      callerKind: options.callerKind ?? "app",
     });
   }
 
@@ -249,6 +267,14 @@ export class Core {
   /** The injected snapshot backend for `sdk.sync`, if any. `undefined` runs the engine memory-only. */
   get snapshotBackend(): SnapshotBackend | undefined {
     return this.options.sync;
+  }
+
+  /**
+   * Caller class for namespace grants (`"app"` or `"agent"`). Defaults to
+   * `"app"`. See {@link CoreOptions.callerKind}.
+   */
+  get callerKind(): "app" | "agent" {
+    return this.options.callerKind;
   }
 
   /**

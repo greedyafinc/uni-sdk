@@ -30,6 +30,9 @@ export {
   DeprecatedModelError,
   RateLimitError,
   UsageLimitError,
+  PlanRequiredError,
+  planRequiredError,
+  isPlanRequiredBody,
   ServerError,
   StreamInterruptedError,
   buildHttpError,
@@ -92,6 +95,7 @@ export * from "../resources/search/types";
 export * from "../resources/openArtifact";
 // Explicit /index: storage is a directory barrel (see src/index.ts note).
 export * from "../resources/storage/index";
+export * from "../resources/sharing";
 // Explicit /index: sync is a directory barrel (see src/index.ts note).
 export * from "../resources/sync/index";
 export * from "../resources/usage";

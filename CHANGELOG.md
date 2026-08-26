@@ -20,6 +20,17 @@
 
 ### Added
 
+- **Namespace sharing** (`sdk.storage.grants` / `sdk.sync.grants`) — any
+  marketplace app can expose a namespaced storage/sync resource to other apps
+  (`{ type: "app", appId }`) and authenticated agents (`{ type: "agent" }`)
+  without baking domain types into the SDK. Local backends enforce grants;
+  cloud backends map `403 storage_not_granted` / `sync_not_granted`.
+  Opt-in agent packs: `storageTools(ns)` and `syncTools(ws, ns)`.
+- **Pro-gated cloud persistence.** Free (`plans.id = 0`) hitting cloud
+  storage/fs/sync paths gets `PlanRequiredError` (`code: "plan_required"`,
+  HTTP 403, `requiredPlan` / `currentPlanId`). Injected local backends are
+  not gated. Helper: `isCloudPlan` / `PLAN_FREE_ID`. `x-unified-caller: agent`
+  when `callerKind: "agent"`.
 - `X-Unified-App` request header from the client's `appId`, so a shared
   `uapi_` testing key can still attribute usage per app (honored by
   unified-api on own-credential API keys only).

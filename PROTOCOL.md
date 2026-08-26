@@ -783,6 +783,107 @@ POST /sync/:workspaceId/apply                       Body: { ops: SyncOp[] }   //
   later replay. Reads continue to serve the last-known view (optionally from a
   host-provided snapshot) while offline.
 
+## Namespace sharing
+
+A generic, domain-agnostic grant layer so **any** marketplace app can expose a
+namespaced `sdk.storage` / `sdk.sync` resource to (a) other apps and
+(b) authenticated agents. No app-specific types (Issue, Milestone, …) belong
+in the SDK — the producing app owns the collection schema; consumers see
+opaque JSON records.
+
+Planner (and any future app) stores under its own namespace (e.g. `ns:
+"planner"`) and publishes grants. Grok Bot and other UnifiedApp apps consume
+those grants through the same SDK methods.
+
+### Isolation & identity
+
+- **Isolation by default.** `sdk.storage.namespace()` and sync records whose
+  `ns` equals the caller's `appId` are always readable/writable by that app.
+- **Identity is host-stamped.** The SDK sends `x-unified-app: <appId>` on every
+  request. A client constructed with `callerKind: "agent"` also sends
+  `x-unified-caller: agent`. The server MUST re-derive caller class from the
+  credential (OAuth client, MCP, …) and MUST ignore a spoofed header.
+- An **unscoped** caller (no `appId`, first-party host / `uapi_` key) is not
+  grant-filtered — it sees every namespace. Marketplace apps always have an
+  `appId`.
+
+### Grant shape
+
+```json
+{
+  "id": "string",
+  "ns": "string",
+  "grantee": { "type": "app", "appId": "string" } | { "type": "agent" },
+  "mode": "read | readwrite",
+  "createdAt": 0,
+  "updatedAt": 0
+}
+```
+
+- `{ "type": "app", "appId" }` — another marketplace app (the same id the host
+  stamps on its SDK).
+- `{ "type": "agent" }` — any authenticated agent credential (Grok Bot,
+  `mcp-external`, or `callerKind: "agent"`). Agent grants are not app-scoped.
+- `mode: "readwrite"` implies `read`. Cross-app writes are allowed but uncommon;
+  consumers still have to open the namespace with `{ mode: "readwrite" }`.
+- Only the **owning app** (`ns === caller.appId`) may list/create/revoke grants
+  for that namespace. Re-granting the same grantee upserts `mode`.
+
+```
+GET    /storage/grants?ns=                 → { grants: NamespaceGrant[] }
+POST   /storage/grants                     Body: { ns?, grantee, mode? }  → NamespaceGrant
+DELETE /storage/grants/:id                 → { revoked: boolean }
+
+GET    /sync/grants?ns=                    → { grants: NamespaceGrant[] }
+POST   /sync/grants                        Body: { ns?, grantee, mode? }  → NamespaceGrant
+DELETE /sync/grants/:id                    → { revoked: boolean }
+```
+
+`ns` defaults to the caller's `appId`. Grants are **namespace-scoped**, not
+workspace-scoped: a sync grant on `"planner"` applies to that `ns` in every
+workspace the caller can access. unified-api MUST filter `bootstrap`/`delta`
+to granted namespaces and reject `apply` ops against an ungranted `ns` with
+`403 sync_not_granted`. Storage collection ops against an ungranted `ns`
+return `403 storage_not_granted`.
+
+### Agent access
+
+In-process agents (`sdk.agent.run`) are the calling app: bind
+`storageTools(sdk.storage.namespace())` / `syncTools(ws, ns)` (optionally with
+a collection allowlist and `write: true`). External/authenticated agents need
+a `{ type: "agent" }` grant, then use the same tools or the same
+`namespace("other-app")` / `workspace().collection(ns, name)` reads.
+
+### Cloud persistence is Pro-gated
+
+Cloud paths — `POST /storage/*` (except grant CRUD MAY be gated the same way),
+`POST /fs/*`, and `GET|POST /sync/:workspaceId/{bootstrap,delta,apply}` — require
+a paid plan. **Free is `plans.id = 0`** (the same numbering as
+`users.me().account_type`). Pro is a higher id in the `plans` table; this
+client treats `plan.id > 0` as entitled and does **not** hard-code a Pro id.
+The server is authoritative.
+
+A Free caller hitting a gated cloud path MUST receive HTTP **403** with body:
+
+```json
+{
+  "code": "plan_required",
+  "required_plan": "Pro",
+  "current_plan_id": 0,
+  "message": "Cloud sync and persistence require a Pro plan."
+}
+```
+
+SDKs MUST key off `code: "plan_required"` (not the 403 status alone) and
+surface a typed upgrade error (`PlanRequiredError` in the TS SDK) — never a
+500, never a silent no-op. Injected local backends (MemoryBackend, a host
+SQLite/snapshot store) are **not** gated: offline/local behavior that already
+works keeps working. `GET /sync/workspaces` is not gated (discovery).
+
+Entitlement source of truth is unified-db + base-api (`plans` joined from
+`account_type`). This repo is the client: it maps the wire error and exposes
+`isCloudPlan(plan)` / `PLAN_FREE_ID` for UX preflight via `sdk.usage.get()`.
+
 ## Error codes
 
 SDKs surface these as typed errors. Names normative; messages free-form.
@@ -830,7 +931,15 @@ Sync API (HTTP status in parentheses):
 - `workspace_not_found` (404) — no workspace for the id.
 - `blobs_not_supported_in_shared_workspaces` (400) — an `apply` op carried a blob
   field against a shared workspace.
-
+- `plan_required` (403) — Free caller hit a Pro-gated cloud persistence path
+  (`/storage/*`, `/fs/*`, `/sync/:id/{bootstrap,delta,apply}`). Body includes
+  `required_plan: "Pro"` and `current_plan_id`. SDKs MUST key off the body
+  `code` (403 alone is `forbidden` / grant-denial). Upgrade-shaped, not a 500.
+- `storage_not_granted` (403) — cross-app `sdk.storage` access without a grant.
+- `sync_not_granted` (403) — `apply` (or a filtered read that the client still
+  attempted as a write) against a namespace the caller has no grant for.
+- `fs_not_granted` (403) — reserved; same shape for `sdk.fs` if/when fs grants
+  ship.
 Ecosystem API (returned by both hostings; HTTP status in parentheses):
 
 - `ecosystem_unreachable` — the local ecosystem hosting probe failed and no cloud

@@ -6,6 +6,7 @@ import {
   DeprecatedModelError,
   ForbiddenError,
   NotFoundError,
+  PlanRequiredError,
   RateLimitError,
   ServerError,
   StreamInterruptedError,
@@ -202,6 +203,25 @@ describe("buildHttpError", () => {
     expect(e.code).toBe("forbidden");
     expect(e.status).toBe(403);
   });
+
+  test("403 + body code plan_required → PlanRequiredError, not ForbiddenError", () => {
+    const e = buildHttpError("msg", 403, {
+      code: "plan_required",
+      required_plan: "Pro",
+      current_plan_id: 0,
+    });
+    expect(e).toBeInstanceOf(PlanRequiredError);
+    expect(e).not.toBeInstanceOf(ForbiddenError);
+    expect(e.code).toBe("plan_required");
+    expect((e as PlanRequiredError).requiredPlan).toBe("Pro");
+    expect((e as PlanRequiredError).currentPlanId).toBe(0);
+  });
+
+  test("403 + body code storage_not_granted → ForbiddenError with that code", () => {
+    const e = buildHttpError("msg", 403, { code: "storage_not_granted" });
+    expect(e).toBeInstanceOf(ForbiddenError);
+    expect(e.code).toBe("storage_not_granted");
+  });
 });
 
 describe("Error.cause propagation", () => {
@@ -248,6 +268,7 @@ describe("SDK error marker", () => {
       buildHttpError("msg", 400, {}),
       buildHttpError("msg", 401, {}),
       buildHttpError("msg", 403, {}),
+      new PlanRequiredError("upgrade", 403, { code: "plan_required" }),
       buildHttpError("msg", 404, {}),
       buildHttpError("msg", 429, { error: "rate_limited" }),
       buildHttpError("msg", 500, {}),
