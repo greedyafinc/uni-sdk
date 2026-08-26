@@ -1,4 +1,4 @@
-export type UnifiedErrorCode = "not_implemented" | "not_bootstrapped" | "invalid_input" | "aborted" | "app_not_installed" | "handoff_unreachable" | "auth_user_cancelled" | "auth_timeout" | "auth_state_mismatch" | "auth_token_exchange_failed" | "auth_refresh_failed" | "auth_retry_still_unauthorized" | "browser_open_failed" | "keychain_unavailable" | UnifiedAIHttpErrorCode | "stream_interrupted" | "storage_unavailable" | "storage_read_only" | "storage_not_granted" | "fs_unavailable" | "fs_read_only" | "fs_not_granted" | "invalid_path" | "edit_not_found" | "edit_not_unique" | (string & {});
+export type UnifiedErrorCode = "not_implemented" | "not_bootstrapped" | "invalid_input" | "aborted" | "app_not_installed" | "handoff_unreachable" | "auth_user_cancelled" | "auth_timeout" | "auth_state_mismatch" | "auth_token_exchange_failed" | "auth_refresh_failed" | "auth_retry_still_unauthorized" | "browser_open_failed" | "keychain_unavailable" | UnifiedAIHttpErrorCode | "stream_interrupted" | "storage_unavailable" | "storage_read_only" | "storage_not_granted" | "sync_not_granted" | "fs_unavailable" | "fs_read_only" | "fs_not_granted" | "invalid_path" | "edit_not_found" | "edit_not_unique" | (string & {});
 export declare class UnifiedError extends Error {
     /**
      * Structural marker present on every SDK-typed error. The retry classifier
@@ -33,7 +33,7 @@ export declare class StreamInterruptedError extends UnifiedError {
     constructor(cause?: unknown, message?: string);
 }
 export type UnifiedAIAuthErrorCode = "auth_refresh_failed" | "auth_retry_still_unauthorized";
-export type UnifiedAIHttpErrorCode = "bad_request" | "unauthorized" | "forbidden" | "not_found" | "model_deprecated" | "rate_limited" | "usage_limit_exceeded" | "server_error" | "request_failed";
+export type UnifiedAIHttpErrorCode = "bad_request" | "unauthorized" | "forbidden" | "not_found" | "model_deprecated" | "rate_limited" | "usage_limit_exceeded" | "plan_required" | "storage_not_granted" | "sync_not_granted" | "fs_not_granted" | "server_error" | "request_failed";
 /**
  * Base class for HTTP errors returned by the unified-api backend. All
  * status-specific subclasses (`AuthenticationError`, `RateLimitError`, etc.)
@@ -72,7 +72,7 @@ export declare class UnifiedAIAuthError extends AuthenticationError {
  * refreshing will clear it.
  */
 export declare class ForbiddenError extends UnifiedAIError {
-    constructor(message: string, status: number, body: unknown, headers?: Readonly<Record<string, string>>);
+    constructor(message: string, status: number, body: unknown, headers?: Readonly<Record<string, string>>, code?: UnifiedAIHttpErrorCode);
 }
 export declare class NotFoundError extends UnifiedAIError {
     constructor(message: string, status: number, body: unknown, headers?: Readonly<Record<string, string>>);
@@ -125,9 +125,29 @@ export declare class UsageLimitError extends UnifiedAIError {
     readonly isUsageLimit: true;
     constructor(message: string, status: number, body: unknown, headers?: Readonly<Record<string, string>>);
 }
+/**
+ * Cloud sync/persistence was refused because the caller's plan is Free.
+ * Sibling — NOT child — of {@link ForbiddenError}: a generic 403 handler
+ * that only checks `instanceof ForbiddenError` will miss this, which is
+ * correct (this is an upgrade CTA, not a permission bug). HTTP 403 with
+ * body `{ code: "plan_required", required_plan: "Pro", current_plan_id }`.
+ *
+ * Local/injected backends never emit this — only cloud paths
+ * (`/api/v1/storage/*`, `/api/v1/fs/*`, `/api/v1/sync/:id/{bootstrap,delta,apply}`).
+ */
+export declare class PlanRequiredError extends UnifiedAIError {
+    readonly isPlanRequired: true;
+    /** Plan name the caller must have. Currently always `"Pro"`. */
+    readonly requiredPlan: string;
+    /** `plans.id` / `account_type` of the caller, when the server sent it. */
+    readonly currentPlanId: number | undefined;
+    constructor(message: string, status: number, body: unknown, headers?: Readonly<Record<string, string>>);
+}
 export declare class ServerError extends UnifiedAIError {
     constructor(message: string, status: number, body: unknown, headers?: Readonly<Record<string, string>>);
 }
+/** Body `{ code: "plan_required" }` — keyed on the code, not the 403 status. */
+export declare function isPlanRequiredBody(body: unknown): boolean;
 /**
  * Distinguish quota exhaustion from generic throttling. unified-api's
  * `apiKeyAuthPlugin` emits `{message: "Usage limit exceeded..."}` for
@@ -146,6 +166,12 @@ export declare class ServerError extends UnifiedAIError {
  */
 export declare function isUsageLimitBody(body: unknown): boolean;
 export declare function httpErrorCodeFromStatus(status: number): UnifiedAIHttpErrorCode;
+/**
+ * Client-side constructor for a Pro-gate refusal (no HTTP round-trip). The
+ * body shape matches what unified-api emits so `instanceof PlanRequiredError`
+ * and `err.code === "plan_required"` work the same as the mapped HTTP error.
+ */
+export declare function planRequiredError(currentPlanId?: number, requiredPlan?: string): PlanRequiredError;
 /**
  * Build the right typed error subclass for an HTTP failure. Falls back to
  * `UnifiedAIError` for statuses without a dedicated class (generic 4xx).

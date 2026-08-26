@@ -5,7 +5,7 @@ import { type UnifiedError } from "../../core/errors.js";
  * SDK's existing HTTP error hierarchy (`UnifiedAIError` & subclasses) — the
  * engine does NOT invent new error classes for those; see {@link isEpochMismatch}.
  */
-export type SyncErrorCode = "invalid_input";
+export type SyncErrorCode = "invalid_input" | "sync_not_granted";
 /** Construct a typed sync error (a plain `UnifiedError`, not an HTTP error). */
 export declare const syncError: (code: SyncErrorCode, message: string) => UnifiedError;
 /**

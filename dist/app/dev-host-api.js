@@ -308,8 +308,8 @@ class UnifiedAIAuthError extends AuthenticationError {
 }
 
 class ForbiddenError extends UnifiedAIError {
-  constructor(message, status, body, headers) {
-    super("forbidden", message, status, body, headers);
+  constructor(message, status, body, headers, code = "forbidden") {
+    super(code, message, status, body, headers);
     this.name = "ForbiddenError";
   }
 }
@@ -357,11 +357,53 @@ class UsageLimitError extends UnifiedAIError {
   }
 }
 
+class PlanRequiredError extends UnifiedAIError {
+  isPlanRequired = true;
+  requiredPlan;
+  currentPlanId;
+  constructor(message, status, body, headers) {
+    super("plan_required", message, status, body, headers);
+    this.name = "PlanRequiredError";
+    const parsed = parsePlanRequiredFields(body);
+    this.requiredPlan = parsed.requiredPlan;
+    this.currentPlanId = parsed.currentPlanId;
+  }
+}
+
 class ServerError extends UnifiedAIError {
   constructor(message, status, body, headers) {
     super("server_error", message, status, body, headers);
     this.name = "ServerError";
   }
+}
+function parsePlanRequiredFields(body) {
+  let requiredPlan = "Pro";
+  let currentPlanId;
+  if (body && typeof body === "object") {
+    const obj = body;
+    if (typeof obj.required_plan === "string" && obj.required_plan) {
+      requiredPlan = obj.required_plan;
+    }
+    if (typeof obj.current_plan_id === "number" && Number.isFinite(obj.current_plan_id)) {
+      currentPlanId = obj.current_plan_id;
+    }
+  }
+  return { requiredPlan, currentPlanId };
+}
+function isPlanRequiredBody(body) {
+  if (!body || typeof body !== "object")
+    return false;
+  return body.code === "plan_required";
+}
+var NOT_GRANTED_CODES = new Set(["storage_not_granted", "sync_not_granted", "fs_not_granted"]);
+function notGrantedCodeFromBody(body) {
+  if (!body || typeof body !== "object")
+    return;
+  const code = body.code;
+  if (typeof code === "string" && NOT_GRANTED_CODES.has(code)) {
+    return code;
+  }
+  return;
 }
 function parseUsageFields(body) {
   let periodCost;
@@ -424,6 +466,13 @@ function httpErrorCodeFromStatus(status) {
 function buildHttpError(message, status, body, headers) {
   if (isDeprecatedModelBody(body)) {
     return new DeprecatedModelError(message, status, body, headers);
+  }
+  if (isPlanRequiredBody(body)) {
+    return new PlanRequiredError(message, status, body, headers);
+  }
+  const notGranted = notGrantedCodeFromBody(body);
+  if (notGranted) {
+    return new ForbiddenError(message, status, body, headers, notGranted);
   }
   if (status === 400)
     return new BadRequestError(message, status, body, headers);
@@ -1148,6 +1197,9 @@ function bytesToBase64(bytes) {
     return btoa(bin);
   }
   throw new Error("no base64 encoder available (neither Buffer nor btoa)");
+}
+function bytesToBase64Url(bytes) {
+  return bytesToBase64(bytes).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
 function base64ToBytes(b64) {
   const cleaned = b64.replace(/\s+/g, "");
@@ -3593,6 +3645,180 @@ class Responses {
   }
 }
 
+// src/resources/_kv/sharing.ts
+var grantSeq = 0;
+function nextGrantId() {
+  grantSeq += 1;
+  return `ngr_${grantSeq.toString(36)}`;
+}
+function granteeKey(g) {
+  return g.type === "agent" ? "agent" : `app:${g.appId}`;
+}
+function validateGrantee(g) {
+  if (g.type === "agent")
+    return { type: "agent" };
+  if (g.type === "app") {
+    const appId = g.appId.trim();
+    if (!appId) {
+      throw subsystemError("invalid_input", "grantee.appId must be a non-empty string");
+    }
+    return { type: "app", appId };
+  }
+  throw subsystemError("invalid_input", 'grantee.type must be "app" or "agent"');
+}
+
+class MemoryGrantStore {
+  byId = new Map;
+  byNsGrantee = new Map;
+  list(ns) {
+    const out = [];
+    for (const g of this.byId.values()) {
+      if (g.ns === ns)
+        out.push({ ...g, grantee: { ...g.grantee } });
+    }
+    out.sort((a, b) => a.createdAt - b.createdAt);
+    return out;
+  }
+  get(id) {
+    const g = this.byId.get(id);
+    return g ? { ...g, grantee: { ...g.grantee } } : undefined;
+  }
+  upsert(ns, grantee, mode) {
+    const g = validateGrantee(grantee);
+    const key = `${ns}\x00${granteeKey(g)}`;
+    const now = Date.now();
+    const existingId = this.byNsGrantee.get(key);
+    if (existingId) {
+      const prev = this.byId.get(existingId);
+      if (prev) {
+        const next = { ...prev, mode, updatedAt: now, grantee: g };
+        this.byId.set(existingId, next);
+        return { ...next, grantee: { ...next.grantee } };
+      }
+    }
+    const id = nextGrantId();
+    const grant = {
+      id,
+      ns,
+      grantee: g,
+      mode,
+      createdAt: now,
+      updatedAt: now
+    };
+    this.byId.set(id, grant);
+    this.byNsGrantee.set(key, id);
+    return { ...grant, grantee: { ...grant.grantee } };
+  }
+  delete(id) {
+    const g = this.byId.get(id);
+    if (!g)
+      return false;
+    this.byId.delete(id);
+    this.byNsGrantee.delete(`${g.ns}\x00${granteeKey(g.grantee)}`);
+    return true;
+  }
+  allows(caller, ns, mode) {
+    return namespaceAccess(this, caller, ns, mode);
+  }
+}
+function namespaceAccess(store, caller, ns, mode) {
+  const own = (caller.appId || "").trim();
+  if (own && ns === own)
+    return true;
+  for (const g of store.list(ns)) {
+    if (!granteeMatches(g.grantee, caller))
+      continue;
+    if (mode === "read" || g.mode === "readwrite")
+      return true;
+  }
+  return false;
+}
+function granteeMatches(grantee, caller) {
+  if (grantee.type === "agent")
+    return caller.kind === "agent";
+  return caller.kind === "app" && grantee.appId === caller.appId;
+}
+function notGrantedError(subsystem, ns) {
+  return subsystemError(`${subsystem}_not_granted`, `no grant to access namespace "${ns}"`);
+}
+
+// src/resources/_kv/grants.ts
+class NamespaceSharing {
+  opts;
+  constructor(opts) {
+    this.opts = opts;
+  }
+  caller() {
+    return { appId: this.opts.ownNs(), kind: this.opts.client.callerKind };
+  }
+  own() {
+    const ns = this.opts.ownNs().trim();
+    if (!ns) {
+      throw new UnifiedError("invalid_input", `cannot manage ${this.opts.resource} grants without an appId`);
+    }
+    return ns;
+  }
+  resolveNs(ns) {
+    const trimmed = ns?.trim();
+    return trimmed || this.own();
+  }
+  async list(opts = {}) {
+    const ns = this.resolveNs(opts.ns);
+    this.assertOwner(ns);
+    if (this.opts.local)
+      return this.opts.local.list(ns);
+    const res = await this.opts.client.request(this.collectionPath(), {
+      method: "GET",
+      query: { ns }
+    });
+    return res.grants;
+  }
+  async grant(input) {
+    const ns = this.resolveNs(input.ns);
+    this.assertOwner(ns);
+    const mode = input.mode ?? "read";
+    if (this.opts.local)
+      return this.opts.local.upsert(ns, input.grantee, mode);
+    return this.opts.client.request(this.collectionPath(), {
+      method: "POST",
+      body: { ns, grantee: input.grantee, mode }
+    });
+  }
+  async revoke(id) {
+    if (!id.trim())
+      throw new UnifiedError("invalid_input", "grant id is required");
+    if (this.opts.local) {
+      const g = this.opts.local.get(id);
+      if (g)
+        this.assertOwner(g.ns);
+      return this.opts.local.delete(id);
+    }
+    const res = await this.opts.client.request(this.itemPath(id), {
+      method: "DELETE"
+    });
+    return res.revoked;
+  }
+  assertLocalAccess(targetNs, mode) {
+    const local = this.opts.local;
+    if (!local)
+      return;
+    if (namespaceAccess(local, this.caller(), targetNs, mode))
+      return;
+    throw notGrantedError(this.opts.resource, targetNs);
+  }
+  assertOwner(ns) {
+    if (ns !== this.own()) {
+      throw new UnifiedError("invalid_input", `only the owning app can manage grants for namespace "${ns}"`);
+    }
+  }
+  collectionPath() {
+    return `/api/v1/${this.opts.resource}/grants`;
+  }
+  itemPath(id) {
+    return `${this.collectionPath()}/${encodeURIComponent(id)}`;
+  }
+}
+
 // src/resources/storage/errors.ts
 var storageError = subsystemError;
 function storageAbortError(what, reason) {
@@ -3686,10 +3912,22 @@ class CloudStorageBackend {
   }
 }
 
+// src/resources/_kv/keys.ts
+function pkOf(ns, collection, id) {
+  return JSON.stringify([ns, collection, id]);
+}
+function cpkOf(ns, collection) {
+  return JSON.stringify([ns, collection]);
+}
+function vpkOf(ns, collection, id, version) {
+  return JSON.stringify([ns, collection, id, version]);
+}
+
 // src/resources/storage/predicate.ts
 var SEARCH_TEXT_FIELD = "searchText";
 var MAX_IN = 50;
 var MAX_PAGE = 1000;
+var DEFAULT_PAGE = 100;
 var OPS = new Set(["eq", "neq", "in", "gt", "gte", "lt", "lte", "exists", "match"]);
 var RANGE_OPS = new Set(["gt", "gte", "lt", "lte"]);
 function isScalar(v) {
@@ -3778,8 +4016,325 @@ function compileWhere(where) {
   }
   return out;
 }
+function jsonbRank(v) {
+  if (v === null || v === undefined)
+    return 0;
+  if (typeof v === "string")
+    return 1;
+  if (typeof v === "number")
+    return 2;
+  if (typeof v === "boolean")
+    return 3;
+  if (Array.isArray(v))
+    return 4;
+  return 5;
+}
+function compareValues(a, b, type) {
+  const an = a === null || a === undefined;
+  const bn = b === null || b === undefined;
+  if (an || bn)
+    return an && bn ? 0 : an ? 1 : -1;
+  if (type === "number") {
+    const ra = jsonbRank(a);
+    const rb = jsonbRank(b);
+    if (ra !== rb)
+      return ra < rb ? -1 : 1;
+    if (typeof a === "number" && typeof b === "number")
+      return a === b ? 0 : a < b ? -1 : 1;
+    if (typeof a === "boolean" && typeof b === "boolean")
+      return a === b ? 0 : a ? 1 : -1;
+  }
+  const sa = String(a);
+  const sb = String(b);
+  return sa === sb ? 0 : sa.localeCompare(sb);
+}
+function tokens(s) {
+  return s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+function websearchMatch(haystack, query) {
+  const hay = tokens(haystack);
+  const joined = ` ${hay.join(" ")} `;
+  const phrases = [...query.matchAll(/"([^"]*)"/g)].map((m) => m[1] ?? "");
+  const rest = query.replace(/"[^"]*"/g, " ");
+  for (const phrase of phrases) {
+    const p = tokens(phrase);
+    if (p.length === 0)
+      continue;
+    if (!joined.includes(` ${p.join(" ")} `))
+      return false;
+  }
+  const terms = rest.split(/\s+/).filter(Boolean);
+  let sawPositive = phrases.some((p) => tokens(p).length > 0);
+  for (const term of terms) {
+    if (term.toLowerCase() === "or")
+      continue;
+    const negated = term.startsWith("-");
+    const body = tokens(negated ? term.slice(1) : term);
+    if (body.length === 0)
+      continue;
+    const present = body.every((t) => hay.includes(t));
+    if (negated) {
+      if (present)
+        return false;
+    } else {
+      sawPositive = true;
+      if (!present)
+        return false;
+    }
+  }
+  return sawPositive || terms.length === 0;
+}
+function matchesClause(metadata, w) {
+  const present = Object.hasOwn(metadata, w.field) && metadata[w.field] !== undefined && metadata[w.field] !== null;
+  if (w.op === "exists")
+    return present === (w.value === true);
+  if (!present)
+    return false;
+  const actual = metadata[w.field];
+  switch (w.op) {
+    case "eq":
+      return String(actual) === String(w.value);
+    case "neq":
+      return String(actual) !== String(w.value);
+    case "in":
+      return Array.isArray(w.value) && w.value.map((v) => String(v)).includes(String(actual));
+    case "gt":
+      return compareValues(actual, w.value, w.type) > 0;
+    case "gte":
+      return compareValues(actual, w.value, w.type) >= 0;
+    case "lt":
+      return compareValues(actual, w.value, w.type) < 0;
+    case "lte":
+      return compareValues(actual, w.value, w.type) <= 0;
+    case "match":
+      return typeof actual === "string" && websearchMatch(actual, String(w.value));
+    default:
+      return false;
+  }
+}
+function matchesWhere(metadata, clauses) {
+  if (!clauses || clauses.length === 0)
+    return true;
+  for (const w of clauses)
+    if (!matchesClause(metadata, w))
+      return false;
+  return true;
+}
 var utf8Encoder3 = new TextEncoder;
 var utf8Decoder3 = new TextDecoder;
+function encodeCursor(cursor) {
+  return bytesToBase64Url(utf8Encoder3.encode(JSON.stringify(cursor)));
+}
+function decodeCursor(token) {
+  let parsed;
+  try {
+    const padded = token.replace(/-/g, "+").replace(/_/g, "/");
+    parsed = JSON.parse(utf8Decoder3.decode(base64ToBytes(padded)));
+  } catch {
+    throw storageError("invalid_input", "invalid pagination cursor");
+  }
+  const c = parsed;
+  if (!c || typeof c !== "object" || c.v !== 1 || typeof c.i !== "string" || c.o !== undefined && typeof c.o !== "string" && typeof c.o !== "number") {
+    throw storageError("invalid_input", "invalid pagination cursor");
+  }
+  return c;
+}
+function cursorForRow(orderValue, id) {
+  const o = typeof orderValue === "string" || typeof orderValue === "number" ? orderValue : undefined;
+  return encodeCursor(o === undefined ? { v: 1, i: id } : { v: 1, o, i: id });
+}
+function clampPage(raw) {
+  if (raw === undefined)
+    return DEFAULT_PAGE;
+  if (!Number.isFinite(raw) || raw <= 0)
+    return DEFAULT_PAGE;
+  return Math.min(MAX_PAGE, Math.trunc(raw));
+}
+
+// src/resources/storage/memory.ts
+function stripNulls(value) {
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (v === null || v === undefined)
+      continue;
+    out[k] = v && typeof v === "object" && !Array.isArray(v) && v.constructor === Object ? stripNulls(v) : v;
+  }
+  return out;
+}
+function toRecord(row) {
+  return {
+    id: row.id,
+    metadata: row.metadata,
+    version: row.version,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    hasBlob: row.hasBlob,
+    ...row.blobEncoding ? { blobEncoding: row.blobEncoding } : {}
+  };
+}
+
+class MemoryBackend {
+  name = "memory";
+  grants;
+  objects = new Map;
+  blobs = new Map;
+  versions = new Map;
+  constructor(opts = {}) {
+    this.grants = opts.grants ?? new MemoryGrantStore;
+  }
+  available() {
+    return true;
+  }
+  ensureCollection() {
+    return Promise.resolve();
+  }
+  put(req) {
+    const now = Date.now();
+    const metadata = stripNulls(req.metadata);
+    const pk = pkOf(req.ns, req.collection, req.id);
+    const existing = this.objects.get(pk);
+    const version = (existing?.version ?? 0) + 1;
+    const createdAt = existing?.createdAt ?? now;
+    const row = {
+      ns: req.ns,
+      collection: req.collection,
+      id: req.id,
+      cpk: cpkOf(req.ns, req.collection),
+      metadata,
+      version,
+      createdAt,
+      updatedAt: now,
+      hasBlob: req.blob !== undefined,
+      ...req.blobEncoding ? { blobEncoding: req.blobEncoding } : {}
+    };
+    this.objects.set(pk, row);
+    if (req.blob !== undefined)
+      this.blobs.set(pk, req.blob.slice());
+    else
+      this.blobs.delete(pk);
+    if (req.versioned) {
+      this.versions.set(vpkOf(req.ns, req.collection, req.id, version), {
+        opk: pk,
+        version,
+        metadata,
+        createdAt: now,
+        hasBlob: req.blob !== undefined,
+        ...req.blobEncoding ? { blobEncoding: req.blobEncoding } : {},
+        ...req.blob !== undefined ? { bytes: req.blob.slice() } : {}
+      });
+    }
+    return Promise.resolve({ id: req.id, version, updatedAt: now });
+  }
+  get(ns, collection, id, opts) {
+    throwIfAborted(opts?.signal, `get on "${collection}"`);
+    const row = this.objects.get(pkOf(ns, collection, id));
+    return Promise.resolve(row ? toRecord(row) : null);
+  }
+  matching(ns, collection, q) {
+    const cpk = cpkOf(ns, collection);
+    const rows = [];
+    for (const row of this.objects.values()) {
+      if (row.cpk === cpk && matchesWhere(row.metadata, q.where))
+        rows.push(row);
+    }
+    return rows;
+  }
+  query(ns, collection, q, opts) {
+    throwIfAborted(opts?.signal, `query on "${collection}"`);
+    const field = q.orderBy?.field;
+    const type = q.orderBy?.type;
+    const dir = q.orderBy?.dir === "desc" ? -1 : 1;
+    const rows = this.matching(ns, collection, q);
+    rows.sort((a, b) => {
+      if (field) {
+        const c = compareValues(a.metadata[field], b.metadata[field], type) * dir;
+        if (c !== 0)
+          return c;
+      }
+      return a.id === b.id ? 0 : a.id < b.id ? -1 : 1;
+    });
+    let page = rows;
+    if (q.after) {
+      const cursor = decodeCursor(q.after);
+      if (field) {
+        page = rows.filter((r) => {
+          const c = compareValues(r.metadata[field], cursor.o, type) * dir;
+          return c > 0 || c === 0 && r.id > cursor.i;
+        });
+      } else {
+        page = rows.filter((r) => r.id > cursor.i);
+      }
+    }
+    const limit = clampPage(q.limit);
+    const hasMore = page.length > limit;
+    const slice = hasMore ? page.slice(0, limit) : page;
+    const last = slice[slice.length - 1];
+    return Promise.resolve({
+      records: slice.map(toRecord),
+      ...hasMore && last ? { nextCursor: cursorForRow(field ? last.metadata[field] : undefined, last.id) } : {}
+    });
+  }
+  count(ns, collection, q, opts) {
+    throwIfAborted(opts?.signal, `count on "${collection}"`);
+    return Promise.resolve(this.matching(ns, collection, q).length);
+  }
+  delete(ns, collection, id) {
+    const pk = pkOf(ns, collection, id);
+    const existed = this.objects.delete(pk);
+    this.blobs.delete(pk);
+    for (const [vpk, v] of this.versions)
+      if (v.opk === pk)
+        this.versions.delete(vpk);
+    return Promise.resolve(existed);
+  }
+  readBlob(ns, collection, id, opts) {
+    throwIfAborted(opts?.signal, `readBlob on "${collection}"`);
+    const b = this.blobs.get(pkOf(ns, collection, id));
+    return Promise.resolve(b ? b.slice() : null);
+  }
+  listVersions(ns, collection, id) {
+    const opk = pkOf(ns, collection, id);
+    const out = [];
+    for (const v of this.versions.values()) {
+      if (v.opk === opk)
+        out.push({ version: v.version, createdAt: v.createdAt, hasBlob: v.hasBlob });
+    }
+    out.sort((a, b) => b.version - a.version);
+    return Promise.resolve(out);
+  }
+  getVersion(ns, collection, id, version) {
+    const v = this.versions.get(vpkOf(ns, collection, id, version));
+    if (!v)
+      return Promise.resolve(null);
+    return Promise.resolve({
+      id,
+      metadata: v.metadata,
+      version: v.version,
+      createdAt: v.createdAt,
+      updatedAt: v.createdAt,
+      hasBlob: v.hasBlob,
+      ...v.blobEncoding ? { blobEncoding: v.blobEncoding } : {}
+    });
+  }
+  readVersionBlob(ns, collection, id, version) {
+    const v = this.versions.get(vpkOf(ns, collection, id, version));
+    return Promise.resolve(v?.bytes ? v.bytes.slice() : null);
+  }
+  async revert(ns, collection, id, version) {
+    const v = this.versions.get(vpkOf(ns, collection, id, version));
+    if (!v)
+      throw storageError("not_found", `version ${version} not found for "${id}"`);
+    return this.put({
+      ns,
+      collection,
+      id,
+      metadata: v.metadata,
+      versioned: true,
+      ...v.bytes !== undefined ? { blob: v.bytes.slice() } : {},
+      ...v.blobEncoding ? { blobEncoding: v.blobEncoding } : {}
+    });
+  }
+}
 
 // src/resources/storage/storage.ts
 var utf8Encoder4 = new TextEncoder;
@@ -3808,23 +4363,29 @@ class CollectionImpl {
   name;
   schema;
   mode;
+  sharing;
   blobField;
   versioned;
   ensurePromise = null;
-  constructor(backend, ns, name, schema, mode) {
+  constructor(backend, ns, name, schema, mode, sharing) {
     this.backend = backend;
     this.ns = ns;
     this.name = name;
     this.schema = schema;
     this.mode = mode;
+    this.sharing = sharing;
     this.blobField = schema.blob;
     this.versioned = schema.versioned === true;
   }
   requireBackend() {
     return requireAvailableBackend(this.backend, "storage");
   }
+  assertReadable() {
+    this.sharing.assertLocalAccess(this.ns, "read");
+  }
   assertWritable() {
     assertWritableNamespace(this.mode, this.ns, "storage");
+    this.sharing.assertLocalAccess(this.ns, "readwrite");
   }
   ensure(backend) {
     if (!this.ensurePromise) {
@@ -3921,6 +4482,7 @@ class CollectionImpl {
     return backend.put(req);
   }
   async get(id, opts = {}) {
+    this.assertReadable();
     const signal = opts.signal;
     const what = `get on "${this.name}"`;
     const backend = this.requireBackend();
@@ -3934,6 +4496,7 @@ class CollectionImpl {
     return this.hydrate(rec, blob);
   }
   async query(q = {}) {
+    this.assertReadable();
     const signal = q.signal;
     const what = `query on "${this.name}"`;
     const backend = this.requireBackend();
@@ -3971,6 +4534,7 @@ class CollectionImpl {
     return out.map((r) => ({ ...r.metadata }));
   }
   async page(q = {}) {
+    this.assertReadable();
     const signal = q.signal;
     const what = `page on "${this.name}"`;
     const backend = this.requireBackend();
@@ -3984,6 +4548,7 @@ class CollectionImpl {
     };
   }
   async count(q = {}) {
+    this.assertReadable();
     const signal = q.signal;
     const what = `count on "${this.name}"`;
     const backend = this.requireBackend();
@@ -4003,17 +4568,20 @@ class CollectionImpl {
     return this.delete(id);
   }
   async blob(id) {
+    this.assertReadable();
     const backend = this.requireBackend();
     await this.ensure(backend);
     return backend.readBlob(this.ns, this.name, id);
   }
   async versions(id) {
+    this.assertReadable();
     const backend = this.requireBackend();
     await this.ensure(backend);
     const list = await backend.listVersions(this.ns, this.name, id);
     return list.map((v) => ({ version: v.version, createdAt: v.createdAt }));
   }
   async getVersion(id, version) {
+    this.assertReadable();
     const backend = this.requireBackend();
     await this.ensure(backend);
     const rec = await backend.getVersion(this.ns, this.name, id, version);
@@ -4034,19 +4602,22 @@ class NamespaceImpl {
   backend;
   id;
   mode;
-  constructor(backend, id, mode) {
+  sharing;
+  constructor(backend, id, mode, sharing) {
     this.backend = backend;
     this.id = id;
     this.mode = mode;
+    this.sharing = sharing;
   }
   collection(name, schema) {
-    return new CollectionImpl(this.backend, this.id, name, schema, this.mode);
+    return new CollectionImpl(this.backend, this.id, name, schema, this.mode, this.sharing);
   }
 }
 
 class Storage {
   client;
   resolver;
+  #sharing;
   constructor(client) {
     this.client = client;
     this.resolver = new BackendResolver(() => client.storageBackend, () => client.serverCapable, () => new CloudStorageBackend(client));
@@ -4054,17 +4625,29 @@ class Storage {
   available() {
     return this.resolver.available();
   }
+  get grants() {
+    if (!this.#sharing) {
+      this.#sharing = new NamespaceSharing({
+        resource: "storage",
+        client: this.client,
+        local: this.localGrantStore(),
+        ownNs: () => this.client.appId
+      });
+    }
+    return this.#sharing;
+  }
   namespace(appId, opts = {}) {
     const { id, mode } = deriveNamespace(this.client.appId, appId, opts.mode);
-    return new NamespaceImpl(this.resolver.resolve(), id, mode);
+    const sharing = this.grants;
+    sharing.assertLocalAccess(id, mode);
+    return new NamespaceImpl(this.resolver.resolve(), id, mode, sharing);
   }
-}
-// src/resources/_kv/keys.ts
-function pkOf(ns, collection, id) {
-  return JSON.stringify([ns, collection, id]);
-}
-function cpkOf(ns, collection) {
-  return JSON.stringify([ns, collection]);
+  localGrantStore() {
+    if (this.client.grantStore)
+      return this.client.grantStore;
+    const backend = this.client.storageBackend;
+    return backend instanceof MemoryBackend ? backend.grants : null;
+  }
 }
 // src/core/_internal/observable.ts
 class Observable {
@@ -4611,8 +5194,20 @@ class WorkspaceSync {
 class Sync {
   client;
   workspaces = new Map;
+  #sharing;
   constructor(client) {
     this.client = client;
+  }
+  get grants() {
+    if (!this.#sharing) {
+      this.#sharing = new NamespaceSharing({
+        resource: "sync",
+        client: this.client,
+        local: this.client.grantStore ?? null,
+        ownNs: () => this.client.appId
+      });
+    }
+    return this.#sharing;
   }
   async listWorkspaces() {
     const res = await this.client.request("/api/v1/sync/workspaces", {
@@ -5005,7 +5600,9 @@ class Core {
       compression: options.compression,
       storage: options.storage,
       fs: options.fs,
-      sync: options.sync
+      sync: options.sync,
+      callerKind: options.callerKind ?? "app",
+      grantStore: options.grantStore
     });
   }
   get defaultCompression() {
@@ -5022,6 +5619,12 @@ class Core {
   }
   get snapshotBackend() {
     return this.options.sync;
+  }
+  get callerKind() {
+    return this.options.callerKind;
+  }
+  get grantStore() {
+    return this.options.grantStore;
   }
   get serverCapable() {
     return this.options.token !== undefined;
@@ -5514,6 +6117,8 @@ class UnifiedAI extends Core {
     const appId = this.appId.trim();
     if (appId)
       h["x-unified-app"] = appId;
+    if (this.callerKind === "agent")
+      h["x-unified-caller"] = "agent";
     return h;
   }
 }
@@ -5665,5 +6270,5 @@ export {
   runAgent
 };
 
-//# debugId=A7AEDE33FC8C002E64756E2164756E21
+//# debugId=4D21EB0B6AA5FE5D64756E2164756E21
 //# sourceMappingURL=dev-host-api.js.map
