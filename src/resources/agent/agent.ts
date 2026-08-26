@@ -107,7 +107,12 @@ function richestJsonObject(text: string): Record<string, unknown> | undefined {
         const slice = text.slice(start, i + 1);
         try {
           const parsed = JSON.parse(slice) as unknown;
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && slice.length > bestLen) {
+          if (
+            parsed &&
+            typeof parsed === "object" &&
+            !Array.isArray(parsed) &&
+            slice.length > bestLen
+          ) {
             best = parsed as Record<string, unknown>;
             bestLen = slice.length;
           }
@@ -137,7 +142,12 @@ function mergeToolCallArguments(current: string, incoming: unknown): string {
   if (typeof incoming === "object") {
     const json = JSON.stringify(incoming);
     if (json === "{}" || json === "[]") return current || json;
-    if (!current || current === "{}" || parseJsonLenient(current) === undefined || json.length >= current.length) {
+    if (
+      !current ||
+      current === "{}" ||
+      parseJsonLenient(current) === undefined ||
+      json.length >= current.length
+    ) {
       return json;
     }
     return current;
@@ -401,7 +411,10 @@ export class Agent {
                 // and 500s the next request, aborting the loop.
                 // Canonical JSON so the follow-up turn never 500s on
                 // concatenated/truncated streamed arguments.
-                function: { name: tc.name, arguments: JSON.stringify(parseToolArguments(tc.arguments)) },
+                function: {
+                  name: tc.name,
+                  arguments: JSON.stringify(parseToolArguments(tc.arguments)),
+                },
                 // Echo the provider signature back so the gateway can re-attach it
                 // to the tool call for Gemini/Vertex on the next request.
                 ...(tc.thoughtSignature ? { thought_signature: tc.thoughtSignature } : {}),
@@ -452,7 +465,7 @@ export class Agent {
             producedOutput,
             messages,
           };
-        let input: Record<string, unknown> = parseToolArguments(tc.arguments);
+        const input: Record<string, unknown> = parseToolArguments(tc.arguments);
         producedOutput = true;
         emit({ type: "tool_use", id: tc.id, name: tc.name, input, raw: tc.arguments });
         const spec = toolMap.get(tc.name);

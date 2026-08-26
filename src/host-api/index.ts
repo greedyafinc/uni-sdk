@@ -17,8 +17,8 @@
 // Types only — no runtime code lives here. The dev-time IMPLEMENTATION of this
 // surface is src/app/dev-host-api.ts.
 
-import type { RunAgentOptions, RunAgentResult, ToolSpec } from "../resources/agent/types";
 import type { UnifiedAI } from "../core/client";
+import type { RunAgentOptions, RunAgentResult, ToolSpec } from "../resources/agent/types";
 import type { FsNamespace } from "../resources/fs/types";
 import type { ArtifactRef, OpenArtifactOutcome } from "../resources/openArtifact";
 

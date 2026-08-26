@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { parseRetryAfterHeader } from "../../src/core/_internal/retry";
 import {
   AuthenticationError,
   BadRequestError,
@@ -15,7 +16,6 @@ import {
   UsageLimitError,
   buildHttpError,
 } from "../../src/index";
-import { parseRetryAfterHeader } from "../../src/core/_internal/retry";
 
 // Verifies the typed-error hierarchy and that the fetch path dispatches the
 // right subclass per status. Each test mocks fetch directly — no network.

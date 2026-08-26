@@ -102,7 +102,10 @@ function fakeServer(): Collection<Task> {
         const q = (b.query ?? {}) as BackendQuery;
         if (q.limit !== undefined || q.after !== undefined) {
           return new Response(
-            JSON.stringify({ code: "unsupported_query", message: "count does not accept limit/after" }),
+            JSON.stringify({
+              code: "unsupported_query",
+              message: "count does not accept limit/after",
+            }),
             { status: 400, headers: { "content-type": "application/json" } },
           );
         }
@@ -521,7 +524,12 @@ for (const [label, make] of [
       let after: string | undefined;
       let pages = 0;
       do {
-        const p = await coll.page({ orderBy: "owner", order, limit: 2, ...(after ? { after } : {}) });
+        const p = await coll.page({
+          orderBy: "owner",
+          order,
+          limit: 2,
+          ...(after ? { after } : {}),
+        });
         seen.push(...ids(p.items));
         after = p.nextCursor;
         pages++;

@@ -5,7 +5,7 @@
 // OS keychain → handoff from a running UnifiedApp desktop (env/loopback or
 // discovery file) → interactive browser PKCE. `onAuthEvent` lets you watch
 // each rung as it happens.
-import { UnifiedAI, StreamInterruptedError } from "../../src/node/index";
+import { StreamInterruptedError, UnifiedAI } from "../../src/node/index";
 
 const sdk = new UnifiedAI({
   appId: process.env.UNIFIEDAI_CLIENT_ID ?? "streaming-chat-example",
@@ -46,7 +46,9 @@ try {
   }
 } catch (err) {
   if (err instanceof StreamInterruptedError) {
-    console.error("\nConnection dropped mid-response — the reply above is incomplete. Please retry.");
+    console.error(
+      "\nConnection dropped mid-response — the reply above is incomplete. Please retry.",
+    );
     process.exit(1);
   }
   throw err;

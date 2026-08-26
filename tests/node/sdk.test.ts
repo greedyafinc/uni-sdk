@@ -19,11 +19,13 @@ describe("UnifiedAI apiUrl default", () => {
   const ORIG_ENV_URL = process.env.UNIFIEDAI_API_URL;
 
   beforeEach(() => {
-    process.env.UNIFIEDAI_API_URL = undefined;
+    // Bun stringifies `process.env.X = undefined` to `"undefined"`.
+    Reflect.deleteProperty(process.env, "UNIFIEDAI_API_URL");
   });
 
   afterEach(() => {
-    process.env.UNIFIEDAI_API_URL = ORIG_ENV_URL;
+    if (ORIG_ENV_URL === undefined) Reflect.deleteProperty(process.env, "UNIFIEDAI_API_URL");
+    else process.env.UNIFIEDAI_API_URL = ORIG_ENV_URL;
   });
 
   test("requests use the production base when apiUrl is not provided", async () => {

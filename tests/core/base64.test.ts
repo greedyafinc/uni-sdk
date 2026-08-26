@@ -111,8 +111,8 @@ describe("bytesToBase64Url", () => {
   it("matches RFC 7636 PKCE appendix B challenge encoding", () => {
     // RFC 7636 Appendix B: this 32-byte digest encodes to the given challenge.
     const digest = new Uint8Array([
-      19, 211, 30, 150, 26, 26, 216, 236, 47, 22, 177, 12, 76, 152, 46, 8, 118, 168, 120, 173,
-      109, 241, 68, 86, 110, 225, 137, 74, 203, 112, 249, 195,
+      19, 211, 30, 150, 26, 26, 216, 236, 47, 22, 177, 12, 76, 152, 46, 8, 118, 168, 120, 173, 109,
+      241, 68, 86, 110, 225, 137, 74, 203, 112, 249, 195,
     ]);
     expect(bytesToBase64Url(digest)).toBe("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
     expect(withoutBuffer(() => bytesToBase64Url(digest))).toBe(

@@ -16,12 +16,7 @@ export interface Item {
 }
 
 const now = Date.now();
-const seed = (
-  n: number,
-  title: string,
-  preview: string,
-  extra = "",
-): Item => ({
+const seed = (n: number, title: string, preview: string, extra = ""): Item => ({
   id: `item-${n}`,
   title,
   preview,

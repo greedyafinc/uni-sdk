@@ -8,36 +8,41 @@ Node-only or test-only modules.
 ## Install
 
 `@unifiedai/sdk` is **not published to npm** — `bun add @unifiedai/sdk` 404s.
-Install it from GitHub:
+Install it from GitHub. `dist/` JS and `.d.ts` are committed, so a default
+`bun install` resolves `.`, `./app`, `./logos`, and the other documented
+subpaths **without** `trustedDependencies` or `bun install --trust`:
 
 ```sh
 bun add @unifiedai/sdk@github:greedyafinc/uni-sdk#main
 
-# Or pin a commit — the `version` field moves slower than `main`.
+# Pin a commit in CI — `main` moves, and the `version` field moves slower still.
 bun add @unifiedai/sdk@github:greedyafinc/uni-sdk#<sha>
 ```
-
-`dist/` is gitignored and produced by the `prepare` script at install time.
-Bun blocks lifecycle scripts by default, so consumers **must** trust the
-package — otherwise `dist/` is never built and every import fails to resolve:
 
 ```json
 {
   "dependencies": {
     "@unifiedai/sdk": "github:greedyafinc/uni-sdk#main"
-  },
-  "trustedDependencies": ["@unifiedai/sdk"]
+  }
 }
 ```
 
-Inside the UnifiedApp workspace, apps use a `file:` reference instead
-(`"@unifiedai/sdk": "file:../../uni-sdk"`) so local SDK edits are picked up
-without a publish step.
+Do **not** add `"trustedDependencies": ["@unifiedai/sdk"]`. Bun blocks
+lifecycle scripts for git dependencies by default; that is fine. `prepare`
+would otherwise `rm -rf dist` and then fail (`tsc` is a devDependency). When
+the package *is* trusted, `prepare` is a no-op inside `node_modules` and
+uses the committed `dist/`.
+
+**UnifiedApp CI:** depend on a git SHA (or `#main` after this lands), run
+plain `bun install` / `bun install --frozen-lockfile`, and import
+`@unifiedai/sdk/app` and `@unifiedai/sdk/logos` as usual. No `--trust` flag.
+Local UnifiedApp checkouts that sit next to this repo can keep
+`"@unifiedai/sdk": "file:../../uni-sdk"` so SDK edits are picked up without
+pushing; that path also needs a built `dist/` (`bun install` or
+`bun run build` in uni-sdk).
 
 The package is ESM-only. The Node entry requires Node 18 or newer and the
-published types target TypeScript 5. GitHub installs also require Bun during
-installation because the `prepare` script builds `dist/`; the example commands
-below run with Bun.
+published types target TypeScript 5. Example commands below run with Bun.
 
 ## Which entry should I import?
 

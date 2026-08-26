@@ -11,7 +11,7 @@
 import type { Core } from "../core";
 import { StreamInterruptedError, UnifiedError } from "../errors";
 import { parseSSE } from "./sse";
-import { UnifiedStream, type StreamUsageExtractor } from "./stream";
+import { type StreamUsageExtractor, UnifiedStream } from "./stream";
 
 export interface SSEFrameYield<TEvent> {
   event: TEvent;

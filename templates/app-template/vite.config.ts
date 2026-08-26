@@ -1,3 +1,5 @@
+import { unifiedApp } from "@unifiedai/sdk/app/vite";
+import vue from "@vitejs/plugin-vue";
 // Build config for an embedded UnifiedApp app.
 //
 // `unifiedApp()` wires the `@unified/host-api` bare specifier for both modes:
@@ -15,8 +17,6 @@
 // pattern — lib mode extracts CSS to a file that nothing loads by itself.
 // This template keeps its styles inline to stay out of that business.)
 import { defineConfig } from "vite";
-import vue from "@vitejs/plugin-vue";
-import { unifiedApp } from "@unifiedai/sdk/app/vite";
 
 export default defineConfig({
   plugins: [vue(), unifiedApp({ appId: "my-app" })],

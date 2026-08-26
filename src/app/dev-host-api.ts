@@ -21,9 +21,9 @@
 //    something different from what it does when embedded.
 
 import { UnifiedAI } from "../core/client";
-import { getProviderLogo } from "../resources/logos";
-import { fsTools } from "../resources/agent/fs-tools";
 import type { ProjectContext } from "../host-api";
+import { fsTools } from "../resources/agent/fs-tools";
+import { getProviderLogo } from "../resources/logos";
 
 /** Vite-injected env, read defensively so this module also loads (for its
     no-ops) under plain bundler-less tooling where import.meta.env is absent. */
@@ -135,9 +135,7 @@ export function getCurrentProject(): ProjectContext | null {
  * context, which standalone dev never has) and never again; the unsubscribe
  * is a no-op.
  */
-export function onProjectChange(
-  cb: (project: ProjectContext | null) => void,
-): () => void {
+export function onProjectChange(cb: (project: ProjectContext | null) => void): () => void {
   cb(null);
   return () => {};
 }

@@ -2,13 +2,8 @@
 // The testkit is framework-agnostic (it returns violation strings rather than
 // calling any `expect`), so this file ports to vitest by changing one import.
 import { describe, expect, test } from "bun:test";
-import {
-  HOST_LIMITS,
-  benchmark,
-  findHitViolations,
-  formatBench,
-} from "@unifiedai/sdk/app/testkit";
 import type { SearchProvider, SearchRequest } from "@unifiedai/sdk/app";
+import { HOST_LIMITS, benchmark, findHitViolations, formatBench } from "@unifiedai/sdk/app/testkit";
 import { createSearchProvider } from "../src/search";
 
 const CONTRACT = {

@@ -11,7 +11,7 @@ import {
   scoreFields,
   toSearchHit,
 } from "@unifiedai/sdk/app";
-import { listItems, type Item } from "./store";
+import { type Item, listItems } from "./store";
 
 const KIND = "item";
 

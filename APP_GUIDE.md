@@ -37,9 +37,13 @@ Who owns what:
 ## Project setup
 
 ```bash
-bun add vue @unifiedai/sdk
+bun add vue @unifiedai/sdk@github:greedyafinc/uni-sdk#main
 bun add -d vite @vitejs/plugin-vue typescript vue-tsc
 ```
+
+The SDK is not on npm. A default `bun install` of the GitHub repo is enough
+for `@unifiedai/sdk/app` and the other subpaths — `dist/` is committed, so
+do not add `trustedDependencies` or pass `--trust`. Pin a commit SHA in CI.
 
 `vite.config.ts` — the `unifiedApp()` plugin wires `@unified/host-api` for both
 modes (externalized + rewritten to `/host-api.js` in build; aliased to the dev
