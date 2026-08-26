@@ -291,10 +291,14 @@ by malice.
   `namespace("other-app")` without a grant → `storage_not_granted`. See PROTOCOL.md §Namespace sharing.
 - **Writes stay owner-only unless a `readwrite` grant exists** and the consumer opens
   `{ mode: "readwrite" }`. Sharing defaults to publish/consume.
-- **Enforcement location:** injected backends (MemoryBackend) enforce in the SDK; the Cloud backend lets
-  unified-api enforce and maps `403 { code: "storage_not_granted" }`. Never trust app JS to scope itself.
-- **Cloud persistence is Pro-gated.** Free (`plans.id = 0`) hitting `/storage/*` gets `403 plan_required`
-  (`PlanRequiredError`). Injected local backends are not gated.
+- **Enforcement location:** injected backends (MemoryBackend) and a host
+  `grantStore` enforce in the SDK (local UnifiedApp/desktop path — no production
+  API). The Cloud backend lets unified-api enforce and maps
+  `403 { code: "storage_not_granted" }`. Never trust app JS to scope itself.
+- **Cloud persistence is Pro-gated.** Free (`plans.id = 0`) hitting `/storage/*`
+  gets `403 plan_required` (`PlanRequiredError`). Injected local backends are
+  not gated. Local-dev models the gate with `FakeSyncServer({ cloudPlanId: 0 })`;
+  production deploy is out of scope.
 
 This satisfies both halves of the requirement: data created in one app *can* be referenced in another, while the
 default remains strict per-app separation.

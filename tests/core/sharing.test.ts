@@ -9,7 +9,7 @@ import {
 import { storageTools, syncTools } from "../../src/resources/agent";
 import { MemoryBackend } from "../../src/resources/storage";
 import { PLAN_FREE_ID, isCloudPlan } from "../../src/resources/usage";
-import { FakeSyncServer } from "../../src/testing";
+import { FakeSyncServer, createLocalSharingRuntime } from "../../src/testing";
 
 interface Note extends Record<string, unknown> {
   id: string;
@@ -398,5 +398,68 @@ describe("sharing helpers", () => {
       expect((err as UnifiedError).code).toBe("storage_not_granted");
       expect((err as UnifiedError).status).toBeUndefined();
     }
+  });
+});
+
+describe("local UnifiedApp / desktop path", () => {
+  test("createLocalSharingRuntime shares storage + sync + agent without production HTTP", async () => {
+    const host = createLocalSharingRuntime();
+    const planner = host.client({ appId: "planner" });
+    const docs = host.client({ appId: "docs" });
+    const grok = host.client({ appId: "grok-bot", callerKind: "agent" });
+
+    await planner.storage
+      .namespace()
+      .collection<Note>("notes", { key: "id" })
+      .put({ id: "n1", title: "Ship", body: "" });
+    host.server.seed("ws", [
+      { ns: "planner", collection: "issues", id: "i1", metadata: { title: "Ship" } },
+    ]);
+
+    expect(() => docs.storage.namespace("planner")).toThrow(/no grant/);
+
+    await planner.storage.grants.grant({ grantee: { type: "app", appId: "docs" }, mode: "read" });
+    await planner.sync.grants.grant({ grantee: { type: "app", appId: "docs" }, mode: "read" });
+    await planner.storage.grants.grant({ grantee: { type: "agent" }, mode: "read" });
+    await planner.sync.grants.grant({ grantee: { type: "agent" }, mode: "read" });
+
+    expect(
+      await docs.storage.namespace("planner").collection<Note>("notes", { key: "id" }).get("n1"),
+    ).toMatchObject({ title: "Ship" });
+
+    const docsWs = docs.sync.workspace("ws");
+    await docsWs.start();
+    await docsWs.sync();
+    expect(
+      docsWs
+        .collection("planner", "issues")
+        .list()
+        .map((r) => r.metadata.title),
+    ).toEqual(["Ship"]);
+    await docsWs.stop();
+
+    const tools = storageTools(grok.storage.namespace("planner"), { collections: ["notes"] });
+    const got = await tools[0]?.execute(
+      { collection: "notes", id: "n1" },
+      new AbortController().signal,
+    );
+    expect(got?.isError).toBeUndefined();
+    expect(JSON.parse(got?.content ?? "null")).toMatchObject({ title: "Ship" });
+  });
+
+  test("local Pro gate: Free FakeSyncServer still returns PlanRequiredError (no production billing)", async () => {
+    const host = createLocalSharingRuntime({ cloudPlanId: PLAN_FREE_ID });
+    const planner = host.client({ appId: "planner" });
+    const ws = planner.sync.workspace("ws");
+    await ws.start();
+    await expect(ws.sync()).rejects.toBeInstanceOf(PlanRequiredError);
+    await ws.stop();
+    await planner.storage
+      .namespace()
+      .collection<Note>("notes", { key: "id" })
+      .put({ id: "n1", title: "local", body: "" });
+    expect(
+      await planner.storage.namespace().collection<Note>("notes", { key: "id" }).get("n1"),
+    ).toMatchObject({ title: "local" });
   });
 });

@@ -310,6 +310,27 @@ host would strip — and prints the precise breakage instead of a diff of two hi
 arrays. The benchmark asserts you sit far under the 1500 ms budget (which
 includes your module-load time in production).
 
+## Sharing a namespace (other apps + agents)
+
+Any marketplace app — planner, docs, yours — exposes its `sdk.storage` /
+`sdk.sync` namespace through **grants**, not a planner-specific SDK resource.
+Records stay opaque JSON; you own the collection schema.
+
+```ts
+const sdk = getSdk();
+await sdk.storage.grants.grant({ grantee: { type: "app", appId: "docs" }, mode: "read" });
+await sdk.storage.grants.grant({ grantee: { type: "agent" }, mode: "read" });
+```
+
+Consumers then `sdk.storage.namespace("your-app-id")` or read that `ns` from
+`WorkspaceSync`. In-process agents bind `storageTools(ns)` / `syncTools(ws, ns)`
+with **your** collection allowlist. See PROTOCOL.md §Namespace sharing.
+
+Local UnifiedApp/desktop injects a shared `grantStore` + `MemoryBackend` (or
+`createLocalSharingRuntime()` from `@unifiedai/sdk/testing`) so this works
+without production unified-api. Cloud Pro-gating (`plan_required`) stays in
+the contract; deploy comes later.
+
 ## Standalone dev
 
 `vite dev` runs your app outside the shell. The `unifiedApp()` plugin aliases

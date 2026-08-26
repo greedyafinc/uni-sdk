@@ -428,6 +428,7 @@ export class Storage {
   }
 
   private localGrantStore() {
+    if (this.client.grantStore) return this.client.grantStore;
     const backend = this.client.storageBackend;
     return backend instanceof MemoryBackend ? backend.grants : null;
   }

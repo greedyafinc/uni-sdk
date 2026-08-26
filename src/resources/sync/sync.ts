@@ -23,15 +23,16 @@ export class Sync {
 
   /**
    * Grant CRUD for this app's sync namespace. Grants are namespace-scoped
-   * (not workspace-scoped): the owning app publishes access to its `ns`,
-   * and unified-api filters bootstrap/delta/apply accordingly.
+   * (not workspace-scoped): the owning app publishes access to its `ns`.
+   * With `grantStore` injected (local UnifiedApp), CRUD stays in-process.
+   * Otherwise HTTP to unified-api / FakeSyncServer.
    */
   get grants(): NamespaceSharing {
     if (!this.#sharing) {
       this.#sharing = new NamespaceSharing({
         resource: "sync",
         client: this.client,
-        local: null,
+        local: this.client.grantStore ?? null,
         ownNs: () => this.client.appId,
       });
     }

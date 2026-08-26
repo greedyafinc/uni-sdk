@@ -67,16 +67,22 @@ export interface FakeSyncServerOptions {
   /**
    * Caller's `plans.id`. `PLAN_FREE_ID` (0) makes bootstrap/delta/apply
    * return 403 `plan_required`. Omit (default) to leave the caller entitled
-   * — existing tests keep working.
+   * — existing tests keep working. Local UnifiedApp sets this from the
+   * desktop session; it does not call production billing.
    */
   cloudPlanId?: number;
+  /**
+   * Share this grant table with `MemoryBackend` / `UnifiedAI({ grantStore })`
+   * in the same local host process. Omit to create a private table.
+   */
+  grants?: MemoryGrantStore;
 }
 
 /** An in-memory `/api/v1/sync/*` server exposed as a `fetch` implementation. */
 export class FakeSyncServer {
   readonly baseUrl: string;
   /** Inspectable grant table (same contract as MemoryBackend.grants). */
-  readonly grants = new MemoryGrantStore();
+  readonly grants: MemoryGrantStore;
   private readonly shared: Set<string>;
   private readonly workspaces = new Map<string, WorkspaceState>();
   // Membership metadata for GET /sync/workspaces (id → {name, kind, role}).
@@ -94,6 +100,7 @@ export class FakeSyncServer {
     this.baseUrl = opts.baseUrl ?? "https://fake-sync.test";
     this.shared = new Set(opts.sharedWorkspaces ?? []);
     this.cloudPlanId = opts.cloudPlanId;
+    this.grants = opts.grants ?? new MemoryGrantStore();
   }
 
   /** Override the caller's plan for the Pro gate (`0` = Free). */

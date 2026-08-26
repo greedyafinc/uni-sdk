@@ -1,3 +1,4 @@
+import type { MemoryGrantStore } from "../resources/_kv/sharing";
 import type { FsBackend } from "../resources/fs/types";
 import type { StorageBackend } from "../resources/storage/types";
 import type { SnapshotBackend } from "../resources/sync/types";
@@ -131,6 +132,15 @@ export interface CoreOptions {
    * caller class from the credential — this is a hint, not a self-declaration.
    */
   callerKind?: "app" | "agent";
+  /**
+   * In-process grant table for local UnifiedApp / desktop / tests. When set,
+   * `sdk.storage.grants` and `sdk.sync.grants` stay local (no grant HTTP).
+   * Pass the **same instance** to `MemoryBackend` and `FakeSyncServer` so
+   * enforcement matches CRUD. Cloud clients omit this; unified-api is then
+   * authoritative. Production deploy is out of scope — this is the local-dev
+   * path.
+   */
+  grantStore?: MemoryGrantStore;
 }
 
 export interface RequestOptions {
@@ -204,6 +214,7 @@ export class Core {
         | "fs"
         | "sync"
         | "callerKind"
+        | "grantStore"
       >
     >
   > & {
@@ -216,6 +227,7 @@ export class Core {
     fs: FsBackend | undefined;
     sync: SnapshotBackend | undefined;
     callerKind: "app" | "agent";
+    grantStore: MemoryGrantStore | undefined;
   };
 
   constructor(options: CoreOptions = {}) {
@@ -233,6 +245,7 @@ export class Core {
       fs: options.fs,
       sync: options.sync,
       callerKind: options.callerKind ?? "app",
+      grantStore: options.grantStore,
     });
   }
 
@@ -275,6 +288,16 @@ export class Core {
    */
   get callerKind(): "app" | "agent" {
     return this.options.callerKind;
+  }
+
+  /**
+   * Host-injected in-process grant table, if any. Local UnifiedApp / desktop
+   * wires this so grant CRUD never leaves the process. `undefined` means
+   * storage falls back to `MemoryBackend.grants` (when that backend is
+   * injected) and sync grant CRUD goes over HTTP.
+   */
+  get grantStore(): MemoryGrantStore | undefined {
+    return this.options.grantStore;
   }
 
   /**

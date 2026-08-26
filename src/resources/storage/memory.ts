@@ -76,14 +76,26 @@ function toRecord(row: ObjRow): BackendRecord {
   };
 }
 
+export interface MemoryBackendOptions {
+  /**
+   * Share this grant table with `FakeSyncServer` / other SDK clients in the
+   * same local host process. Omit to create a private table.
+   */
+  grants?: MemoryGrantStore;
+}
+
 export class MemoryBackend implements StorageBackend {
   readonly name = "memory";
   /** Local grant table shared with any SDK that injects this same backend. */
-  readonly grants = new MemoryGrantStore();
+  readonly grants: MemoryGrantStore;
 
   private readonly objects = new Map<string, ObjRow>();
   private readonly blobs = new Map<string, Uint8Array>();
   private readonly versions = new Map<string, VerRow>();
+
+  constructor(opts: MemoryBackendOptions = {}) {
+    this.grants = opts.grants ?? new MemoryGrantStore();
+  }
 
   available(): boolean {
     return true;

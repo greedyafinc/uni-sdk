@@ -12,7 +12,7 @@ without forcing any consumer to bundle Node-only or test-only modules.
 @unifiedai/sdk           → browser-safe (default; zero `node:*` deps; minified)
 @unifiedai/sdk/node      → strict superset; adds OAuth/PKCE/keychain/loopback
 @unifiedai/sdk/logos     → brand-logo helpers (~58 KB data-URI table, kept out of the core bundle)
-@unifiedai/sdk/testing   → test doubles (FakeSyncServer), never in production bundles
+@unifiedai/sdk/testing   → test doubles (FakeSyncServer, createLocalSharingRuntime)
 ```
 
 Bundlers auto-resolve via the `browser` / `node` export conditions in
@@ -27,7 +27,7 @@ src/
 ├── logos/
 │   └── index.ts              # @unifiedai/sdk/logos entry — brand-logo helpers (~58 KB data-URIs)
 ├── testing/
-│   └── index.ts              # @unifiedai/sdk/testing entry — test doubles (FakeSyncServer)
+│   └── index.ts              # @unifiedai/sdk/testing entry — FakeSyncServer + local sharing runtime
 ├── auth/
 │   └── browser-sign-in.ts    # browser sign-in helper
 ├── assets/

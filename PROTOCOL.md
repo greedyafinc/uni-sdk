@@ -854,6 +854,44 @@ a collection allowlist and `write: true`). External/authenticated agents need
 a `{ type: "agent" }` grant, then use the same tools or the same
 `namespace("other-app")` / `workspace().collection(ns, name)` reads.
 
+### Local-dev wiring (no production API)
+
+This change is **local-first**. Production unified-api / unified-db deploy is
+out of scope. The cloud Pro-gate and grant HTTP paths stay in the contract so
+base-api can match them later; UnifiedApp desktop must work **in-process**.
+
+The host constructs one grant table and injects it into every per-app SDK:
+
+```ts
+import { MemoryGrantStore } from "@unifiedai/sdk";
+import { MemoryBackend } from "@unifiedai/sdk";
+import { createLocalSharingRuntime } from "@unifiedai/sdk/testing";
+
+// One-liner for local UnifiedApp / tests:
+const host = createLocalSharingRuntime(); // optional { cloudPlanId: 0 } to model Free
+const planner = host.client({ appId: "planner" });
+const docs = host.client({ appId: "docs" });
+const grok = host.client({ appId: "grok-bot", callerKind: "agent" });
+```
+
+Equivalent wiring by hand:
+
+- One `MemoryGrantStore` passed as `UnifiedAI({ grantStore })`,
+  `new MemoryBackend({ grants })`, and `new FakeSyncServer({ grants })`.
+- `FakeSyncServer.fetch` as the client's `fetch` + `apiUrl: server.baseUrl`.
+- Injected `MemoryBackend` so `sdk.storage` never opens `CloudStorageBackend`.
+- `callerKind: "agent"` on the Grok Bot client.
+
+Grant CRUD then stays in-process (`sdk.storage.grants` / `sdk.sync.grants`
+do not hit `/storage/grants` or `/sync/grants` HTTP). `FakeSyncServer`
+filters bootstrap/delta/apply against the same table. Set
+`cloudPlanId: 0` to exercise `plan_required` locally — do not call
+production billing.
+
+Injected local backends (`MemoryBackend`, a host snapshot store) are **not**
+Pro-gated. Only the fake/cloud sync HTTP paths (`bootstrap`/`delta`/`apply`)
+honor `cloudPlanId`.
+
 ### Cloud persistence is Pro-gated
 
 Cloud paths — `POST /storage/*` (except grant CRUD MAY be gated the same way),

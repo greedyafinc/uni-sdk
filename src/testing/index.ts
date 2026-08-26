@@ -4,3 +4,5 @@
 // never ship in production bundles. Everything here is browser-safe.
 export { FakeSyncServer } from "../resources/sync/fake-server";
 export type { FakeSyncServerOptions } from "../resources/sync/fake-server";
+export { createLocalSharingRuntime } from "./local-sharing";
+export type { LocalSharingRuntime, LocalSharingRuntimeOptions } from "./local-sharing";

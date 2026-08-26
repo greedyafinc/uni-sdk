@@ -73,8 +73,8 @@ import { getProviderLogo, getModelLogo, listProviderLogos } from "@unifiedai/sdk
 import type { LogoTheme, ProviderLogoInput, ModelLogoInput } from "@unifiedai/sdk/logos";
 
 // Test doubles — never ship in production bundles
-import { FakeSyncServer } from "@unifiedai/sdk/testing";
-import type { FakeSyncServerOptions } from "@unifiedai/sdk/testing";
+import { FakeSyncServer, createLocalSharingRuntime } from "@unifiedai/sdk/testing";
+import type { FakeSyncServerOptions, LocalSharingRuntime } from "@unifiedai/sdk/testing";
 ```
 
 > **Breaking (unreleased):** the logo helpers and `FakeSyncServer` were
@@ -486,6 +486,9 @@ constructed on first access, so `sdk.chat` alone doesn't pay for the other 21.
   require a grant (`sdk.storage.grants`). Cloud writes/reads are Pro-gated
   (`PlanRequiredError` / `plan_required`); injected local backends are not.
   Collections support metadata queries, out-of-line blobs, and versioning.
+  Local UnifiedApp/desktop injects `MemoryBackend` + a shared `grantStore`
+  (see `createLocalSharingRuntime` in `@unifiedai/sdk/testing`) so sharing
+  works without production unified-api.
 - `sdk.fs` follows the same cloud/injected/no-fallback selection. It exposes a
   jailed POSIX-style tree with text/byte reads, writes, unique-string edits,
   listing, stat, and delete. Cloud fs is Pro-gated the same way.
