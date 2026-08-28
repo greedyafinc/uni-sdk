@@ -13,6 +13,7 @@ export type { SessionStatus, SessionSnapshot, SessionEvent, SessionEventType, Se
 export { UnifiedStream } from "./core/_internal/stream.js";
 export type { StreamUsage, StreamUsageExtractor } from "./core/_internal/stream.js";
 export { parseSSE, type SSEMessage } from "./core/_internal/sse.js";
+export * from "./localAgents/index.js";
 export * from "./resources/agent/index.js";
 export * from "./resources/audio.js";
 export * from "./resources/actions.js";

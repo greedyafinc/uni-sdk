@@ -1,0 +1,299 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+
+// relayClient's job is frame handling: turning a JSON WebSocket into typed
+// request/response calls and per-run streams. The socket itself is faked so the
+// assertions are about frames, not networking. Credential + base URL come from
+// `configureLocalAgents`, same as local-agents.test.ts.
+
+function makeStorage(): Storage {
+  const map = new Map<string, string>();
+  return {
+    get length() {
+      return map.size;
+    },
+    clear: () => map.clear(),
+    getItem: (k: string) => map.get(k) ?? null,
+    key: (i: number) => [...map.keys()][i] ?? null,
+    removeItem: (k: string) => void map.delete(k),
+    setItem: (k: string, v: string) => void map.set(k, v),
+  } as unknown as Storage;
+}
+(globalThis as { localStorage?: Storage }).localStorage = makeStorage();
+
+class FakeSocket {
+  static last: FakeSocket | null = null;
+  static readonly OPEN = 1;
+  readyState = 0;
+  sent: Array<Record<string, unknown>> = [];
+  onopen: (() => void) | null = null;
+  onmessage: ((e: { data: string }) => void) | null = null;
+  onclose: ((e: { code: number }) => void) | null = null;
+  onerror: (() => void) | null = null;
+
+  constructor(
+    readonly url: string,
+    readonly protocols?: string[],
+  ) {
+    FakeSocket.last = this;
+  }
+  send(data: string) {
+    this.sent.push(JSON.parse(data) as Record<string, unknown>);
+  }
+  close() {
+    this.readyState = 3;
+  }
+  /** Drive the handshake the way the server would. */
+  open() {
+    this.readyState = 1;
+    this.onopen?.();
+  }
+  deliver(frame: Record<string, unknown>) {
+    this.onmessage?.({ data: JSON.stringify(frame) });
+  }
+  serverClose(code: number) {
+    this.readyState = 3;
+    this.onclose?.({ code });
+  }
+  /** Frames of one type, in order. */
+  ofType(type: string) {
+    return this.sent.filter((f) => f.type === type);
+  }
+}
+
+const realWs = (globalThis as { WebSocket?: unknown }).WebSocket;
+(globalThis as { WebSocket?: unknown }).WebSocket = FakeSocket;
+
+const { UnifiedAI } = await import("../../src/core/client");
+const { configureLocalAgents } = await import("../../src/localAgents/config");
+const { closeAllRelayHosts, connectRelayHost } = await import("../../src/localAgents/relayClient");
+
+/** The socket is opened after an awaited token fetch; let that microtask land. */
+async function flush(times = 4) {
+  for (let i = 0; i < times; i++) await new Promise((r) => setTimeout(r, 0));
+}
+
+/** An attached, approved connection plus its fake socket. */
+async function attached(deviceId = "dev-1") {
+  const conn = connectRelayHost(deviceId);
+  await flush();
+  const ws = FakeSocket.last!;
+  ws.open();
+  ws.deliver({
+    type: "attached",
+    host: { deviceId, deviceName: "Studio", capabilities: {} },
+  });
+  ws.deliver({ type: "approval", state: "approved" });
+  return { conn, ws };
+}
+
+beforeEach(() => {
+  closeAllRelayHosts();
+  FakeSocket.last = null;
+  configureLocalAgents({
+    client: new UnifiedAI({ apiUrl: "http://localhost:3141", token: "unified-token" }),
+    wsBaseUrl: "http://localhost:3141/api/v1",
+  });
+});
+
+afterEach(() => {
+  closeAllRelayHosts();
+  // `configureLocalAgents` merges into module-level state shared with every
+  // other test file in this run — clear it back out so this file's client /
+  // wsBaseUrl don't leak into local-agents.test.ts's own assertions.
+  configureLocalAgents({ client: undefined, wsBaseUrl: undefined });
+});
+
+// Restored once the file is done — NOT per test: every test in here needs the
+// fake, and a per-test restore silently hands the rest of them the real one.
+process.on("beforeExit", () => {
+  (globalThis as { WebSocket?: unknown }).WebSocket = realWs;
+});
+
+describe("approval gate", () => {
+  test("asks for the state on attach and reflects the answer", async () => {
+    const conn = connectRelayHost("dev-1");
+    await flush();
+    const ws = FakeSocket.last!;
+    ws.open();
+    ws.deliver({ type: "attached", host: { deviceId: "dev-1", deviceName: "Studio" } });
+
+    expect(ws.ofType("approve?")).toHaveLength(1);
+    expect(conn.approval.get()).toBe("unknown");
+    expect(conn.host.get()?.deviceName).toBe("Studio");
+
+    ws.deliver({ type: "approval", state: "pending" });
+    expect(conn.approval.get()).toBe("pending");
+    ws.deliver({ type: "approval", state: "approved" });
+    expect(conn.approval.get()).toBe("approved");
+  });
+
+  test("a denial fails the waiters instead of hanging the turn", async () => {
+    const conn = connectRelayHost("dev-1");
+    await flush();
+    const ws = FakeSocket.last!;
+    ws.open();
+    const pending = conn.ready(50);
+    ws.deliver({ type: "approval", state: "denied" });
+    await expect(pending).rejects.toThrow(/declined/i);
+    expect(conn.approval.get()).toBe("denied");
+  });
+});
+
+describe("request/response frames", () => {
+  test("detect round-trips by id", async () => {
+    const { conn, ws } = await attached();
+    const promise = conn.detect();
+    await flush(1);
+
+    const sent = ws.ofType("detect")[0]!;
+    expect(typeof sent.id).toBe("string");
+    ws.deliver({
+      type: "detect-result",
+      id: sent.id,
+      claudeCode: { found: true, path: "/usr/bin/claude" },
+      cursor: { found: false },
+    });
+
+    expect(await promise).toEqual({
+      claudeCode: { found: true, path: "/usr/bin/claude" },
+      cursor: { found: false, path: null },
+    });
+  });
+
+  test("cursor-models carries the format and returns the raw output", async () => {
+    const { conn, ws } = await attached();
+    const promise = conn.cursorModels(false);
+    await flush(1);
+    const sent = ws.ofType("cursor-models")[0]!;
+    expect(sent.format).toBe("text");
+    ws.deliver({ type: "cursor-models-result", id: sent.id, output: "auto\n" });
+    expect(await promise).toBe("auto\n");
+  });
+
+  test("an error frame rejects the matching request", async () => {
+    const { conn, ws } = await attached();
+    const promise = conn.pickFolder();
+    await flush(1);
+    const sent = ws.ofType("pick-folder")[0]!;
+    ws.deliver({ type: "error", id: sent.id, message: "dialog unavailable" });
+    await expect(promise).rejects.toThrow("dialog unavailable");
+  });
+});
+
+describe("run streaming", () => {
+  test("lines and exit reach only the handlers of that runId", async () => {
+    const { conn, ws } = await attached();
+    const lines: string[] = [];
+    let exit: unknown = null;
+    await conn.startRun(
+      {
+        runId: "run-1",
+        lane: "claude-code",
+        prompt: "hi",
+        model: "opus",
+        resume: null,
+        workspace: null,
+        trustWorkspace: false,
+        extraDirs: [],
+        mcp: true,
+      },
+      { onLine: (l) => lines.push(l), onExit: (e) => (exit = e) },
+    );
+
+    expect(ws.ofType("start")[0]).toMatchObject({ runId: "run-1", lane: "claude-code" });
+
+    ws.deliver({ type: "line", runId: "other", line: "nope" });
+    ws.deliver({ type: "line", runId: "run-1", line: '{"type":"system"}' });
+    expect(lines).toEqual(['{"type":"system"}']);
+
+    ws.deliver({ type: "exit", runId: "run-1", code: 0, canceled: false, stderr: "" });
+    expect(exit).toEqual({ code: 0, canceled: false, stderr: "" });
+
+    // The run is finished, so a late line for it is dropped rather than
+    // resurrecting a settled turn.
+    ws.deliver({ type: "line", runId: "run-1", line: "late" });
+    expect(lines).toHaveLength(1);
+  });
+
+  test("MCP round-trips are routed per run and answered on the same socket", async () => {
+    const { conn, ws } = await attached();
+    const seen: unknown[] = [];
+    await conn.startRun(
+      {
+        runId: "run-2",
+        lane: "cursor",
+        prompt: "hi",
+        model: null,
+        resume: null,
+        workspace: null,
+        trustWorkspace: false,
+        extraDirs: [],
+        mcp: true,
+      },
+      {
+        onLine: () => {},
+        onExit: () => {},
+        onMcpList: (id) => seen.push({ list: id }),
+        onMcpCall: (id, name, args) => seen.push({ id, name, args }),
+      },
+    );
+
+    ws.deliver({ type: "mcp-list", runId: "run-2", id: "m1" });
+    ws.deliver({ type: "mcp-call", runId: "run-2", id: "m2", name: "t", arguments: { a: 1 } });
+    expect(seen).toEqual([{ list: "m1" }, { id: "m2", name: "t", args: { a: 1 } }]);
+
+    conn.mcpResult("m2", { content: [], isError: false });
+    expect(ws.ofType("mcp-result")[0]).toMatchObject({ id: "m2" });
+  });
+
+  test("a dropped socket ends in-flight runs rather than leaving the turn hanging", async () => {
+    const { conn, ws } = await attached();
+    let exit: { stderr: string } | null = null;
+    await conn.startRun(
+      {
+        runId: "run-3",
+        lane: "cursor",
+        prompt: "hi",
+        model: null,
+        resume: null,
+        workspace: null,
+        trustWorkspace: false,
+        extraDirs: [],
+        mcp: false,
+      },
+      { onLine: () => {}, onExit: (e) => (exit = e as { stderr: string }) },
+    );
+
+    ws.serverClose(1006);
+    expect(exit).not.toBeNull();
+    expect(exit!.stderr).toMatch(/connection lost/i);
+    expect(conn.connected.get()).toBe(false);
+  });
+
+  test("a terminal 4404 stops retrying and says the host is offline", async () => {
+    const conn = connectRelayHost("dev-9");
+    await flush();
+    const ws = FakeSocket.last!;
+    ws.open();
+    FakeSocket.last = null;
+    ws.serverClose(4404);
+    await flush();
+    // No replacement socket was constructed.
+    expect(FakeSocket.last).toBeNull();
+    expect(conn.lastError.get()).toMatch(/offline/i);
+  });
+
+  test("close code 4403 sets approval to denied and does not retry", async () => {
+    const conn = connectRelayHost("dev-10");
+    await flush();
+    const ws = FakeSocket.last!;
+    ws.open();
+    FakeSocket.last = null;
+    ws.serverClose(4403);
+    await flush();
+    // No replacement socket was constructed.
+    expect(FakeSocket.last).toBeNull();
+    expect(conn.approval.get()).toBe("denied");
+    expect(conn.lastError.get()).toMatch(/isn't yours/i);
+  });
+});

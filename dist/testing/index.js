@@ -5864,6 +5864,9 @@ class Core {
   get defaultCompression() {
     return this.options.compression;
   }
+  get apiUrl() {
+    return this.options.apiUrl;
+  }
   get appId() {
     return this.options.appId;
   }
@@ -6097,6 +6100,9 @@ class UnifiedAI extends Core {
   }
   identity() {
     throw new UnifiedError("not_bootstrapped", "identity() requires the node entry or a subclass that owns user-session state.");
+  }
+  accessToken() {
+    return this.getInitialAccessToken();
   }
   async signOut() {
     this.session.markSignedOut();
@@ -6405,9 +6411,9 @@ function createLocalSharingRuntime(opts = {}) {
   };
 }
 export {
-  FakeSyncServer,
-  createLocalSharingRuntime
+  createLocalSharingRuntime,
+  FakeSyncServer
 };
 
-//# debugId=D93B9ED22356DD5564756E2164756E21
+//# debugId=E51D628D091044C364756E2164756E21
 //# sourceMappingURL=index.js.map

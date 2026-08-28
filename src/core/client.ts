@@ -300,6 +300,22 @@ export class UnifiedAI extends Core {
   }
 
   /**
+   * The bearer this client would send on a request made right now — the
+   * configured trusted token, or (node OAuth subclass) the current access
+   * token, acquiring one if needed.
+   *
+   * Public because a handful of surfaces authenticate OUTSIDE `request()` and
+   * must reuse the client's own credential rather than re-deriving one: the
+   * local-agent relay's WebSocket (which carries its bearer in the
+   * `Sec-WebSocket-Protocol` value, since browsers cannot set headers on an
+   * upgrade) is the motivating case. Rejects with the same
+   * `not_bootstrapped` / OAuth-unavailable errors `request()` would.
+   */
+  accessToken(): Promise<string> {
+    return this.getInitialAccessToken();
+  }
+
+  /**
    * No-op in trusted-token mode — the host owns the token lifecycle, so there
    * is no SDK-side session to clear. Subclasses that own session state (the
    * node OAuth subclass) override this to revoke and wipe the keychain.

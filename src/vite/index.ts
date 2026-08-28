@@ -63,6 +63,16 @@ export function unifiedApp(opts: UnifiedAppOptions): Plugin {
         resolve: {
           alias: { [HOST_API_SPECIFIER]: devHostApi },
         },
+        // The alias points at SDK *source* in a sibling working tree. Left to
+        // itself Vite treats that as a dependency and pre-bundles it into
+        // node_modules/.vite/deps, which then goes stale the moment the SDK
+        // changes — the app keeps importing a cached copy and silently loses
+        // any newly added host-api export (a missing function reads as "this
+        // host can't do that" rather than as an error). Keep it unbundled so
+        // edits to the shim are picked up on reload.
+        optimizeDeps: {
+          exclude: [HOST_API_SPECIFIER, devHostApi],
+        },
         define: {
           "import.meta.env.VITE_UNIFIED_APP_ID": JSON.stringify(opts.appId),
         },

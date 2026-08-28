@@ -82,6 +82,18 @@ declare module "@unified/host-api" {
 
   // ── Local agent providers (Cursor, Claude Code) ──────────────────────────
   /**
+   * Which machine a local-agent call should run on. `auto` is the host's own
+   * selection (and the default). An embedded app has exactly ONE device — the
+   * machine its host runs on — so passing this only matters on hosts that can
+   * reach more than one; older hosts ignore the argument and answer for the
+   * machine they run on, which is the correct answer there.
+   */
+  export type HostDevicePref =
+    | { kind: "auto" }
+    | { kind: "bridge" }
+    | { kind: "relay"; deviceId: string };
+
+  /**
    * Run one agent turn through the host, which picks the lane from the model:
    * gateway models go through the SDK's agent loop, while models served by a
    * locally installed agent CLI (Cursor, Claude Code) go through the host's
@@ -92,12 +104,18 @@ declare module "@unified/host-api" {
    * that should keep the CLI's own thread context across turns, and OMIT it
    * for fan-out workers so each gets a fresh, throwaway session.
    *
+   * `device` pins the turn to one machine — omit it to run on whatever the host
+   * has selected. Older hosts ignore it and run on the machine they run on.
+   *
    * Throws when the host is too old to provide the bridge — feature-detect with
    * `hasRunAgent()` and fall back to `getSdk().agent.run` to degrade gracefully
    * (e.g. in standalone dev, outside the desktop shell).
    */
   export function runAgent(
-    options: import("@unifiedai/sdk").RunAgentOptions & { sessionKey?: string },
+    options: import("@unifiedai/sdk").RunAgentOptions & {
+      sessionKey?: string;
+      device?: HostDevicePref;
+    },
   ): Promise<import("@unifiedai/sdk").RunAgentResult>;
 
   /** Whether the host provides the agent-run bridge (false standalone / old host). */
@@ -107,8 +125,11 @@ declare module "@unified/host-api" {
    * The host's merged model catalog: gateway models plus whichever local agent
    * CLIs are actually installed. Prefer this over `getSdk().models.list()`,
    * which only ever sees the gateway half. Null when the host is too old.
+   *
+   * `device` asks for a specific machine's local half; older hosts ignore the
+   * argument and answer for the machine they run on.
    */
-  export function listModels(): Promise<Array<{
+  export function listModels(options?: { device?: HostDevicePref }): Promise<Array<{
     id: string;
     "model-id": string;
     name: string;

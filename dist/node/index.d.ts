@@ -34,6 +34,7 @@ export * from "../resources/sync/index.js";
 export * from "../resources/usage.js";
 export * from "../resources/users.js";
 export * from "../resources/videos.js";
+export * from "../localAgents/index.js";
 export { UnifiedAI } from "./client.js";
 export type { UnifiedAIOptions, AuthEvent, AuthEventListener } from "./client.js";
 export { discoverLocalEcosystem, defaultEcosystemDiscoveryPath, type LocalEcosystem, type DiscoverOptions, type EcosystemDiscoveryRecord, } from "./_internal/ecosystem-discovery.js";

@@ -1,0 +1,348 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+
+// The loopback agent-bridge client (agent-bridge.md) reads/writes localStorage
+// (absent under bun) and talks to the desktop with plain `fetch`. Both are
+// stubbed here; nothing else in the module needs mocking, which is the point of
+// keeping it dependency-free and browser-safe.
+function makeStorage(): Storage {
+  const map = new Map<string, string>();
+  return {
+    get length() {
+      return map.size;
+    },
+    clear: () => map.clear(),
+    getItem: (k: string) => map.get(k) ?? null,
+    key: (i: number) => [...map.keys()][i] ?? null,
+    removeItem: (k: string) => void map.delete(k),
+    setItem: (k: string, v: string) => void map.set(k, v),
+  } as unknown as Storage;
+}
+(globalThis as { localStorage?: Storage }).localStorage = makeStorage();
+
+const { BRIDGE_PORTS, bridgeToken, clearBridgeToken, hasBridgeToken, pairBridge } = await import(
+  "../../src/localAgents/bridgeClient"
+);
+const { dispatchFrame, discoverBridge, invalidateBridgePort, openRunEvents, bridgeDetect } =
+  await import("../../src/localAgents/bridgeClient");
+
+interface Call {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body: string | undefined;
+}
+
+const calls: Call[] = [];
+type Responder = (call: Call) => { status?: number; body?: unknown } | Response | undefined;
+let responder: Responder = () => undefined;
+
+const realFetch = globalThis.fetch;
+
+beforeEach(() => {
+  calls.length = 0;
+  responder = () => undefined;
+  localStorage.clear();
+  invalidateBridgePort();
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const call: Call = {
+      url: String(input),
+      method: init?.method ?? "GET",
+      headers: (init?.headers ?? {}) as Record<string, string>,
+      body: init?.body as string | undefined,
+    };
+    calls.push(call);
+    const answer = responder(call);
+    if (!answer) throw new Error("connection refused");
+    if (answer instanceof Response) return answer;
+    return new Response(answer.body === undefined ? "" : JSON.stringify(answer.body), {
+      status: answer.status ?? 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+});
+
+afterEach(() => {
+  globalThis.fetch = realFetch;
+});
+
+const healthy = (port: number) => `http://127.0.0.1:${port}/health`;
+const SERVICE_BODY = { service: "unified-agent-bridge", version: 1 };
+
+const online: Responder = (c) => (c.url === healthy(47825) ? { body: SERVICE_BODY } : undefined);
+
+describe("bridge discovery", () => {
+  test("probes the whole range and remembers the port that answered", async () => {
+    responder = (c) => (c.url === healthy(47827) ? { body: SERVICE_BODY } : undefined);
+
+    expect(await discoverBridge()).toBe(47827);
+    expect(localStorage.getItem("unified.agentBridge.port")).toBe("47827");
+    expect(calls.map((c) => c.url)).toEqual([healthy(47825), healthy(47826), healthy(47827)]);
+  });
+
+  test("tries the remembered port first on the next load", async () => {
+    localStorage.setItem("unified.agentBridge.port", "47829");
+    responder = (c) => (c.url === healthy(47829) ? { body: SERVICE_BODY } : undefined);
+
+    expect(await discoverBridge()).toBe(47829);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a foreign server on the port is not the bridge", async () => {
+    responder = () => ({ body: { service: "something-else" } });
+    expect(await discoverBridge()).toBeNull();
+    expect(calls).toHaveLength(BRIDGE_PORTS.length);
+    expect(localStorage.getItem("unified.agentBridge.port")).toBeNull();
+  });
+
+  test("returns null when nothing is listening", async () => {
+    expect(await discoverBridge()).toBeNull();
+  });
+});
+
+describe("pairing", () => {
+  test("stores the minted token", async () => {
+    responder = (c) =>
+      online(c) ?? (c.url.endsWith("/pair") ? { body: { token: "tok-1" } } : undefined);
+
+    expect(hasBridgeToken()).toBe(false);
+    await pairBridge("Notes (localhost:5173)");
+    expect(bridgeToken()).toBe("tok-1");
+    expect(hasBridgeToken()).toBe(true);
+
+    const pair = calls.find((c) => c.url.endsWith("/pair"));
+    expect(pair?.method).toBe("POST");
+    // A user-initiated pair is NOT silent: it is allowed to raise the modal.
+    expect(JSON.parse(pair?.body ?? "{}")).toEqual({ name: "Notes (localhost:5173)" });
+  });
+
+  test("a declined pairing is a readable error, not an opaque network failure", async () => {
+    responder = (c) => online(c) ?? (c.url.endsWith("/pair") ? { status: 403 } : undefined);
+    await expect(pairBridge("x")).rejects.toThrow(/declined/i);
+    expect(hasBridgeToken()).toBe(false);
+  });
+
+  test("silent pairing sends the silent flag", async () => {
+    responder = (c) =>
+      online(c) ?? (c.url.endsWith("/pair") ? { body: { token: "t" } } : undefined);
+    await pairBridge("x", true);
+    const pair = calls.find((c) => c.url.endsWith("/pair"));
+    expect(JSON.parse(pair?.body ?? "{}")).toEqual({ name: "x", silent: true });
+  });
+
+  test("clearBridgeToken forgets it", async () => {
+    responder = (c) =>
+      online(c) ?? (c.url.endsWith("/pair") ? { body: { token: "t" } } : undefined);
+    await pairBridge("x");
+    clearBridgeToken();
+    expect(hasBridgeToken()).toBe(false);
+  });
+
+  test("a direct pairBridge() call stays non-silent", async () => {
+    responder = (c) =>
+      online(c) ?? (c.url.endsWith("/pair") ? { body: { token: "tok-1" } } : undefined);
+    await pairBridge("Test browser");
+    const pair = calls.find((c) => c.url.endsWith("/pair"));
+    const body = JSON.parse(pair?.body ?? "{}") as { name: string; silent?: boolean };
+    expect(body.silent).toBeUndefined();
+  });
+});
+
+describe("resilience", () => {
+  test("a network-level failure invalidates the cached port and re-probes once, then retries", async () => {
+    localStorage.setItem("unified.agentBridge.token", "tok");
+    let bridgePort = 47825;
+    responder = (c) => {
+      if (c.url.endsWith("/health")) {
+        return c.url === healthy(bridgePort) ? { body: SERVICE_BODY } : undefined;
+      }
+      if (c.url.endsWith("/detect")) {
+        return c.url.startsWith(`http://127.0.0.1:${bridgePort}`)
+          ? {
+              body: {
+                claudeCode: { found: true, path: "/usr/bin/claude" },
+                cursor: { found: false, path: null },
+              },
+            }
+          : undefined; // connection refused on the now-stale cached port
+      }
+      return undefined;
+    };
+
+    expect(await discoverBridge()).toBe(47825);
+
+    // The desktop restarted on a different port; the cached one now refuses.
+    bridgePort = 47827;
+
+    const result = await bridgeDetect();
+    expect(result.claudeCode.found).toBe(true);
+    expect(await discoverBridge()).toBe(47827);
+  });
+});
+
+describe("no token means no pairing prompt", () => {
+  // The rule the whole consent model rests on: a page that has never paired
+  // must never issue a request that could raise a modal on somebody's desktop.
+  test("an authenticated call with no stored token never touches the wire", async () => {
+    responder = online;
+    await expect(bridgeDetect()).rejects.toThrow(/Not connected/i);
+    expect(calls.filter((c) => c.url.endsWith("/pair"))).toHaveLength(0);
+    expect(calls.filter((c) => c.url.endsWith("/detect"))).toHaveLength(0);
+  });
+
+  test("opening a run stream with no stored token never touches the wire", async () => {
+    responder = online;
+    await expect(openRunEvents("run-1", { onLine: () => {}, onExit: () => {} })).rejects.toThrow(
+      /Not connected/i,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("a 401 on an authenticated call re-pairs SILENTLY and retries once", async () => {
+    localStorage.setItem("unified.agentBridge.token", "stale");
+    let detectHits = 0;
+    responder = (c) => {
+      if (c.url === healthy(47825)) return { body: SERVICE_BODY };
+      if (c.url.endsWith("/pair")) return { body: { token: "fresh" } };
+      if (c.url.endsWith("/detect")) {
+        detectHits++;
+        return detectHits === 1
+          ? { status: 401 }
+          : {
+              body: {
+                claudeCode: { found: true, path: "/c" },
+                cursor: { found: false, path: null },
+              },
+            };
+      }
+      return undefined;
+    };
+
+    const result = await bridgeDetect();
+    expect(result.claudeCode.found).toBe(true);
+    const pair = calls.find((c) => c.url.endsWith("/pair"));
+    // Silent: an origin whose approval was REVOKED gets a clean 403 instead of
+    // raising an unprompted modal at page load.
+    expect(JSON.parse(pair?.body ?? "{}").silent).toBe(true);
+    expect(bridgeToken()).toBe("fresh");
+    expect(detectHits).toBe(2);
+  });
+});
+
+describe("run event stream", () => {
+  function sseResponse(chunks: string[]): Response {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const enc = new TextEncoder();
+        for (const c of chunks) controller.enqueue(enc.encode(c));
+        controller.close();
+      },
+    });
+    return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
+  }
+
+  test("parses named SSE events into handler calls", async () => {
+    localStorage.setItem("unified.agentBridge.token", "tok");
+    responder = (c) => {
+      if (c.url === healthy(47825)) return { body: SERVICE_BODY };
+      if (c.url.includes("/events")) {
+        return sseResponse([
+          'event: line\ndata: {"line":"{\\"type\\":\\"x\\"}"}\n\n',
+          'event: exit\ndata: {"code":0,"canceled":false,"stderr":""}\n\n',
+        ]);
+      }
+      return undefined;
+    };
+
+    const lines: string[] = [];
+    const exits: Array<{ code: number | null; canceled: boolean; stderr: string }> = [];
+    await openRunEvents("run-1", {
+      onLine: (l) => lines.push(l),
+      onExit: (e) => exits.push(e),
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(lines).toEqual(['{"type":"x"}']);
+    expect(exits).toEqual([{ code: 0, canceled: false, stderr: "" }]);
+    // The stream is read with fetch + a bearer header — EventSource cannot.
+    const ev = calls.find((c) => c.url.includes("/events"));
+    expect(ev?.headers.Authorization).toBe("Bearer tok");
+  });
+
+  test("a stream that ends without `exit` is a run error, not a hang", async () => {
+    localStorage.setItem("unified.agentBridge.token", "tok");
+    responder = (c) => {
+      if (c.url === healthy(47825)) return { body: SERVICE_BODY };
+      if (c.url.includes("/events")) return sseResponse(['event: line\ndata: {"line":"a"}\n\n']);
+      return undefined;
+    };
+    let error: string | null = null;
+    await openRunEvents("run-1", {
+      onLine: () => {},
+      onExit: () => {},
+      onError: (m) => {
+        error = m;
+      },
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(error).toMatch(/ended before the run finished/);
+  });
+
+  test("a stream that delivers exit does not report an error", async () => {
+    localStorage.setItem("unified.agentBridge.token", "tok");
+    responder = (c) => {
+      if (c.url === healthy(47825)) return { body: SERVICE_BODY };
+      if (c.url.includes("/events")) {
+        return sseResponse(['event: exit\ndata: {"code":0,"canceled":false,"stderr":""}\n\n']);
+      }
+      return undefined;
+    };
+    const errors: string[] = [];
+    let exited = false;
+    await openRunEvents("run-1", {
+      onLine: () => {},
+      onExit: () => {
+        exited = true;
+      },
+      onError: (m) => errors.push(m),
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(exited).toBe(true);
+    expect(errors).toEqual([]);
+  });
+});
+
+describe("SSE frame dispatch", () => {
+  test("routes each named event, tolerating CRLF and comments", () => {
+    const seen: string[] = [];
+    const handlers = {
+      onLine: (l: string) => seen.push(`line:${l}`),
+      onExit: (e: { code: number | null }) => seen.push(`exit:${e.code}`),
+      onMcpList: (id: string) => seen.push(`list:${id}`),
+      onMcpCall: (id: string, name: string) => seen.push(`call:${id}:${name}`),
+    };
+    dispatchFrame(': keep-alive\r\nevent: line\r\ndata: {"line":"hello"}', handlers);
+    dispatchFrame('event: mcp-list\ndata: {"id":"m1"}', handlers);
+    dispatchFrame('event: mcp-call\ndata: {"id":"m2","name":"t","arguments":{}}', handlers);
+    dispatchFrame('event: exit\ndata: {"code":3,"canceled":false,"stderr":""}', handlers);
+    expect(seen).toEqual(["line:hello", "list:m1", "call:m2:t", "exit:3"]);
+  });
+
+  test("malformed data is dropped rather than thrown", () => {
+    let hit = false;
+    dispatchFrame("event: line\ndata: not-json", {
+      onLine: () => {
+        hit = true;
+      },
+      onExit: () => {},
+    });
+    expect(hit).toBe(false);
+  });
+
+  test("exit tolerates a null exit code (killed by a signal)", () => {
+    const seen: Array<{ code: number | null; canceled: boolean; stderr: string }> = [];
+    dispatchFrame('event: exit\ndata: {"canceled":true}', {
+      onLine: () => {},
+      onExit: (e) => seen.push(e),
+    });
+    expect(seen).toEqual([{ code: null, canceled: true, stderr: "" }]);
+  });
+});

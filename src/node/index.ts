@@ -101,6 +101,15 @@ export * from "../resources/sync/index";
 export * from "../resources/usage";
 export * from "../resources/users";
 export * from "../resources/videos";
+// Explicit /index: localAgents is a directory barrel (see src/index.ts note).
+//
+// Present on the NODE entry too, at browser parity: the module is browser-safe
+// (no `node:` builtins), and the surfaces that consume it — the UnifiedApp
+// desktop's webview among them — resolve the node condition under a bundler or
+// a test runner even though they run in a browser. Omitting it here made
+// `import { invalidateBridgePort } from "@unifiedai/sdk"` a load-time
+// SyntaxError in exactly those places.
+export * from "../localAgents/index";
 // Logo helpers live behind "@unifiedai/sdk/logos" (see src/index.ts note).
 
 // The node-capable UnifiedAI — supersedes the browser entry's class. Consumers
