@@ -8068,10 +8068,9 @@ function flattenParts(parts) {
   return parts.map((p) => p && typeof p === "object" && ("text" in p) ? String(p.text ?? "") : "").filter(Boolean).join(`
 `);
 }
-function runAttempt(lane, opts, messages, userText, signal, onEvent, resume, scope) {
+function runAttempt(lane, opts, messages, userText, system, signal, onEvent, resume, scope) {
   const modelId = opts.model;
   const runId = crypto.randomUUID();
-  const system = opts.system ?? systemText(messages);
   const folded = foldHistoryPrompt(messages, userText, !!resume);
   const prompt = lane === "claude-code" ? folded : withSystemPrompt(system, folded);
   const tools = createToolServer(opts.tools, signal);
@@ -8171,10 +8170,11 @@ async function runLocalAgent(opts) {
   const scope = sessionScope(conversationId, opts.workspace);
   const sessionsKey = lane === "claude-code" ? CLAUDE_CODE_SESSIONS_KEY : CURSOR_SESSIONS_KEY;
   const resume = sessionFor(sessionsKey, scope);
-  const attempt = await runAttempt(lane, opts, messages, promptText, signal, onEvent, resume, scope);
+  const system = opts.system ?? systemText(messages);
+  const attempt = await runAttempt(lane, opts, messages, promptText, system, signal, onEvent, resume, scope);
   if (resume && attempt.sessionMissing && !attempt.producedOutput && !signal.aborted) {
     forgetSession(sessionsKey, scope);
-    const retry = await runAttempt(lane, opts, messages, promptText, signal, onEvent, null, scope);
+    const retry = await runAttempt(lane, opts, messages, promptText, system, signal, onEvent, null, scope);
     return published(retry);
   }
   return published(attempt);
@@ -8448,5 +8448,5 @@ export {
   checkDesktopAvailable2 as checkDesktopAvailable
 };
 
-//# debugId=E8C3F4887C0122C864756E2164756E21
+//# debugId=FB04EBE87C9503D964756E2164756E21
 //# sourceMappingURL=dev-host-api.js.map
