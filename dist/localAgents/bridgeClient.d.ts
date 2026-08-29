@@ -67,7 +67,7 @@ export declare function bridgeOrigin(port: number): string;
  * Returns null when no desktop app is listening.
  */
 export declare function discoverBridge(force?: boolean): Promise<number | null>;
-/** Drop the memoized port so the next call re-probes the range. */
+/** Drop both memoized verdicts so the next call re-probes the range. */
 export declare function invalidateBridgePort(): void;
 /** Whether a bridge is reachable at all (no pairing required). */
 export declare function bridgeHealth(): Promise<{
@@ -80,7 +80,7 @@ export declare function bridgeHealth(): Promise<{
  * First time for an origin this PARKS until the user answers a consent modal on
  * the desktop (120s, then 403) — so only call it from an explicit user action.
  * A previously approved origin re-mints immediately and silently, which is what
- * makes `reauthorize()` below safe to run inside a failed request.
+ * makes `ensureBridgeToken()` below safe to run inside a failed request.
  */
 export declare function pairBridge(name?: string, silent?: boolean): Promise<string>;
 /**
@@ -91,6 +91,7 @@ export declare function pairBridge(name?: string, silent?: boolean): Promise<str
  * as "some UnifiedAI app".
  */
 export declare function defaultPairName(): string;
+export declare function ensureBridgeToken(): Promise<string>;
 export declare function bridgeDetect(): Promise<BridgeDetectResult>;
 export declare function bridgeCursorModels(json: boolean): Promise<string>;
 export declare function bridgeStartRun(body: BridgeStartBody): Promise<void>;

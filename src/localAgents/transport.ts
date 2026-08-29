@@ -16,12 +16,15 @@
 // `claude-code/*` and `cursor/*` on every source so conversations stay portable.
 //
 // CONSENT DISCIPLINE — the rule this module exists to enforce: resolving a
-// source must never *create* trust. Auto-select only ever picks the bridge when
-// a pairing token already exists for this origin (a silent re-pair is allowed;
-// a first-time pairing modal is not), and only ever picks a relay host that the
-// ordinary `GET /hosts` listing already returned under the caller's own
-// credentials. First-time bridge pairing is `connectDesktop()`, which a host
-// must call from an explicit user action.
+// source must never *create* trust, only RESTORE it. The desktop owns the
+// approval (its origin set is on disk); the browser's token is a cached
+// credential that can go missing, so resolving asks the desktop for a fresh one
+// with a silent pair — which re-mints for an approved origin and is refused with
+// 403, no modal, for anyone else. Relay hosts likewise only ever come from the
+// ordinary `GET /hosts` listing under the caller's own credentials.
+//
+// First-time approval is `connectDesktop()`, called from an explicit user
+// action, and it is the ONLY path here that can raise a modal.
 import { Observable } from "../core/_internal/observable";
 import type { McpCallResult, McpToolDef } from "./_internal/toolServer";
 import {
@@ -36,6 +39,7 @@ import {
   defaultPairName,
   discoverBridge,
   hasBridgeToken,
+  ensureBridgeToken,
   invalidateBridgePort,
   openRunEvents,
   pairBridge,
@@ -229,6 +233,7 @@ export function setLocalAgentSource(pref: LocalAgentSourcePref): Promise<LocalAg
 export function refreshLocalAgents(): Promise<LocalAgentSource | null> {
   resolvePromise = null;
   invalidateBridgePort();
+  adoptRefused = false;
   return resolveLocalAgentSource();
 }
 
@@ -249,14 +254,7 @@ export async function resolveSourceFor(
   pref: LocalAgentSourcePref,
 ): Promise<LocalAgentSource | null> {
   if (pref.kind === "bridge") {
-    // An explicit bridge preference still requires a token: without one every
-    // authenticated call would 401 and the silent re-pair would 403. Reporting
-    // "not connected" is the clean answer; `connectDesktop()` is the fix.
-    if (!hasBridgeToken()) {
-      await probeBridge();
-      return null;
-    }
-    return (await probeBridge()) ? { kind: "bridge" } : null;
+    return (await bridgeUsable()) ? { kind: "bridge" } : null;
   }
 
   if (pref.kind === "relay") {
@@ -273,7 +271,7 @@ export async function resolveSourceFor(
   }
 
   // auto
-  if (hasBridgeToken() && (await probeBridge())) return { kind: "bridge" };
+  if (await bridgeUsable()) return { kind: "bridge" };
   const hosts = await refreshRelayHosts();
   const first = hosts[0];
   if (first) return { kind: "relay", deviceId: first.deviceId, deviceName: first.deviceName };
@@ -283,8 +281,48 @@ export async function resolveSourceFor(
 async function probeBridge(): Promise<boolean> {
   const port = await discoverBridge();
   patch({ bridgeAvailable: port !== null });
-  if (port !== null && hasBridgeToken()) await refreshBridgeIdentity();
-  return port !== null;
+  if (port === null) return false;
+  if (hasBridgeToken()) await refreshBridgeIdentity();
+  return true;
+}
+
+/**
+ * Is a desktop reachable AND usable from here? Availability plus a credential,
+ * restoring the credential from the desktop's own approval when we have none.
+ *
+ * The two halves are separate on purpose: `probeBridge` answers "is anything
+ * there", which several callers want without side effects, and this is the one
+ * that may mint. Folding the adopt into the probe made an invisible effect
+ * load-bearing for correctness — whether a caller ended up with a token then
+ * depended on which helper it happened to reach for.
+ */
+async function bridgeUsable(): Promise<boolean> {
+  if (!(await probeBridge())) return false;
+  if (!hasBridgeToken()) {
+    await adoptApprovedOrigin();
+    if (hasBridgeToken()) await refreshBridgeIdentity();
+  }
+  return hasBridgeToken();
+}
+
+/**
+ * Ask the DESKTOP whether this origin is approved, and take a token if it is.
+ * A silent pair IS that question — see the consent discipline at the top of this
+ * file. Safe on a page-load path: it can restore a connection, never create one.
+ */
+let adoptRefused = false;
+async function adoptApprovedOrigin(): Promise<void> {
+  // A refusal is stable for this page: the desktop will keep saying no until the
+  // user approves this origin, which only happens through `connectDesktop`. Left
+  // un-remembered, every resolve — and there is one per surface — repeats the
+  // forced port scan and the 403.
+  if (hasBridgeToken() || adoptRefused) return;
+  try {
+    await ensureBridgeToken();
+    patch({ bridgePaired: true, lastError: null });
+  } catch {
+    adoptRefused = true;
+  }
 }
 
 /**
@@ -322,12 +360,32 @@ export async function checkDesktopAvailable(): Promise<boolean> {
 }
 
 /**
- * User-initiated pairing. PARKS on a consent modal on the desktop (120s, then
- * 403), so it must never be reached from a page-load code path — call it only
- * from an explicit user action.
+ * User-initiated pairing. For a NEW origin this PARKS on a consent modal on the
+ * desktop (120s, then 403), so it must never be reached from a page-load code
+ * path — call it only from an explicit user action.
+ *
+ * When this origin already holds a token it re-mints SILENTLY instead. The token
+ * lives in localStorage and the desktop's approval is on disk, so pairing
+ * survives a page refresh; asking the user to approve the same origin again on
+ * every reload is a prompt for a decision they already made. If the desktop
+ * revoked us meanwhile the silent attempt 403s — that is the one case where a
+ * fresh modal is the right answer, so we drop the dead token and ask properly.
  */
 export async function connectDesktop(name?: string): Promise<LocalAgentSource | null> {
-  await pairBridge(name ?? defaultPairName());
+  const label = name ?? defaultPairName();
+  try {
+    // Silent only when we already hold a token — that is the case where the user
+    // has answered this question before.
+    await pairBridge(label, hasBridgeToken());
+  } catch (err) {
+    // No token means that WAS the first-time attempt, and its failure is the
+    // user's answer (declined, timed out, no desktop) — not something to retry.
+    if (!hasBridgeToken()) throw err;
+    // The desktop revoked us while we held a stale token: drop it and ask properly.
+    clearBridgeToken();
+    await pairBridge(label);
+  }
+  adoptRefused = false;
   patch({ bridgePaired: true, bridgeAvailable: true, lastError: null });
   return await setLocalAgentSource({ kind: "bridge" });
 }
@@ -335,6 +393,7 @@ export async function connectDesktop(name?: string): Promise<LocalAgentSource | 
 /** Forget the pairing token. The desktop keeps its origin approval. */
 export async function disconnectDesktop(): Promise<void> {
   clearBridgeToken();
+  adoptRefused = false;
   patch({ bridgePaired: false });
   if (status.get().pref.kind === "bridge") await setLocalAgentSource({ kind: "auto" });
   else await refreshLocalAgents();
@@ -386,10 +445,9 @@ export function listLocalAgentDevices(snapshot?: LocalAgentStatus): LocalAgentDe
   const devices: LocalAgentDevice[] = [];
   const bridged = s.bridgeAvailable === true && s.bridgePaired === true;
   // The relay host that IS this bridged machine, if it is also sharing itself.
-  const selfHost =
-    bridged && s.bridgeDeviceId
-      ? (s.relayHosts.find((h) => h.deviceId === s.bridgeDeviceId) ?? null)
-      : null;
+  const selfHost = bridged && s.bridgeDeviceId
+    ? (s.relayHosts.find((h) => h.deviceId === s.bridgeDeviceId) ?? null)
+    : null;
 
   if (bridged) {
     const merged = mergeCaps(s.bridgeCapabilities, hostCaps(selfHost));
@@ -449,8 +507,11 @@ function mergeCaps(
  */
 export async function refreshLocalAgentDevices(): Promise<LocalAgentDevice[]> {
   invalidateBridgePort();
+  adoptRefused = false;
   patch({ bridgePaired: hasBridgeToken() });
-  await Promise.all([probeBridge(), refreshRelayHosts()]);
+  // `bridgeUsable`, not `probeBridge`: a device listing is exactly where a
+  // desktop that approved this origin should reappear without the user asking.
+  await Promise.all([bridgeUsable(), refreshRelayHosts()]);
   return listLocalAgentDevices();
 }
 
@@ -699,6 +760,7 @@ async function startRelayRun(
 /** Test seam: forget the memoized source resolution and reset observable state. */
 export function _resetLocalAgentState(): void {
   resolvePromise = null;
+  adoptRefused = false;
   invalidateBridgePort();
   closeAllRelayHosts();
   status.set(initialStatus());

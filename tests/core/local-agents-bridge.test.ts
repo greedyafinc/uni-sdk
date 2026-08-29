@@ -19,6 +19,10 @@ function makeStorage(): Storage {
 }
 (globalThis as { localStorage?: Storage }).localStorage = makeStorage();
 
+const { connectDesktop, resolveLocalAgentSource, resolveSourceFor, _resetLocalAgentState } =
+  await import(
+  "../../src/localAgents/transport"
+);
 const { BRIDGE_PORTS, bridgeToken, clearBridgeToken, hasBridgeToken, pairBridge } = await import(
   "../../src/localAgents/bridgeClient"
 );
@@ -70,6 +74,18 @@ const SERVICE_BODY = { service: "unified-agent-bridge", version: 1 };
 
 const online: Responder = (c) => (c.url === healthy(47825) ? { body: SERVICE_BODY } : undefined);
 
+/** A desktop that is up, answering `/pair` with `answer`. */
+function pairs(answer: { body?: unknown; status?: number }): Responder {
+  return (c) => online(c) ?? (c.url.endsWith("/pair") ? answer : undefined);
+}
+
+/** Every `/pair` body sent so far, parsed, in order. */
+function pairBodies(): Array<{ name?: string; silent?: boolean }> {
+  return calls
+    .filter((c) => c.url.endsWith("/pair"))
+    .map((c) => JSON.parse(c.body ?? "{}") as { name?: string; silent?: boolean });
+}
+
 describe("bridge discovery", () => {
   test("probes the whole range and remembers the port that answered", async () => {
     responder = (c) => (c.url === healthy(47827) ? { body: SERVICE_BODY } : undefined);
@@ -116,7 +132,7 @@ describe("pairing", () => {
   });
 
   test("a declined pairing is a readable error, not an opaque network failure", async () => {
-    responder = (c) => online(c) ?? (c.url.endsWith("/pair") ? { status: 403 } : undefined);
+    responder = pairs({ status: 403 });
     await expect(pairBridge("x")).rejects.toThrow(/declined/i);
     expect(hasBridgeToken()).toBe(false);
   });
@@ -125,8 +141,7 @@ describe("pairing", () => {
     responder = (c) =>
       online(c) ?? (c.url.endsWith("/pair") ? { body: { token: "t" } } : undefined);
     await pairBridge("x", true);
-    const pair = calls.find((c) => c.url.endsWith("/pair"));
-    expect(JSON.parse(pair?.body ?? "{}")).toEqual({ name: "x", silent: true });
+    expect(pairBodies()[0]).toEqual({ name: "x", silent: true });
   });
 
   test("clearBridgeToken forgets it", async () => {
@@ -135,6 +150,92 @@ describe("pairing", () => {
     await pairBridge("x");
     clearBridgeToken();
     expect(hasBridgeToken()).toBe(false);
+  });
+
+  // The refresh bug: the token is in localStorage and the desktop's approval is
+  // on disk, so pairing survives a page reload. Re-prompting for a decision the
+  // user already made is the thing to avoid.
+  test("connectDesktop re-mints SILENTLY when this origin already holds a token", async () => {
+    responder = (c) =>
+      online(c) ?? (c.url.endsWith("/pair") ? { body: { token: "tok-2" } } : undefined);
+    _resetLocalAgentState();
+    await pairBridge("first time");
+    calls.length = 0;
+
+    await connectDesktop("Notes");
+    expect(pairBodies()[0]).toEqual({ name: "Notes", silent: true });
+  });
+
+  test("…but falls back to a real prompt when the silent re-mint is refused", async () => {
+    // Approval revoked on the desktop while we still held a token: the silent
+    // attempt 403s, and THEN a modal is the right answer rather than a dead end.
+    responder = (c) =>
+      online(c) ?? (c.url.endsWith("/pair") ? { body: { token: "stale" } } : undefined);
+    _resetLocalAgentState();
+    await pairBridge("first time");
+    calls.length = 0;
+
+    // Only now does the desktop start refusing the silent re-mint.
+    let seen = 0;
+    responder = (c) => {
+      const o = online(c);
+      if (o) return o;
+      if (!c.url.endsWith("/pair")) return undefined;
+      seen++;
+      return seen === 1 ? { status: 403 } : { body: { token: "re-approved" } };
+    };
+
+    await connectDesktop("Notes");
+    const bodies = calls
+      .filter((c) => c.url.endsWith("/pair"))
+      .map((c) => JSON.parse(c.body ?? "{}") as { silent?: boolean });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]?.silent).toBe(true);
+    expect(bodies[1]?.silent).toBeUndefined();
+    expect(bridgeToken()).toBe("re-approved");
+  });
+
+  // The desktop, not localStorage, is the source of truth for approval. A load
+  // that starts with no token must ASK — an approved origin gets its token back
+  // with no modal, so the user is never re-prompted for a decision they made.
+  test("a tokenless load adopts the desktop's existing approval, silently", async () => {
+    responder = (c) =>
+      online(c) ?? (c.url.endsWith("/pair") ? { body: { token: "restored" } } : undefined);
+    _resetLocalAgentState();
+    clearBridgeToken();
+    expect(hasBridgeToken()).toBe(false);
+
+    expect(await resolveLocalAgentSource()).toEqual({ kind: "bridge" });
+    expect(bridgeToken()).toBe("restored");
+    expect(pairBodies()[0]?.silent).toBe(true);
+  });
+
+  test("an origin the desktop does NOT approve stays disconnected, with no modal", async () => {
+    responder = pairs({ status: 403 });
+    _resetLocalAgentState();
+    clearBridgeToken();
+
+    expect(await resolveLocalAgentSource()).toBeNull();
+    expect(hasBridgeToken()).toBe(false);
+    // Refused silently: a 403 here must never surface as a thrown error or a modal.
+    expect(pairBodies()[0]?.silent).toBe(true);
+  });
+
+  test("a refused origin is asked ONCE per page, not on every resolve", async () => {
+    responder = pairs({ status: 403 });
+    _resetLocalAgentState();
+    clearBridgeToken();
+
+    expect(await resolveLocalAgentSource()).toBeNull();
+    const after = calls.filter((c) => c.url.endsWith("/pair")).length;
+    expect(after).toBeGreaterThan(0);
+
+    // Every surface resolves for itself, and each resolve used to repeat the
+    // forced port scan and the 403. The verdict is stable until something the
+    // user does could change it.
+    await resolveSourceFor({ kind: "auto" });
+    await resolveSourceFor({ kind: "bridge" });
+    expect(calls.filter((c) => c.url.endsWith("/pair"))).toHaveLength(after);
   });
 
   test("a direct pairBridge() call stays non-silent", async () => {

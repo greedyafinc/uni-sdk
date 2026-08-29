@@ -121,9 +121,16 @@ export declare function resolveSourceFor(pref: LocalAgentSourcePref): Promise<Lo
  */
 export declare function checkDesktopAvailable(): Promise<boolean>;
 /**
- * User-initiated pairing. PARKS on a consent modal on the desktop (120s, then
- * 403), so it must never be reached from a page-load code path — call it only
- * from an explicit user action.
+ * User-initiated pairing. For a NEW origin this PARKS on a consent modal on the
+ * desktop (120s, then 403), so it must never be reached from a page-load code
+ * path — call it only from an explicit user action.
+ *
+ * When this origin already holds a token it re-mints SILENTLY instead. The token
+ * lives in localStorage and the desktop's approval is on disk, so pairing
+ * survives a page refresh; asking the user to approve the same origin again on
+ * every reload is a prompt for a decision they already made. If the desktop
+ * revoked us meanwhile the silent attempt 403s — that is the one case where a
+ * fresh modal is the right answer, so we drop the dead token and ask properly.
  */
 export declare function connectDesktop(name?: string): Promise<LocalAgentSource | null>;
 /** Forget the pairing token. The desktop keeps its origin approval. */

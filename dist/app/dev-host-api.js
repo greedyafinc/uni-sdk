@@ -6198,6 +6198,7 @@ function clearBridgeToken() {
   writeLocal(TOKEN_KEY, null);
 }
 var cachedPort = null;
+var scanFoundNothing = false;
 function bridgeOrigin(port) {
   return `http://127.0.0.1:${port}`;
 }
@@ -6218,6 +6219,8 @@ async function probe(port) {
 async function discoverBridge(force = false) {
   if (!force && cachedPort !== null)
     return cachedPort;
+  if (!force && scanFoundNothing)
+    return null;
   const remembered = Number(readLocal(PORT_KEY));
   const order = BRIDGE_PORTS.includes(remembered) ? [remembered, ...BRIDGE_PORTS.filter((p) => p !== remembered)] : [...BRIDGE_PORTS];
   for (const port of order) {
@@ -6228,11 +6231,13 @@ async function discoverBridge(force = false) {
     }
   }
   cachedPort = null;
+  scanFoundNothing = true;
   writeLocal(PORT_KEY, null);
   return null;
 }
 function invalidateBridgePort() {
   cachedPort = null;
+  scanFoundNothing = false;
 }
 async function requirePort() {
   const port = await discoverBridge();
@@ -6266,7 +6271,7 @@ function defaultPairName() {
   return `${name} — ${location.host}`;
 }
 var reauthorizing = null;
-function reauthorize() {
+function ensureBridgeToken() {
   if (!reauthorizing) {
     reauthorizing = pairBridge(defaultPairName(), true).finally(() => {
       reauthorizing = null;
@@ -6299,7 +6304,7 @@ async function authed(path, opts = {}) {
     res = await send(path, opts, token);
   }
   if (res.status === 401) {
-    const fresh = await reauthorize();
+    const fresh = await ensureBridgeToken();
     res = await send(path, opts, fresh);
   }
   if (!res.ok)
@@ -6347,7 +6352,7 @@ async function openRunEvents(runId, handlers) {
   });
   let res = await attach(token);
   if (res.status === 401)
-    res = await attach(await reauthorize());
+    res = await attach(await ensureBridgeToken());
   if (!res.ok || !res.body) {
     controller.abort();
     throw new Error(`Could not open the run stream (HTTP ${res.status}).`);
@@ -6911,15 +6916,12 @@ function setLocalAgentSource(pref) {
 function refreshLocalAgents() {
   resolvePromise = null;
   invalidateBridgePort();
+  adoptRefused = false;
   return resolveLocalAgentSource();
 }
 async function resolveSourceFor(pref) {
   if (pref.kind === "bridge") {
-    if (!hasBridgeToken()) {
-      await probeBridge();
-      return null;
-    }
-    return await probeBridge() ? { kind: "bridge" } : null;
+    return await bridgeUsable() ? { kind: "bridge" } : null;
   }
   if (pref.kind === "relay") {
     const hosts2 = await refreshRelayHosts();
@@ -6930,7 +6932,7 @@ async function resolveSourceFor(pref) {
       deviceName: host?.deviceName ?? pref.deviceId
     };
   }
-  if (hasBridgeToken() && await probeBridge())
+  if (await bridgeUsable())
     return { kind: "bridge" };
   const hosts = await refreshRelayHosts();
   const first = hosts[0];
@@ -6941,9 +6943,32 @@ async function resolveSourceFor(pref) {
 async function probeBridge() {
   const port = await discoverBridge();
   patch({ bridgeAvailable: port !== null });
-  if (port !== null && hasBridgeToken())
+  if (port === null)
+    return false;
+  if (hasBridgeToken())
     await refreshBridgeIdentity();
-  return port !== null;
+  return true;
+}
+async function bridgeUsable() {
+  if (!await probeBridge())
+    return false;
+  if (!hasBridgeToken()) {
+    await adoptApprovedOrigin();
+    if (hasBridgeToken())
+      await refreshBridgeIdentity();
+  }
+  return hasBridgeToken();
+}
+var adoptRefused = false;
+async function adoptApprovedOrigin() {
+  if (hasBridgeToken() || adoptRefused)
+    return;
+  try {
+    await ensureBridgeToken();
+    patch({ bridgePaired: true, lastError: null });
+  } catch {
+    adoptRefused = true;
+  }
 }
 async function refreshBridgeIdentity() {
   try {
@@ -6965,12 +6990,22 @@ async function checkDesktopAvailable() {
   return await probeBridge();
 }
 async function connectDesktop(name) {
-  await pairBridge(name ?? defaultPairName());
+  const label = name ?? defaultPairName();
+  try {
+    await pairBridge(label, hasBridgeToken());
+  } catch (err) {
+    if (!hasBridgeToken())
+      throw err;
+    clearBridgeToken();
+    await pairBridge(label);
+  }
+  adoptRefused = false;
   patch({ bridgePaired: true, bridgeAvailable: true, lastError: null });
   return await setLocalAgentSource({ kind: "bridge" });
 }
 async function disconnectDesktop() {
   clearBridgeToken();
+  adoptRefused = false;
   patch({ bridgePaired: false });
   if (status.get().pref.kind === "bridge")
     await setLocalAgentSource({ kind: "auto" });
@@ -7035,8 +7070,9 @@ function mergeCaps(a, b) {
 }
 async function refreshLocalAgentDevices() {
   invalidateBridgePort();
+  adoptRefused = false;
   patch({ bridgePaired: hasBridgeToken() });
-  await Promise.all([probeBridge(), refreshRelayHosts()]);
+  await Promise.all([bridgeUsable(), refreshRelayHosts()]);
   return listLocalAgentDevices();
 }
 var NOT_FOUND = {
@@ -8422,31 +8458,31 @@ function openArtifact() {
   return Promise.resolve(null);
 }
 export {
-  checkDesktopAvailable2 as checkDesktopAvailable,
-  connectDesktop2 as connectDesktop,
-  disconnectDesktop2 as disconnectDesktop,
-  fsTools,
-  getCurrentProject,
-  getDesktopStatus,
-  getProviderLogo,
-  getSdk,
-  getTheme,
-  getUsage,
-  hasRunAgent,
-  isDesktopPaired,
-  isLocalAgentModel2 as isLocalAgentModel,
-  listLocalDevices,
-  listModels,
-  onDesktopStatusChange,
-  onProjectChange,
-  onThemeChange,
-  openArtifact,
-  pickWorkspaceFolder2 as pickWorkspaceFolder,
-  refreshDesktop,
-  refreshLocalDevices,
+  runAgent,
   registerActions,
-  runAgent
+  refreshLocalDevices,
+  refreshDesktop,
+  pickWorkspaceFolder2 as pickWorkspaceFolder,
+  openArtifact,
+  onThemeChange,
+  onProjectChange,
+  onDesktopStatusChange,
+  listModels,
+  listLocalDevices,
+  isLocalAgentModel2 as isLocalAgentModel,
+  isDesktopPaired,
+  hasRunAgent,
+  getUsage,
+  getTheme,
+  getSdk,
+  getProviderLogo,
+  getDesktopStatus,
+  getCurrentProject,
+  fsTools,
+  disconnectDesktop2 as disconnectDesktop,
+  connectDesktop2 as connectDesktop,
+  checkDesktopAvailable2 as checkDesktopAvailable
 };
 
-//# debugId=1831D1F3B93A700164756E2164756E21
+//# debugId=90E2323C00FE7A5764756E2164756E21
 //# sourceMappingURL=dev-host-api.js.map

@@ -124,6 +124,8 @@ export function clearBridgeToken(): void {
 // ── Discovery ───────────────────────────────────────────────────────────────
 
 let cachedPort: number | null = null;
+/** A completed scan that found nothing — see `discoverBridge`. */
+let scanFoundNothing = false;
 
 export function bridgeOrigin(port: number): string {
   return `http://127.0.0.1:${port}`;
@@ -149,6 +151,13 @@ async function probe(port: number): Promise<boolean> {
  */
 export async function discoverBridge(force = false): Promise<number | null> {
   if (!force && cachedPort !== null) return cachedPort;
+  // "Nothing is listening" is an answer worth remembering too. Every port in the
+  // range has to time out before we can conclude it, and resolving a source is a
+  // per-surface call — so without this, a page with no desktop pays the whole
+  // sequential scan again on every resolve. Cleared by `invalidateBridgePort`,
+  // which every explicit refresh path already calls, so a desktop launched after
+  // the page still gets found.
+  if (!force && scanFoundNothing) return null;
 
   const remembered = Number(readLocal(PORT_KEY));
   const order: number[] = BRIDGE_PORTS.includes(remembered as (typeof BRIDGE_PORTS)[number])
@@ -163,13 +172,15 @@ export async function discoverBridge(force = false): Promise<number | null> {
     }
   }
   cachedPort = null;
+  scanFoundNothing = true;
   writeLocal(PORT_KEY, null);
   return null;
 }
 
-/** Drop the memoized port so the next call re-probes the range. */
+/** Drop both memoized verdicts so the next call re-probes the range. */
 export function invalidateBridgePort(): void {
   cachedPort = null;
+  scanFoundNothing = false;
 }
 
 /** Whether a bridge is reachable at all (no pairing required). */
@@ -192,7 +203,7 @@ async function requirePort(): Promise<number> {
  * First time for an origin this PARKS until the user answers a consent modal on
  * the desktop (120s, then 403) — so only call it from an explicit user action.
  * A previously approved origin re-mints immediately and silently, which is what
- * makes `reauthorize()` below safe to run inside a failed request.
+ * makes `ensureBridgeToken()` below safe to run inside a failed request.
  */
 export async function pairBridge(name = defaultPairName(), silent = false): Promise<string> {
   const port = await discoverBridge(true);
@@ -230,7 +241,7 @@ export function defaultPairName(): string {
  * than a surprise modal).
  */
 let reauthorizing: Promise<string> | null = null;
-function reauthorize(): Promise<string> {
+export function ensureBridgeToken(): Promise<string> {
   if (!reauthorizing) {
     reauthorizing = pairBridge(defaultPairName(), true).finally(() => {
       reauthorizing = null;
@@ -281,7 +292,7 @@ async function authed(path: string, opts: RequestOptions = {}): Promise<Response
     res = await send(path, opts, token);
   }
   if (res.status === 401) {
-    const fresh = await reauthorize();
+    const fresh = await ensureBridgeToken();
     res = await send(path, opts, fresh);
   }
   if (!res.ok) throw new Error(`Agent bridge request failed (HTTP ${res.status}).`);
@@ -361,7 +372,7 @@ export async function openRunEvents(
     });
 
   let res = await attach(token);
-  if (res.status === 401) res = await attach(await reauthorize());
+  if (res.status === 401) res = await attach(await ensureBridgeToken());
   if (!res.ok || !res.body) {
     controller.abort();
     throw new Error(`Could not open the run stream (HTTP ${res.status}).`);

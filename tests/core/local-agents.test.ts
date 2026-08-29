@@ -151,15 +151,20 @@ describe("isLocalAgentModel", () => {
 });
 
 describe("source selection", () => {
-  test("an unpaired origin never reaches the bridge, and reports not-connected", async () => {
+  test("an origin the desktop does not approve reports not-connected, and never prompts", async () => {
     const source = await resolveLocalAgentSource();
     expect(source).toBeNull();
     const status = getLocalAgentStatus();
     expect(status.connected).toBe(false);
     expect(status.bridgePaired).toBe(false);
-    // /health is the ONLY thing a page may do unprompted — and auto-select does
-    // not even do that until a token exists, so nothing at all was requested.
-    expect(desktop.calls.filter((c) => c.url.endsWith("/pair"))).toHaveLength(0);
+    // A load DOES ask the desktop whether this origin is approved — that is how a
+    // browser that lost its token gets it back without re-prompting the user. The
+    // invariant is not "never call /pair", it is "never raise a modal": every pair
+    // a load path makes must be silent, which an unapproved origin gets refused
+    // with 403 rather than a consent card.
+    for (const call of desktop.calls.filter((c) => c.url.endsWith("/pair"))) {
+      expect((call.body as { silent?: boolean } | undefined)?.silent).toBe(true);
+    }
   });
 
   test("a paired origin resolves to the bridge", async () => {
