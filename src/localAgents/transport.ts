@@ -38,8 +38,8 @@ import {
   clearBridgeToken,
   defaultPairName,
   discoverBridge,
-  hasBridgeToken,
   ensureBridgeToken,
+  hasBridgeToken,
   invalidateBridgePort,
   openRunEvents,
   pairBridge,
@@ -445,9 +445,10 @@ export function listLocalAgentDevices(snapshot?: LocalAgentStatus): LocalAgentDe
   const devices: LocalAgentDevice[] = [];
   const bridged = s.bridgeAvailable === true && s.bridgePaired === true;
   // The relay host that IS this bridged machine, if it is also sharing itself.
-  const selfHost = bridged && s.bridgeDeviceId
-    ? (s.relayHosts.find((h) => h.deviceId === s.bridgeDeviceId) ?? null)
-    : null;
+  const selfHost =
+    bridged && s.bridgeDeviceId
+      ? (s.relayHosts.find((h) => h.deviceId === s.bridgeDeviceId) ?? null)
+      : null;
 
   if (bridged) {
     const merged = mergeCaps(s.bridgeCapabilities, hostCaps(selfHost));

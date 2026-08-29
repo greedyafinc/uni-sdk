@@ -8458,31 +8458,31 @@ function openArtifact() {
   return Promise.resolve(null);
 }
 export {
-  runAgent,
-  registerActions,
-  refreshLocalDevices,
-  refreshDesktop,
-  pickWorkspaceFolder2 as pickWorkspaceFolder,
-  openArtifact,
-  onThemeChange,
-  onProjectChange,
-  onDesktopStatusChange,
-  listModels,
-  listLocalDevices,
-  isLocalAgentModel2 as isLocalAgentModel,
-  isDesktopPaired,
-  hasRunAgent,
-  getUsage,
-  getTheme,
-  getSdk,
-  getProviderLogo,
-  getDesktopStatus,
-  getCurrentProject,
-  fsTools,
-  disconnectDesktop2 as disconnectDesktop,
+  checkDesktopAvailable2 as checkDesktopAvailable,
   connectDesktop2 as connectDesktop,
-  checkDesktopAvailable2 as checkDesktopAvailable
+  disconnectDesktop2 as disconnectDesktop,
+  fsTools,
+  getCurrentProject,
+  getDesktopStatus,
+  getProviderLogo,
+  getSdk,
+  getTheme,
+  getUsage,
+  hasRunAgent,
+  isDesktopPaired,
+  isLocalAgentModel2 as isLocalAgentModel,
+  listLocalDevices,
+  listModels,
+  onDesktopStatusChange,
+  onProjectChange,
+  onThemeChange,
+  openArtifact,
+  pickWorkspaceFolder2 as pickWorkspaceFolder,
+  refreshDesktop,
+  refreshLocalDevices,
+  registerActions,
+  runAgent
 };
 
-//# debugId=90E2323C00FE7A5764756E2164756E21
+//# debugId=87CE3AC0153C3FF964756E2164756E21
 //# sourceMappingURL=dev-host-api.js.map

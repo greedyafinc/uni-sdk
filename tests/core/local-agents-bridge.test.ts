@@ -20,9 +20,7 @@ function makeStorage(): Storage {
 (globalThis as { localStorage?: Storage }).localStorage = makeStorage();
 
 const { connectDesktop, resolveLocalAgentSource, resolveSourceFor, _resetLocalAgentState } =
-  await import(
-  "../../src/localAgents/transport"
-);
+  await import("../../src/localAgents/transport");
 const { BRIDGE_PORTS, bridgeToken, clearBridgeToken, hasBridgeToken, pairBridge } = await import(
   "../../src/localAgents/bridgeClient"
 );
