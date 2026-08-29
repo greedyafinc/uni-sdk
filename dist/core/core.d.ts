@@ -213,6 +213,17 @@ export declare class Core {
      */
     get defaultCompression(): boolean | undefined;
     /**
+     * The API base URL this client resolves paths against. Empty string when the
+     * client was configured relative (a host serving `/api/*` through a dev proxy
+     * or a custom protocol), which is what `buildUrl` treats as "no base".
+     *
+     * Exposed because a few surfaces need the base for something that is NOT an
+     * ordinary `request()` — notably the local-agent relay's WebSocket, which
+     * cannot go through `Core.request` at all and must not re-read env vars to
+     * rediscover a URL the client already holds.
+     */
+    get apiUrl(): string;
+    /**
      * The app identity used to namespace `sdk.storage`. Set by the host when it
      * constructs a per-app SDK; empty for an unscoped client (storage then falls
      * back to a `"default"` namespace).

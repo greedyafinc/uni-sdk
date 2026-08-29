@@ -75,6 +75,12 @@ export { UnifiedStream } from "./core/_internal/stream";
 export type { StreamUsage, StreamUsageExtractor } from "./core/_internal/stream";
 export { parseSSE, type SSEMessage } from "./core/_internal/sse";
 
+// Local agent CLIs (Claude Code / Cursor) on the user's UnifiedApp desktop,
+// reached over the loopback bridge or the cross-device relay. Browser-safe;
+// explicit /index because it is a directory barrel (same dts-fixup reason as
+// storage).
+export * from "./localAgents/index";
+
 // Resource modules — all browser-safe.
 // Explicit /index: agent is a directory barrel (same dts-fixup reason as storage).
 export * from "./resources/agent/index";

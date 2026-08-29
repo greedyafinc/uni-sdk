@@ -119,6 +119,20 @@ export interface HostModelEntry {
   context_size?: number | null;
 }
 
+// ─── Compute devices ─────────────────────────────────────────────────────────
+
+/**
+ * Which machine a local-agent call should run on. `auto` is the host's own
+ * selection (and the default). An embedded app has exactly ONE device — the
+ * machine its host runs on — so passing this only matters on hosts that can
+ * reach more than one; older hosts ignore the argument and answer for the
+ * machine they run on, which is the correct answer there.
+ */
+export type HostDevicePref =
+  | { kind: "auto" }
+  | { kind: "bridge" }
+  | { kind: "relay"; deviceId: string };
+
 // ─── Projects ────────────────────────────────────────────────────────────────
 
 /** The project the user is currently working in (host `stores/projects.ts`). */
@@ -198,18 +212,25 @@ export interface HostApi {
    * gateway models go through the SDK's agent loop, while models served by a
    * locally installed agent CLI (Cursor, Claude Code) go through the host's
    * child-process bridge. `sessionKey` keeps a conversation's CLI thread
-   * context across turns; omit it for fan-out workers. Throws when the host is
-   * too old to provide the bridge — feature-detect with `hasRunAgent()`.
+   * context across turns; omit it for fan-out workers. `device` pins the turn
+   * to one machine (older hosts ignore it and run on the machine they run on,
+   * which is correct — an embedded app has exactly one device). Throws when the
+   * host is too old to provide the bridge — feature-detect with `hasRunAgent()`.
    */
-  runAgent(options: RunAgentOptions & { sessionKey?: string }): Promise<RunAgentResult>;
+  runAgent(
+    options: RunAgentOptions & { sessionKey?: string; device?: HostDevicePref },
+  ): Promise<RunAgentResult>;
   /** Whether the host provides the agent-run bridge (false standalone / old host). */
   hasRunAgent(): boolean;
   /**
    * The host's merged model catalog: gateway models plus whichever local agent
    * CLIs are actually installed. Prefer this over `getSdk().models.list()`,
    * which only ever sees the gateway half. Null when the host is too old.
+   *
+   * `device` asks for a specific machine's local half; older hosts ignore the
+   * argument and answer for the machine they run on.
    */
-  listModels(): Promise<HostModelEntry[] | null>;
+  listModels(options?: { device?: HostDevicePref }): Promise<HostModelEntry[] | null>;
   /**
    * Whether a model is served by a local agent CLI rather than the gateway.
    * Local lanes cannot honor `response_format`/`json_schema`, `maxSteps` or

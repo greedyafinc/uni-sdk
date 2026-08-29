@@ -22,6 +22,9 @@ function unifiedApp(opts) {
         resolve: {
           alias: { [HOST_API_SPECIFIER]: devHostApi }
         },
+        optimizeDeps: {
+          exclude: [HOST_API_SPECIFIER, devHostApi]
+        },
         define: {
           "import.meta.env.VITE_UNIFIED_APP_ID": JSON.stringify(opts.appId)
         }
@@ -33,5 +36,5 @@ export {
   unifiedApp
 };
 
-//# debugId=E02F036B0441AA7964756E2164756E21
+//# debugId=8D6A7666A0556BEA64756E2164756E21
 //# sourceMappingURL=index.js.map

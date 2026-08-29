@@ -377,6 +377,9 @@ class Core {
   get defaultCompression() {
     return this.options.compression;
   }
+  get apiUrl() {
+    return this.options.apiUrl;
+  }
   get appId() {
     return this.options.appId;
   }
@@ -2899,9 +2902,9 @@ function parseCalendarItem(metadata) {
   const color = asString(metadata.color);
   if (color !== undefined)
     base.color = color;
-  const location = asString(metadata.location);
-  if (location !== undefined)
-    base.location = location;
+  const location2 = asString(metadata.location);
+  if (location2 !== undefined)
+    base.location = location2;
   const description = asString(metadata.description);
   if (description !== undefined)
     base.description = description;
@@ -6507,6 +6510,2137 @@ class Videos {
     });
   }
 }
+// src/localAgents/config.ts
+var config = {};
+function configureLocalAgents(next) {
+  config = { ...config, ...next };
+}
+function localAgentsConfig() {
+  return config;
+}
+async function unifiedToken() {
+  const client = config.client;
+  if (!client)
+    return null;
+  try {
+    const token = await client.accessToken();
+    return token || null;
+  } catch {
+    return null;
+  }
+}
+function unifiedApiUrl() {
+  return config.client?.apiUrl ?? "";
+}
+function relayWsBase() {
+  const explicit = config.wsBaseUrl?.trim();
+  if (explicit)
+    return withApiPrefix(explicit);
+  const api = unifiedApiUrl().trim();
+  if (api && /^https?:\/\//i.test(api))
+    return withApiPrefix(api);
+  const origin = typeof location !== "undefined" ? location.origin : "http://localhost";
+  return `${origin}/api/v1`;
+}
+function withApiPrefix(base) {
+  const trimmed = base.replace(/\/+$/, "");
+  return /\/v\d+$/.test(trimmed) ? trimmed : `${trimmed}/api/v1`;
+}
+
+// src/localAgents/bridgeClient.ts
+var BRIDGE_PORTS = [47825, 47826, 47827, 47828, 47829];
+var PORT_KEY = "unified.agentBridge.port";
+var TOKEN_KEY = "unified.agentBridge.token";
+var SERVICE = "unified-agent-bridge";
+var PROBE_TIMEOUT_MS = 1200;
+var REQUEST_TIMEOUT_MS = 15000;
+function readLocal(key) {
+  try {
+    return globalThis.localStorage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+function writeLocal(key, value) {
+  try {
+    if (value === null)
+      globalThis.localStorage?.removeItem(key);
+    else
+      globalThis.localStorage?.setItem(key, value);
+  } catch {}
+}
+function bridgeToken() {
+  return readLocal(TOKEN_KEY);
+}
+function hasBridgeToken() {
+  return !!bridgeToken();
+}
+function clearBridgeToken() {
+  writeLocal(TOKEN_KEY, null);
+}
+var cachedPort = null;
+var scanFoundNothing = false;
+function bridgeOrigin(port) {
+  return `http://127.0.0.1:${port}`;
+}
+async function probe(port) {
+  try {
+    const res = await fetch(`${bridgeOrigin(port)}/health`, {
+      method: "GET",
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS)
+    });
+    if (!res.ok)
+      return false;
+    const body = await res.json();
+    return body?.service === SERVICE;
+  } catch {
+    return false;
+  }
+}
+async function discoverBridge(force = false) {
+  if (!force && cachedPort !== null)
+    return cachedPort;
+  if (!force && scanFoundNothing)
+    return null;
+  const remembered = Number(readLocal(PORT_KEY));
+  const order = BRIDGE_PORTS.includes(remembered) ? [remembered, ...BRIDGE_PORTS.filter((p) => p !== remembered)] : [...BRIDGE_PORTS];
+  for (const port of order) {
+    if (await probe(port)) {
+      cachedPort = port;
+      writeLocal(PORT_KEY, String(port));
+      return port;
+    }
+  }
+  cachedPort = null;
+  scanFoundNothing = true;
+  writeLocal(PORT_KEY, null);
+  return null;
+}
+function invalidateBridgePort() {
+  cachedPort = null;
+  scanFoundNothing = false;
+}
+async function bridgeHealth() {
+  const port = await discoverBridge(true);
+  return { ok: port !== null, port };
+}
+async function requirePort() {
+  const port = await discoverBridge();
+  if (port === null)
+    throw new Error("The desktop app isn't running on this machine.");
+  return port;
+}
+async function pairBridge(name = defaultPairName(), silent = false) {
+  const port = await discoverBridge(true);
+  if (port === null)
+    throw new Error("The desktop app isn't running on this machine.");
+  const res = await fetch(`${bridgeOrigin(port)}/pair`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(silent ? { name, silent: true } : { name })
+  });
+  if (res.status === 403)
+    throw new Error("The desktop app declined this connection.");
+  if (!res.ok)
+    throw new Error(`Pairing failed (HTTP ${res.status}).`);
+  const body = await res.json();
+  if (typeof body?.token !== "string" || !body.token)
+    throw new Error("Pairing returned no token.");
+  writeLocal(TOKEN_KEY, body.token);
+  return body.token;
+}
+function defaultPairName() {
+  const name = localAgentsConfig().clientName?.trim() || "UnifiedAI app";
+  if (typeof location === "undefined")
+    return `${name} (browser)`;
+  return `${name} — ${location.host}`;
+}
+var reauthorizing = null;
+function ensureBridgeToken() {
+  if (!reauthorizing) {
+    reauthorizing = pairBridge(defaultPairName(), true).finally(() => {
+      reauthorizing = null;
+    });
+  }
+  return reauthorizing;
+}
+async function send(path, opts, token) {
+  const port = await requirePort();
+  return await fetch(`${bridgeOrigin(port)}${path}`, {
+    method: opts.method ?? "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...opts.body !== undefined ? { "Content-Type": "application/json" } : {}
+    },
+    ...opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {},
+    ...opts.noTimeout ? {} : { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }
+  });
+}
+async function authed(path, opts = {}) {
+  const token = bridgeToken();
+  if (!token)
+    throw new Error("Not connected to the desktop app.");
+  let res;
+  try {
+    res = await send(path, opts, token);
+  } catch {
+    invalidateBridgePort();
+    await discoverBridge(true);
+    res = await send(path, opts, token);
+  }
+  if (res.status === 401) {
+    const fresh = await ensureBridgeToken();
+    res = await send(path, opts, fresh);
+  }
+  if (!res.ok)
+    throw new Error(`Agent bridge request failed (HTTP ${res.status}).`);
+  return res;
+}
+async function authedJson(path, opts = {}) {
+  const res = await authed(path, opts);
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+function bridgeDetect() {
+  return authedJson("/detect");
+}
+async function bridgeCursorModels(json) {
+  const body = await authedJson(`/cursor/models?format=${json ? "json" : "text"}`);
+  return body?.output ?? "";
+}
+async function bridgeStartRun(body) {
+  await authed("/runs", { method: "POST", body });
+}
+async function bridgeStopRun(runId) {
+  await authed(`/runs/${encodeURIComponent(runId)}/stop`, { method: "POST", body: {} });
+}
+async function bridgeMcpResult(id, result) {
+  await authed("/mcp/result", { method: "POST", body: { id, result } });
+}
+async function bridgePickFolder() {
+  const body = await authedJson("/pick-folder", {
+    method: "POST",
+    body: {},
+    noTimeout: true
+  });
+  return body?.path ?? null;
+}
+async function openRunEvents(runId, handlers) {
+  const controller = new AbortController;
+  const token = bridgeToken();
+  if (!token)
+    throw new Error("Not connected to the desktop app.");
+  const port = await requirePort();
+  const attach = async (bearer) => await fetch(`${bridgeOrigin(port)}/runs/${encodeURIComponent(runId)}/events`, {
+    headers: { Authorization: `Bearer ${bearer}`, Accept: "text/event-stream" },
+    signal: controller.signal
+  });
+  let res = await attach(token);
+  if (res.status === 401)
+    res = await attach(await ensureBridgeToken());
+  if (!res.ok || !res.body) {
+    controller.abort();
+    throw new Error(`Could not open the run stream (HTTP ${res.status}).`);
+  }
+  pump(res.body, handlers, controller.signal);
+  return { close: () => controller.abort() };
+}
+async function pump(body, handlers, signal) {
+  const reader = body.getReader();
+  const decoder2 = new TextDecoder;
+  let buffer = "";
+  let sawExit = false;
+  const trackingHandlers = {
+    ...handlers,
+    onExit: (exit) => {
+      sawExit = true;
+      handlers.onExit(exit);
+    }
+  };
+  try {
+    for (;; ) {
+      const { done, value } = await reader.read();
+      if (done)
+        break;
+      buffer += decoder2.decode(value, { stream: true });
+      let split;
+      while ((split = indexOfFrameEnd(buffer)) !== -1) {
+        const frame = buffer.slice(0, split);
+        buffer = buffer.slice(split).replace(/^(\r?\n){2}/, "");
+        dispatchFrame(frame, trackingHandlers);
+      }
+    }
+    if (!sawExit && !signal.aborted) {
+      handlers.onError?.("Agent bridge stream ended before the run finished");
+    }
+  } catch (err) {
+    if (!signal.aborted) {
+      handlers.onError?.(err instanceof Error ? err.message : String(err));
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+}
+function indexOfFrameEnd(buffer) {
+  const lf = buffer.indexOf(`
+
+`);
+  const crlf = buffer.indexOf(`\r
+\r
+`);
+  if (lf === -1)
+    return crlf;
+  if (crlf === -1)
+    return lf;
+  return Math.min(lf, crlf);
+}
+function dispatchFrame(frame, handlers) {
+  let name = "message";
+  const dataLines = [];
+  for (const rawLine of frame.split(/\r?\n/)) {
+    if (rawLine.startsWith(":"))
+      continue;
+    const colon = rawLine.indexOf(":");
+    const field = colon === -1 ? rawLine : rawLine.slice(0, colon);
+    const value = colon === -1 ? "" : rawLine.slice(colon + 1).replace(/^ /, "");
+    if (field === "event")
+      name = value;
+    else if (field === "data")
+      dataLines.push(value);
+  }
+  if (!dataLines.length)
+    return;
+  let data;
+  try {
+    data = JSON.parse(dataLines.join(`
+`));
+  } catch {
+    return;
+  }
+  switch (name) {
+    case "line":
+      if (typeof data.line === "string")
+        handlers.onLine(data.line);
+      break;
+    case "exit":
+      handlers.onExit({
+        code: typeof data.code === "number" ? data.code : null,
+        canceled: data.canceled === true,
+        stderr: typeof data.stderr === "string" ? data.stderr : ""
+      });
+      break;
+    case "mcp-list":
+      if (typeof data.id === "string")
+        handlers.onMcpList?.(data.id);
+      break;
+    case "mcp-call":
+      if (typeof data.id === "string" && typeof data.name === "string") {
+        handlers.onMcpCall?.(data.id, data.name, data.arguments);
+      }
+      break;
+  }
+}
+// src/localAgents/relayClient.ts
+var REQUEST_TIMEOUT_MS2 = 30000;
+var BACKOFF_MIN_MS = 500;
+var BACKOFF_MAX_MS = 15000;
+async function listRelayHosts() {
+  const token = await unifiedToken();
+  if (!token)
+    return [];
+  const base = unifiedApiUrl().replace(/\/+$/, "");
+  const res = await fetch(`${base}/api/v1/relay/hosts`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok)
+    throw new Error(`Relay host listing failed (HTTP ${res.status}).`);
+  const data = await res.json();
+  const rows = Array.isArray(data) ? data : data?.hosts ?? [];
+  if (!Array.isArray(rows))
+    return [];
+  return rows.filter(isRelayHost);
+}
+function isRelayHost(value) {
+  const v = value;
+  return !!v && typeof v.deviceId === "string" && typeof v.deviceName === "string";
+}
+function relayWsUrl(path) {
+  const url = new URL(`${relayWsBase()}/relay${path}`);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
+async function bearerSubprotocol() {
+  const token = await unifiedToken();
+  return token ? `unified-bearer.${token}` : null;
+}
+var CLIENT_ID_KEY = "unified.agentRelay.clientId";
+function clientDeviceId() {
+  try {
+    const existing = globalThis.localStorage?.getItem(CLIENT_ID_KEY);
+    if (existing)
+      return existing;
+    const fresh = crypto.randomUUID();
+    globalThis.localStorage?.setItem(CLIENT_ID_KEY, fresh);
+    return fresh;
+  } catch {
+    return "browser";
+  }
+}
+function clientDeviceName() {
+  const name = localAgentsConfig().clientName?.trim() || "UnifiedAI app";
+  if (typeof location === "undefined")
+    return name;
+  return `${name} (${location.host})`;
+}
+var connections = new Map;
+function connectRelayHost(deviceId) {
+  const existing = connections.get(deviceId);
+  if (existing)
+    return existing;
+  const conn = createConnection(deviceId);
+  connections.set(deviceId, conn);
+  return conn;
+}
+function closeRelayHost(deviceId) {
+  connections.get(deviceId)?.close();
+  connections.delete(deviceId);
+}
+function closeAllRelayHosts() {
+  for (const id of [...connections.keys()])
+    closeRelayHost(id);
+}
+function createConnection(deviceId) {
+  const approval = new Observable("unknown");
+  const connected = new Observable(false);
+  const host = new Observable(null);
+  const lastError = new Observable(null);
+  const pending = new Map;
+  const runs = new Map;
+  const readyWaiters = [];
+  let socket = null;
+  let backoff = BACKOFF_MIN_MS;
+  let retryTimer = null;
+  let closedByUs = false;
+  function settleReady() {
+    if (approval.get() !== "approved" || !connected.get())
+      return;
+    while (readyWaiters.length)
+      readyWaiters.shift()?.resolve();
+  }
+  function failReady(message) {
+    while (readyWaiters.length)
+      readyWaiters.shift()?.reject(new Error(message));
+  }
+  function send2(frame) {
+    if (socket?.readyState !== 1) {
+      throw new Error("Not connected to that computer.");
+    }
+    socket.send(JSON.stringify(frame));
+  }
+  function request(frame, timeoutMs = REQUEST_TIMEOUT_MS2) {
+    const id = crypto.randomUUID();
+    return new Promise((resolve, reject) => {
+      const entry = { resolve, reject };
+      if (timeoutMs !== null) {
+        entry.timer = setTimeout(() => {
+          pending.delete(id);
+          reject(new Error("The other computer didn't answer in time."));
+        }, timeoutMs);
+      }
+      pending.set(id, entry);
+      try {
+        send2({ ...frame, id });
+      } catch (err) {
+        pending.delete(id);
+        if (entry.timer)
+          clearTimeout(entry.timer);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+  }
+  function resolvePending(id, frame) {
+    const entry = pending.get(id);
+    if (!entry)
+      return;
+    pending.delete(id);
+    if (entry.timer)
+      clearTimeout(entry.timer);
+    entry.resolve(frame);
+  }
+  function rejectPending(id, message) {
+    const entry = pending.get(id);
+    if (!entry)
+      return;
+    pending.delete(id);
+    if (entry.timer)
+      clearTimeout(entry.timer);
+    entry.reject(new Error(message));
+  }
+  function handleFrame(frame) {
+    switch (frame.type) {
+      case "attached": {
+        const h = frame.host;
+        if (h && typeof h.deviceId === "string")
+          host.set(h);
+        try {
+          send2({ type: "approve?" });
+        } catch {}
+        break;
+      }
+      case "approval": {
+        const state = frame.state;
+        approval.set(state === "approved" || state === "pending" || state === "denied" ? state : "unknown");
+        if (approval.get() === "approved")
+          settleReady();
+        if (approval.get() === "denied") {
+          failReady("That computer declined this device.");
+          lastError.set("That computer declined this device.");
+        }
+        break;
+      }
+      case "host-closed":
+        lastError.set("That computer went offline.");
+        endAllRuns("the host went offline");
+        break;
+      case "detect-result":
+      case "cursor-models-result":
+      case "pick-folder-result":
+        if (typeof frame.id === "string")
+          resolvePending(frame.id, frame);
+        break;
+      case "line": {
+        const run = typeof frame.runId === "string" ? runs.get(frame.runId) : undefined;
+        if (run && typeof frame.line === "string")
+          run.onLine(frame.line);
+        break;
+      }
+      case "exit": {
+        const runId = typeof frame.runId === "string" ? frame.runId : "";
+        const run = runs.get(runId);
+        if (!run)
+          break;
+        runs.delete(runId);
+        run.onExit({
+          code: typeof frame.code === "number" ? frame.code : null,
+          canceled: frame.canceled === true,
+          stderr: typeof frame.stderr === "string" ? frame.stderr : ""
+        });
+        break;
+      }
+      case "mcp-list": {
+        const run = typeof frame.runId === "string" ? runs.get(frame.runId) : undefined;
+        if (run && typeof frame.id === "string")
+          run.onMcpList?.(frame.id);
+        break;
+      }
+      case "mcp-call": {
+        const run = typeof frame.runId === "string" ? runs.get(frame.runId) : undefined;
+        if (run && typeof frame.id === "string" && typeof frame.name === "string") {
+          run.onMcpCall?.(frame.id, frame.name, frame.arguments);
+        }
+        break;
+      }
+      case "error": {
+        const message = typeof frame.message === "string" ? frame.message : "Relay error";
+        lastError.set(message);
+        if (typeof frame.id === "string")
+          rejectPending(frame.id, message);
+        if (typeof frame.runId === "string") {
+          const run = runs.get(frame.runId);
+          if (run) {
+            runs.delete(frame.runId);
+            run.onExit({ code: null, canceled: false, stderr: message });
+          }
+        }
+        break;
+      }
+    }
+  }
+  function endAllRuns(reason) {
+    for (const [runId, handlers] of [...runs]) {
+      runs.delete(runId);
+      handlers.onExit({ code: null, canceled: false, stderr: `Relay connection lost: ${reason}` });
+    }
+    for (const id of [...pending.keys()])
+      rejectPending(id, `Relay connection lost: ${reason}`);
+  }
+  async function open() {
+    if (closedByUs)
+      return;
+    const proto = await bearerSubprotocol();
+    if (closedByUs)
+      return;
+    if (!proto) {
+      lastError.set("Not signed in.");
+      failReady("Not signed in.");
+      return;
+    }
+    let ws;
+    try {
+      const hints = new URLSearchParams({
+        deviceId: clientDeviceId(),
+        deviceName: clientDeviceName()
+      });
+      ws = new WebSocket(`${relayWsUrl(`/connect/${encodeURIComponent(deviceId)}`)}?${hints}`, [
+        proto
+      ]);
+    } catch (err) {
+      lastError.set(err instanceof Error ? err.message : String(err));
+      scheduleRetry();
+      return;
+    }
+    socket = ws;
+    ws.onopen = () => {
+      connected.set(true);
+      backoff = BACKOFF_MIN_MS;
+      lastError.set(null);
+    };
+    ws.onmessage = (event) => {
+      if (typeof event.data !== "string")
+        return;
+      let frame;
+      try {
+        frame = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      handleFrame(frame);
+    };
+    ws.onclose = (event) => {
+      connected.set(false);
+      if (socket === ws)
+        socket = null;
+      endAllRuns("socket closed");
+      if (event.code === 4403 || event.code === 4404) {
+        if (event.code === 4403)
+          approval.set("denied");
+        lastError.set(event.code === 4404 ? "That computer is offline." : "That computer isn't yours to use.");
+        failReady(lastError.get() ?? "Relay closed.");
+        return;
+      }
+      scheduleRetry();
+    };
+    ws.onerror = () => {
+      lastError.set("Relay connection error.");
+    };
+  }
+  function scheduleRetry() {
+    if (closedByUs || retryTimer)
+      return;
+    const delay2 = backoff;
+    backoff = Math.min(backoff * 2, BACKOFF_MAX_MS);
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      open();
+    }, delay2);
+  }
+  open();
+  const conn = {
+    deviceId,
+    approval,
+    connected,
+    host,
+    lastError,
+    ready(timeoutMs = REQUEST_TIMEOUT_MS2) {
+      if (connected.get() && approval.get() === "approved")
+        return Promise.resolve();
+      if (approval.get() === "denied") {
+        return Promise.reject(new Error("That computer declined this device."));
+      }
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("That computer hasn't approved this device yet.")), timeoutMs);
+        readyWaiters.push({
+          resolve: () => {
+            clearTimeout(timer);
+            resolve();
+          },
+          reject: (e) => {
+            clearTimeout(timer);
+            reject(e);
+          }
+        });
+        settleReady();
+      });
+    },
+    async detect() {
+      await conn.ready();
+      const frame = await request({ type: "detect" });
+      return {
+        claudeCode: normalizeDetect(frame.claudeCode),
+        cursor: normalizeDetect(frame.cursor)
+      };
+    },
+    async cursorModels(json) {
+      await conn.ready();
+      const frame = await request({ type: "cursor-models", format: json ? "json" : "text" });
+      return typeof frame.output === "string" ? frame.output : "";
+    },
+    async pickFolder() {
+      await conn.ready();
+      const frame = await request({ type: "pick-folder" }, null);
+      return typeof frame.path === "string" ? frame.path : null;
+    },
+    async startRun(args, handlers) {
+      await conn.ready();
+      runs.set(args.runId, handlers);
+      try {
+        send2({ type: "start", ...args });
+      } catch (err) {
+        runs.delete(args.runId);
+        throw err;
+      }
+    },
+    stopRun(runId) {
+      try {
+        send2({ type: "stop", runId });
+      } catch {}
+    },
+    mcpResult(id, result) {
+      try {
+        send2({ type: "mcp-result", id, result });
+      } catch {}
+    },
+    close() {
+      closedByUs = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+      endAllRuns("disconnected");
+      socket?.close();
+      socket = null;
+      connected.set(false);
+    }
+  };
+  return conn;
+}
+function normalizeDetect(value) {
+  const v = value;
+  return {
+    found: v?.found === true,
+    path: typeof v?.path === "string" ? v.path : null
+  };
+}
+// src/localAgents/transport.ts
+var PREF_KEY = "unified.agentCompute.source";
+function initialStatus() {
+  return {
+    connected: false,
+    source: null,
+    pref: loadPref(),
+    bridgeAvailable: null,
+    bridgePaired: hasBridgeToken(),
+    bridgeDeviceId: null,
+    bridgeDeviceName: null,
+    bridgeCapabilities: null,
+    relayHosts: [],
+    resolving: false,
+    lastError: null
+  };
+}
+var status = new Observable(initialStatus());
+function patch(next) {
+  status.set({ ...status.get(), ...next });
+}
+function getLocalAgentStatus() {
+  return status.get();
+}
+function onLocalAgentStatusChange(listener) {
+  return status.subscribe(listener);
+}
+function isDesktopConnected() {
+  return status.get().connected;
+}
+function loadPref() {
+  try {
+    const raw = globalThis.localStorage?.getItem(PREF_KEY) ?? null;
+    if (!raw)
+      return { kind: "auto" };
+    const parsed = JSON.parse(raw);
+    if (parsed?.kind === "relay" && typeof parsed.deviceId === "string")
+      return parsed;
+    if (parsed?.kind === "bridge" || parsed?.kind === "auto")
+      return { kind: parsed.kind };
+  } catch {}
+  return { kind: "auto" };
+}
+function savePref(pref) {
+  try {
+    if (pref.kind === "auto")
+      globalThis.localStorage?.removeItem(PREF_KEY);
+    else
+      globalThis.localStorage?.setItem(PREF_KEY, JSON.stringify(pref));
+  } catch {}
+}
+var resolvePromise = null;
+function resolveLocalAgentSource() {
+  if (!resolvePromise) {
+    patch({ resolving: true });
+    resolvePromise = resolveSourceFor(status.get().pref).then((source) => {
+      patch({ source, connected: source !== null, resolving: false });
+      return source;
+    }, (err) => {
+      patch({
+        source: null,
+        connected: false,
+        resolving: false,
+        lastError: err instanceof Error ? err.message : String(err)
+      });
+      return null;
+    });
+  }
+  return resolvePromise;
+}
+function setLocalAgentSource(pref) {
+  patch({ pref });
+  savePref(pref);
+  if (pref.kind !== "relay")
+    closeAllRelayHosts();
+  return refreshLocalAgents();
+}
+function refreshLocalAgents() {
+  resolvePromise = null;
+  invalidateBridgePort();
+  adoptRefused = false;
+  return resolveLocalAgentSource();
+}
+async function resolveSourceFor(pref) {
+  if (pref.kind === "bridge") {
+    return await bridgeUsable() ? { kind: "bridge" } : null;
+  }
+  if (pref.kind === "relay") {
+    const hosts2 = await refreshRelayHosts();
+    const host = hosts2.find((h) => h.deviceId === pref.deviceId);
+    return {
+      kind: "relay",
+      deviceId: pref.deviceId,
+      deviceName: host?.deviceName ?? pref.deviceId
+    };
+  }
+  if (await bridgeUsable())
+    return { kind: "bridge" };
+  const hosts = await refreshRelayHosts();
+  const first = hosts[0];
+  if (first)
+    return { kind: "relay", deviceId: first.deviceId, deviceName: first.deviceName };
+  return null;
+}
+async function probeBridge() {
+  const port = await discoverBridge();
+  patch({ bridgeAvailable: port !== null });
+  if (port === null)
+    return false;
+  if (hasBridgeToken())
+    await refreshBridgeIdentity();
+  return true;
+}
+async function bridgeUsable() {
+  if (!await probeBridge())
+    return false;
+  if (!hasBridgeToken()) {
+    await adoptApprovedOrigin();
+    if (hasBridgeToken())
+      await refreshBridgeIdentity();
+  }
+  return hasBridgeToken();
+}
+var adoptRefused = false;
+async function adoptApprovedOrigin() {
+  if (hasBridgeToken() || adoptRefused)
+    return;
+  try {
+    await ensureBridgeToken();
+    patch({ bridgePaired: true, lastError: null });
+  } catch {
+    adoptRefused = true;
+  }
+}
+async function refreshBridgeIdentity() {
+  try {
+    const detected = await bridgeDetect();
+    patch({
+      bridgeDeviceId: typeof detected.deviceId === "string" ? detected.deviceId : null,
+      bridgeDeviceName: typeof detected.deviceName === "string" ? detected.deviceName : null,
+      bridgeCapabilities: {
+        claudeCode: detected.claudeCode?.found === true,
+        cursor: detected.cursor?.found === true
+      }
+    });
+  } catch {
+    patch({ bridgeDeviceId: null, bridgeDeviceName: null, bridgeCapabilities: null });
+  }
+}
+async function checkDesktopAvailable() {
+  invalidateBridgePort();
+  return await probeBridge();
+}
+async function connectDesktop(name) {
+  const label = name ?? defaultPairName();
+  try {
+    await pairBridge(label, hasBridgeToken());
+  } catch (err) {
+    if (!hasBridgeToken())
+      throw err;
+    clearBridgeToken();
+    await pairBridge(label);
+  }
+  adoptRefused = false;
+  patch({ bridgePaired: true, bridgeAvailable: true, lastError: null });
+  return await setLocalAgentSource({ kind: "bridge" });
+}
+async function disconnectDesktop() {
+  clearBridgeToken();
+  adoptRefused = false;
+  patch({ bridgePaired: false });
+  if (status.get().pref.kind === "bridge")
+    await setLocalAgentSource({ kind: "auto" });
+  else
+    await refreshLocalAgents();
+}
+async function refreshRelayHosts() {
+  try {
+    const hosts = await listRelayHosts();
+    patch({ relayHosts: hosts });
+    return hosts;
+  } catch {
+    patch({ relayHosts: [] });
+    return [];
+  }
+}
+function listLocalAgentDevices(snapshot) {
+  const s = snapshot ?? getLocalAgentStatus();
+  const devices = [];
+  const bridged = s.bridgeAvailable === true && s.bridgePaired === true;
+  const selfHost = bridged && s.bridgeDeviceId ? s.relayHosts.find((h) => h.deviceId === s.bridgeDeviceId) ?? null : null;
+  if (bridged) {
+    const merged = mergeCaps(s.bridgeCapabilities, hostCaps(selfHost));
+    devices.push({
+      id: "bridge",
+      kind: "bridge",
+      name: "This computer",
+      online: true,
+      ...s.bridgeDeviceName || selfHost?.deviceName ? { machineName: s.bridgeDeviceName || selfHost?.deviceName } : {},
+      ...merged ? { capabilities: merged } : {},
+      pref: { kind: "bridge" }
+    });
+  }
+  for (const host of s.relayHosts) {
+    if (selfHost && host.deviceId === selfHost.deviceId)
+      continue;
+    devices.push({
+      id: host.deviceId,
+      kind: "relay",
+      name: host.deviceName || host.deviceId,
+      online: true,
+      capabilities: hostCaps(host) ?? { claudeCode: false, cursor: false },
+      pref: { kind: "relay", deviceId: host.deviceId }
+    });
+  }
+  return devices;
+}
+function hostCaps(host) {
+  if (!host)
+    return null;
+  return {
+    claudeCode: host.capabilities?.claudeCode?.found === true,
+    cursor: host.capabilities?.cursor?.found === true
+  };
+}
+function mergeCaps(a, b) {
+  if (!a)
+    return b;
+  if (!b)
+    return a;
+  return { claudeCode: a.claudeCode || b.claudeCode, cursor: a.cursor || b.cursor };
+}
+async function refreshLocalAgentDevices() {
+  invalidateBridgePort();
+  adoptRefused = false;
+  patch({ bridgePaired: hasBridgeToken() });
+  await Promise.all([bridgeUsable(), refreshRelayHosts()]);
+  return listLocalAgentDevices();
+}
+var NOT_FOUND = {
+  claudeCode: { found: false, path: null },
+  cursor: { found: false, path: null }
+};
+function sourceFor(pref) {
+  return pref ? resolveSourceFor(pref) : resolveLocalAgentSource();
+}
+async function detectAgents(pref) {
+  const source = await sourceFor(pref);
+  if (!source)
+    return NOT_FOUND;
+  if (source.kind === "bridge") {
+    try {
+      const { claudeCode, cursor } = await bridgeDetect();
+      return { claudeCode, cursor };
+    } catch {
+      return NOT_FOUND;
+    }
+  }
+  const host = status.get().relayHosts.find((h) => h.deviceId === source.deviceId);
+  if (!host)
+    return NOT_FOUND;
+  return {
+    claudeCode: { found: host.capabilities?.claudeCode?.found === true, path: null },
+    cursor: { found: host.capabilities?.cursor?.found === true, path: null }
+  };
+}
+async function cursorModelsOutput(json, pref) {
+  const source = await sourceFor(pref);
+  if (!source)
+    return { ok: false, output: "" };
+  try {
+    if (source.kind === "bridge") {
+      const output2 = await bridgeCursorModels(json);
+      return { ok: !!output2.trim(), output: output2 };
+    }
+    const output = await connectRelayHost(source.deviceId).cursorModels(json);
+    return { ok: !!output.trim(), output };
+  } catch {
+    return { ok: false, output: "" };
+  }
+}
+async function pickWorkspaceFolder(pref) {
+  const source = await sourceFor(pref);
+  if (!source)
+    return null;
+  if (source.kind === "bridge")
+    return await bridgePickFolder();
+  return await connectRelayHost(source.deviceId).pickFolder();
+}
+async function startAgentRun(lane, args, handlers, pref) {
+  const source = await sourceFor(pref);
+  if (!source)
+    throw new Error("No computer available to run local coding agents.");
+  return source.kind === "bridge" ? await startBridgeRun(lane, args, handlers) : await startRelayRun(source.deviceId, lane, args, handlers);
+}
+function startPayload(lane, args) {
+  return {
+    runId: args.runId,
+    prompt: args.prompt,
+    model: args.model,
+    ...lane === "claude-code" ? { effort: args.effort ?? null, systemPrompt: args.systemPrompt ?? null } : {},
+    resume: args.resume ?? null,
+    workspace: args.workspace ?? null,
+    trustWorkspace: args.trustWorkspace ?? false,
+    extraDirs: args.extraDirs ?? [],
+    mcp: args.mcp
+  };
+}
+function mcpRouter(handlers, answer) {
+  return {
+    onMcpList: (id) => answer(id, { tools: handlers.onMcpList() }),
+    onMcpCall: (id, name, args) => {
+      handlers.onMcpCall(name, args).then((result) => answer(id, result), (err) => answer(id, {
+        content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }],
+        isError: true
+      }));
+    }
+  };
+}
+async function startBridgeRun(lane, args, handlers) {
+  const answer = (id, result) => {
+    bridgeMcpResult(id, result).catch(() => {});
+  };
+  const mcp = mcpRouter(handlers, answer);
+  let stream = null;
+  let done = false;
+  const finish = (exit) => {
+    if (done)
+      return;
+    done = true;
+    stream?.close();
+    handlers.onExit(exit);
+  };
+  stream = await openRunEvents(args.runId, {
+    onLine: handlers.onLine,
+    onExit: finish,
+    onMcpList: mcp.onMcpList,
+    onMcpCall: mcp.onMcpCall,
+    onError: (message) => finish({ code: null, canceled: false, stderr: message })
+  });
+  try {
+    await bridgeStartRun({ lane, ...startPayload(lane, args) });
+  } catch (err) {
+    stream.close();
+    throw err;
+  }
+  return {
+    stop() {
+      bridgeStopRun(args.runId).catch(() => {});
+    }
+  };
+}
+async function startRelayRun(deviceId, lane, args, handlers) {
+  const conn = connectRelayHost(deviceId);
+  const answer = (id, result) => conn.mcpResult(id, result);
+  const mcp = mcpRouter(handlers, answer);
+  await conn.startRun({ lane, ...startPayload(lane, args) }, {
+    onLine: handlers.onLine,
+    onExit: handlers.onExit,
+    onMcpList: mcp.onMcpList,
+    onMcpCall: mcp.onMcpCall
+  });
+  return {
+    stop() {
+      conn.stopRun(args.runId);
+    }
+  };
+}
+function _resetLocalAgentState() {
+  resolvePromise = null;
+  adoptRefused = false;
+  invalidateBridgePort();
+  closeAllRelayHosts();
+  status.set(initialStatus());
+}
+// src/localAgents/_internal/cursorModelList.ts
+function variantKey(effortId, modeIds) {
+  return [effortId ?? "", ...[...modeIds].sort()].join("+");
+}
+var EFFORT_LEVEL_LABELS = [
+  { id: "none", label: "None" },
+  { id: "minimal", label: "Minimal" },
+  { id: "low", label: "Low" },
+  { id: "medium", label: "Medium" },
+  { id: "high", label: "High" },
+  { id: "xhigh", label: "Extra High" },
+  { id: "max", label: "Max" }
+];
+function titleCase(id) {
+  return id.charAt(0).toUpperCase() + id.slice(1);
+}
+function effortLabel(id) {
+  return EFFORT_LEVEL_LABELS.find((l) => l.id === id)?.label ?? titleCase(id);
+}
+var MODE_META = {
+  fast: { label: "Fast", hint: "Prioritize speed over depth" },
+  thinking: { label: "Thinking", hint: "Show extended reasoning" }
+};
+function modeLabel(id) {
+  return MODE_META[id]?.label ?? titleCase(id);
+}
+function modeHint(id) {
+  return MODE_META[id]?.hint;
+}
+var ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
+var ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
+var DEFAULT_MARK_RE = /\(\s*(?:(?:default|current|selected)\s*,?\s*)+\)|\*\s*$|^\*\s*/i;
+function looksLikeId(token) {
+  return ID_RE.test(token) && token.length <= 64;
+}
+var BARE_IDS = new Set([
+  "auto",
+  "composer",
+  "fusion",
+  "grok",
+  "codex",
+  "sonnet",
+  "opus",
+  "haiku",
+  "gemini"
+]);
+function plausibleTextId(token) {
+  return looksLikeId(token) && (/[\d-]/.test(token) || BARE_IDS.has(token));
+}
+function prettifyModelId(id) {
+  if (id === "auto")
+    return "Auto";
+  return id.split(/[-_]/).filter(Boolean).map((part) => {
+    if (/^(gpt|o\d)$/i.test(part))
+      return part.toUpperCase();
+    if (/^\d/.test(part))
+      return part;
+    return part.charAt(0).toUpperCase() + part.slice(1);
+  }).join(" ");
+}
+function fromJsonValue(value) {
+  const pick = (obj, keys) => {
+    for (const k of keys) {
+      const v = obj[k];
+      if (typeof v === "string" && v.trim())
+        return v.trim();
+    }
+    return;
+  };
+  let list = null;
+  if (Array.isArray(value))
+    list = value;
+  else if (value && typeof value === "object") {
+    const obj = value;
+    for (const k of ["models", "data", "items", "result"]) {
+      if (Array.isArray(obj[k])) {
+        list = obj[k];
+        break;
+      }
+    }
+  }
+  if (!list)
+    return [];
+  const out = [];
+  for (const item of list) {
+    if (typeof item === "string") {
+      if (looksLikeId(item))
+        out.push({ id: item, name: prettifyModelId(item) });
+      continue;
+    }
+    if (!item || typeof item !== "object")
+      continue;
+    const obj = item;
+    const id = pick(obj, ["id", "model", "slug", "value", "name"]);
+    if (!id || !looksLikeId(id))
+      continue;
+    const name = pick(obj, ["displayName", "display_name", "label", "title", "name"]);
+    const isDefault = obj.default === true || obj.isDefault === true || obj.is_default === true;
+    out.push({
+      id,
+      name: name && name !== id ? name : prettifyModelId(id),
+      ...isDefault ? { isDefault: true } : {}
+    });
+  }
+  return out;
+}
+function fromText(raw) {
+  const out = [];
+  for (const rawLine of raw.replace(ANSI_RE, "").split(/\r?\n/)) {
+    let line = rawLine.trim();
+    if (!line || line.endsWith(":"))
+      continue;
+    if (/[`<>]|--/.test(line))
+      continue;
+    if (/^(usage|options?|commands?|available models|models)\b/i.test(line) && !/[-–:]\s/.test(line)) {
+      continue;
+    }
+    const isDefault = DEFAULT_MARK_RE.test(line);
+    line = line.replace(DEFAULT_MARK_RE, "").trim();
+    line = line.replace(/^[-*•>]\s+/, "");
+    const paren = /^(.*?)\s*\(([a-z0-9][a-z0-9._-]*)\)\s*$/.exec(line);
+    if (paren && plausibleTextId(paren[2])) {
+      const id2 = paren[2];
+      const name = paren[1].trim() || prettifyModelId(id2);
+      out.push({ id: id2, name, ...isDefault ? { isDefault: true } : {} });
+      continue;
+    }
+    const m = /^([^\s:—–-]+(?:-[^\s:—–]+)*)\s*(?:[—–:-]\s*|\s{2,}|\s+)?(.*)$/.exec(line);
+    if (!m)
+      continue;
+    const id = m[1];
+    if (!plausibleTextId(id))
+      continue;
+    const rest = m[2].trim();
+    out.push({ id, name: rest || prettifyModelId(id), ...isDefault ? { isDefault: true } : {} });
+  }
+  return out;
+}
+function parseCursorModelList(raw) {
+  const trimmed = raw.replace(ANSI_RE, "").trim();
+  if (!trimmed)
+    return [];
+  let entries = [];
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      entries = fromJsonValue(JSON.parse(trimmed));
+    } catch {
+      entries = [];
+    }
+  }
+  if (!entries.length)
+    entries = fromText(trimmed);
+  const seen = new Set;
+  return entries.filter((e) => {
+    if (seen.has(e.id))
+      return false;
+    seen.add(e.id);
+    return true;
+  });
+}
+var CURSOR_FAMILIES = ["grok", "composer", "kimi"];
+var EFFORT_TOKENS = new Set([
+  "fast",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "none",
+  "minimal",
+  "thinking"
+]);
+var EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+var MODE_FLAGS = new Set(["fast", "thinking"]);
+var MODE_ORDER = ["fast", "thinking"];
+function splitVariant(id) {
+  const toks = tokensOf(id);
+  const suffix = [];
+  while (toks.length > 1 && EFFORT_TOKENS.has(toks[toks.length - 1]))
+    suffix.unshift(toks.pop());
+  const level = suffix.find((t) => EFFORT_LEVELS.includes(t)) ?? null;
+  const flags = suffix.filter((t) => MODE_FLAGS.has(t)).sort();
+  return { base: toks.join("-"), level, flags };
+}
+var EFFORT_WORDS_RE = /\b(fast|low|medium|high|extra high|xhigh|max|none|minimal|thinking)\b/gi;
+var tokensOf = (id) => id.split(/[-_]/).filter(Boolean);
+function familyOf(id, families = CURSOR_FAMILIES) {
+  const toks = tokensOf(id);
+  return families.find((f) => toks.includes(f)) ?? null;
+}
+function baseModelId(id) {
+  const toks = tokensOf(id);
+  while (toks.length > 1 && EFFORT_TOKENS.has(toks[toks.length - 1]))
+    toks.pop();
+  return toks.join("-");
+}
+function versionOf(base, family) {
+  const toks = tokensOf(base);
+  const after = toks.slice(toks.indexOf(family) + 1);
+  const vt = after.find((t) => /\d/.test(t));
+  if (!vt)
+    return [];
+  return vt.replace(/^[a-z]+/i, "").split(".").map((n) => Number(n) || 0);
+}
+function compareVersions(a, b) {
+  for (let i = 0;i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0);
+    if (d)
+      return d;
+  }
+  return 0;
+}
+function effortWordCount(name) {
+  return (name.match(EFFORT_WORDS_RE) ?? []).length;
+}
+function pickLatestPerFamily(entries, families = CURSOR_FAMILIES) {
+  const out = entries.filter((e) => e.id === "auto").slice(0, 1);
+  for (const family of families) {
+    const members = entries.filter((e) => e.id !== "auto" && familyOf(e.id, families) === family);
+    if (!members.length)
+      continue;
+    let bestBase = null;
+    let bestVersion = [];
+    for (const m of members) {
+      const base = baseModelId(m.id);
+      const v = versionOf(base, family);
+      if (bestBase === null || compareVersions(v, bestVersion) > 0) {
+        bestBase = base;
+        bestVersion = v;
+      }
+    }
+    const siblings = members.filter((m) => baseModelId(m.id) === bestBase).sort((a, b) => effortWordCount(a.name) - effortWordCount(b.name) || Number(a.id.endsWith("-fast")) - Number(b.id.endsWith("-fast")) || a.id.length - b.id.length);
+    const canonical = siblings[0];
+    const canon = splitVariant(canonical.id);
+    const rows = siblings.map((v) => ({ v, parts: splitVariant(v.id) })).filter(({ parts }) => canon.flags.every((f) => parts.flags.includes(f)));
+    const variants = {};
+    const extras = new Set;
+    for (const { v, parts } of rows) {
+      const extra = parts.flags.filter((f) => !canon.flags.includes(f));
+      for (const f of extra)
+        extras.add(f);
+      variants[variantKey(parts.level, extra)] = v.id;
+    }
+    const levels = rows.filter(({ parts }) => parts.level && parts.flags.length === canon.flags.length).sort((a, b) => EFFORT_LEVELS.indexOf(a.parts.level) - EFFORT_LEVELS.indexOf(b.parts.level)).map(({ v, parts }) => ({
+      id: parts.level,
+      cliId: v.id,
+      ...v.id === canonical.id ? { default: true } : {}
+    }));
+    const modes = [...extras].sort((a, b) => MODE_ORDER.indexOf(a) - MODE_ORDER.indexOf(b));
+    out.push({
+      ...canonical,
+      ...levels.length >= 2 ? { efforts: levels } : {},
+      ...modes.length ? { modes } : {},
+      ...levels.length >= 2 || modes.length ? { variants } : {}
+    });
+  }
+  return out;
+}
+
+// src/localAgents/catalog.ts
+var CLAUDE_CODE_MODEL_PREFIX = "claude-code/";
+var CURSOR_MODEL_PREFIX = "cursor/";
+function isLocalAgentModel(modelId) {
+  if (!modelId)
+    return false;
+  return modelId.startsWith(CLAUDE_CODE_MODEL_PREFIX) || modelId.startsWith(CURSOR_MODEL_PREFIX);
+}
+function laneForModel(modelId) {
+  if (modelId.startsWith(CLAUDE_CODE_MODEL_PREFIX))
+    return "claude-code";
+  if (modelId.startsWith(CURSOR_MODEL_PREFIX))
+    return "cursor";
+  return null;
+}
+var LEGACY_AUTO_ALIAS = "auto";
+function claudeCodeCliModel(modelId) {
+  const alias = modelId.slice(CLAUDE_CODE_MODEL_PREFIX.length);
+  return alias === LEGACY_AUTO_ALIAS ? null : alias;
+}
+var DEFAULT_EFFORT_ID = "medium";
+var CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"].map((id) => ({
+  id,
+  label: effortLabel(id),
+  ...id === DEFAULT_EFFORT_ID ? { default: true } : {}
+}));
+var CLAUDE_MODELS = [
+  { alias: "opus", name: "Claude Opus", effort: true },
+  { alias: "sonnet", name: "Claude Sonnet", effort: true },
+  { alias: "haiku", name: "Claude Haiku" },
+  { alias: "fable", name: "Claude Fable", effort: true }
+];
+function claudeCodeModelName(alias) {
+  if (alias === LEGACY_AUTO_ALIAS)
+    return "Claude Code";
+  return CLAUDE_MODELS.find((m) => m.alias === alias)?.name ?? `Claude ${alias}`;
+}
+var CLAUDE_CODE_CONTEXT_SIZE = 200000;
+var CURSOR_CONTEXT_SIZE = 200000;
+function claudeCodeModels() {
+  return CLAUDE_MODELS.map((m) => ({
+    id: `${CLAUDE_CODE_MODEL_PREFIX}${m.alias}`,
+    "model-id": `${CLAUDE_CODE_MODEL_PREFIX}${m.alias}`,
+    name: m.name,
+    author: "Claude Code",
+    type: "text",
+    owned_by: "claude-code",
+    context_size: CLAUDE_CODE_CONTEXT_SIZE,
+    ...m.effort ? { efforts: CLAUDE_EFFORTS } : {}
+  }));
+}
+function cursorCliModel(modelId) {
+  const cli = modelId.slice(CURSOR_MODEL_PREFIX.length);
+  return cli === "auto" ? null : cli;
+}
+var FALLBACK_CURSOR_MODELS = [{ id: "auto", name: "Cursor Agent" }];
+var FORMAT_KEY = "unified.cursor.modelsFormat";
+function preferredFormat() {
+  try {
+    const raw = globalThis.localStorage?.getItem(FORMAT_KEY) ?? null;
+    return raw === "json" ? true : raw === "plain" ? false : null;
+  } catch {
+    return null;
+  }
+}
+function rememberFormat(json) {
+  try {
+    globalThis.localStorage?.setItem(FORMAT_KEY, json ? "json" : "plain");
+  } catch {}
+}
+var modelListPromises = new Map;
+function prefKey(pref) {
+  if (!pref)
+    return "auto";
+  return pref.kind === "relay" ? `relay:${pref.deviceId}` : pref.kind;
+}
+function listCursorModels(pref) {
+  const key = prefKey(pref);
+  let promise = modelListPromises.get(key);
+  if (!promise) {
+    promise = (async () => {
+      const first = preferredFormat() ?? true;
+      for (const json of [first, !first]) {
+        try {
+          const out = await cursorModelsOutput(json, pref);
+          if (!out.ok)
+            continue;
+          const entries = parseCursorModelList(out.output);
+          if (entries.length) {
+            rememberFormat(json);
+            return entries;
+          }
+        } catch {}
+      }
+      return FALLBACK_CURSOR_MODELS;
+    })();
+    modelListPromises.set(key, promise);
+  }
+  return promise;
+}
+function invalidateCursorModels() {
+  modelListPromises.clear();
+}
+async function cursorModels(pref) {
+  const ordered = pickLatestPerFamily(await listCursorModels(pref));
+  return ordered.map((m) => ({
+    id: `${CURSOR_MODEL_PREFIX}${m.id}`,
+    "model-id": `${CURSOR_MODEL_PREFIX}${m.id}`,
+    name: m.id === "auto" ? "Cursor Agent" : m.name,
+    author: "Cursor",
+    type: "text",
+    owned_by: "cursor",
+    context_size: CURSOR_CONTEXT_SIZE,
+    ...m.efforts ? {
+      efforts: m.efforts.map((e) => ({
+        id: e.id,
+        label: effortLabel(e.id),
+        modelId: `${CURSOR_MODEL_PREFIX}${e.cliId}`,
+        ...e.default ? { default: true } : {}
+      }))
+    } : {},
+    ...m.modes ? {
+      modes: m.modes.map((id) => {
+        const hint = modeHint(id);
+        return { id, label: modeLabel(id), ...hint ? { hint } : {} };
+      })
+    } : {},
+    ...m.variants ? {
+      variants: Object.fromEntries(Object.entries(m.variants).map(([k, cliId]) => [k, `${CURSOR_MODEL_PREFIX}${cliId}`]))
+    } : {}
+  }));
+}
+async function listLocalModels(pref) {
+  let detected;
+  try {
+    detected = await detectAgents(pref);
+  } catch {
+    return [];
+  }
+  const out = [];
+  if (detected.claudeCode.found)
+    out.push(...claudeCodeModels());
+  if (detected.cursor.found) {
+    try {
+      out.push(...await cursorModels(pref));
+    } catch {}
+  }
+  return out;
+}
+function placeholderLocalModel(modelId) {
+  if (modelId.startsWith(CLAUDE_CODE_MODEL_PREFIX)) {
+    return {
+      id: modelId,
+      "model-id": modelId,
+      name: claudeCodeModelName(modelId.slice(CLAUDE_CODE_MODEL_PREFIX.length)),
+      author: "Claude Code",
+      owned_by: "claude-code"
+    };
+  }
+  if (modelId.startsWith(CURSOR_MODEL_PREFIX)) {
+    const cli = modelId.slice(CURSOR_MODEL_PREFIX.length);
+    return {
+      id: modelId,
+      "model-id": modelId,
+      name: cli === "auto" ? "Cursor Agent" : prettifyModelId(cli.replace(/^cursor-/, "")),
+      author: "Cursor",
+      owned_by: "cursor"
+    };
+  }
+  return null;
+}
+// src/localAgents/_internal/prompt.ts
+function foldHistoryPrompt(messages, userText, hasSession) {
+  if (hasSession)
+    return userText;
+  const history = messages.filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content.trim());
+  if (history.length && history[history.length - 1]?.content === userText)
+    history.pop();
+  if (!history.length)
+    return userText;
+  const transcript = history.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`).join(`
+
+`);
+  return `Earlier conversation for context:
+
+${transcript}
+
+---
+
+${userText}`;
+}
+function systemText(messages) {
+  return messages.filter((m) => m.role === "system" && typeof m.content === "string").map((m) => m.content.trim()).filter(Boolean).join(`
+
+`);
+}
+function withSystemPrompt(system, prompt) {
+  if (!system)
+    return prompt;
+  return `<system-instructions>
+${system}
+</system-instructions>
+
+${prompt}`;
+}
+var CLAUDE_CODE_SESSIONS_KEY = "unified.claudeCodeSessions";
+var CURSOR_SESSIONS_KEY = "unified.cursorSessions";
+var EPHEMERAL_CONVERSATION_PREFIX = "ephemeral:";
+function isEphemeralConversation(conversationId) {
+  return conversationId.startsWith(EPHEMERAL_CONVERSATION_PREFIX);
+}
+function sessionScope(conversationId, workspace) {
+  return workspace ? `${conversationId} ws:${workspace}` : conversationId;
+}
+function loadSessions(key) {
+  try {
+    const raw = globalThis.localStorage?.getItem(key) ?? null;
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function sessionFor(key, conversationId) {
+  if (isEphemeralConversation(conversationId))
+    return null;
+  return loadSessions(key)[conversationId] ?? null;
+}
+function forgetSession(key, conversationId) {
+  try {
+    const sessions = loadSessions(key);
+    delete sessions[conversationId];
+    globalThis.localStorage?.setItem(key, JSON.stringify(sessions));
+  } catch {}
+}
+function rememberSession(key, conversationId, sessionId) {
+  if (isEphemeralConversation(conversationId))
+    return;
+  try {
+    const sessions = loadSessions(key);
+    sessions[conversationId] = sessionId;
+    globalThis.localStorage?.setItem(key, JSON.stringify(sessions));
+  } catch {}
+}
+
+// src/localAgents/_internal/toolServer.ts
+function stableStringify(value) {
+  if (value === null || typeof value !== "object")
+    return JSON.stringify(value);
+  if (Array.isArray(value))
+    return `[${value.map(stableStringify).join(",")}]`;
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
+}
+function inflightKey(name, args) {
+  return `${name} ${stableStringify(args)}`;
+}
+function toMcpToolDef(spec) {
+  const fn = spec.definition.function;
+  return {
+    name: fn.name,
+    description: fn.description ?? "",
+    inputSchema: fn.parameters ?? {
+      type: "object",
+      properties: {}
+    }
+  };
+}
+function createToolServer(tools, signal) {
+  const inflight = new Map;
+  async function execute(name, args) {
+    const spec = tools?.find((t) => t.definition.function.name === name);
+    if (!spec) {
+      return {
+        content: [{ type: "text", text: `tool "${name}" is not available` }],
+        isError: true
+      };
+    }
+    const input = args && typeof args === "object" ? args : {};
+    try {
+      const result = await spec.execute(input, signal);
+      return { content: [{ type: "text", text: result.content }], isError: !!result.isError };
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }],
+        isError: true
+      };
+    }
+  }
+  return {
+    list() {
+      return (tools ?? []).map(toMcpToolDef);
+    },
+    call(name, args) {
+      const key = inflightKey(name, args);
+      let call = inflight.get(key);
+      if (!call) {
+        call = execute(name, args).finally(() => {
+          if (inflight.get(key) === call)
+            inflight.delete(key);
+        });
+        inflight.set(key, call);
+      }
+      return call;
+    }
+  };
+}
+
+// src/localAgents/_internal/translators.ts
+var TOOL_RESULT_MAX_CHARS = 4000;
+var MCP_TOOL_PREFIX = "mcp__unifiedapp__";
+function claudeToolName(name) {
+  return name.startsWith(MCP_TOOL_PREFIX) ? name.slice(MCP_TOOL_PREFIX.length) : name;
+}
+function stringifyToolResult(content) {
+  let text;
+  if (typeof content === "string") {
+    text = content;
+  } else if (Array.isArray(content)) {
+    text = content.map((block) => {
+      const b = block;
+      return typeof b?.text === "string" ? b.text : JSON.stringify(block);
+    }).join(`
+`);
+  } else {
+    try {
+      text = JSON.stringify(content ?? "");
+    } catch {
+      text = "[unserializable tool result]";
+    }
+  }
+  return text.length > TOOL_RESULT_MAX_CHARS ? `${text.slice(0, TOOL_RESULT_MAX_CHARS)}…` : text;
+}
+function createClaudeCodeStreamTranslator(onEvent) {
+  let allText = "";
+  let seenText = "";
+  let seenThinking = "";
+  let lastAggregate = "";
+  let toolActivity = false;
+  let sessionId;
+  let result = null;
+  const partialTools = new Map;
+  const emitText = (delta) => {
+    if (!delta)
+      return;
+    allText += delta;
+    onEvent({ type: "text_delta", delta });
+  };
+  const emitSuffix = (full, seen, emit) => {
+    if (full.startsWith(seen)) {
+      const suffix = full.slice(seen.length);
+      if (suffix.trim())
+        emit(suffix);
+      return full;
+    }
+    emit(full);
+    return full;
+  };
+  const handleStreamEvent = (event) => {
+    const index = typeof event.index === "number" ? event.index : 0;
+    switch (event.type) {
+      case "message_start":
+        seenText = "";
+        seenThinking = "";
+        break;
+      case "content_block_start": {
+        const block = event.content_block ?? {};
+        if (block.type === "tool_use" && typeof block.name === "string") {
+          partialTools.set(index, { name: claudeToolName(block.name), args: "" });
+        }
+        break;
+      }
+      case "content_block_delta": {
+        const delta = event.delta ?? {};
+        if (delta.type === "text_delta" && typeof delta.text === "string") {
+          seenText += delta.text;
+          emitText(delta.text);
+        } else if (delta.type === "thinking_delta" && typeof delta.thinking === "string") {
+          seenThinking += delta.thinking;
+          onEvent({ type: "thinking_delta", delta: delta.thinking });
+        } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
+          const pending = partialTools.get(index);
+          if (pending) {
+            pending.args += delta.partial_json;
+            onEvent({
+              type: "tool_partial",
+              name: pending.name,
+              chars: pending.args.length,
+              args: pending.args
+            });
+          }
+        }
+        break;
+      }
+      case "content_block_stop":
+        partialTools.delete(index);
+        break;
+    }
+  };
+  const handleAssistantMessage = (message) => {
+    if (message.model === "<synthetic>")
+      return;
+    const content = Array.isArray(message.content) ? message.content : [];
+    const textBlocks = content.filter((b) => b?.type === "text");
+    const thinkingBlocks = content.filter((b) => b?.type === "thinking");
+    const fullThinking = thinkingBlocks.map((b) => b.thinking ?? "").join("");
+    if (fullThinking) {
+      seenThinking = emitSuffix(fullThinking, seenThinking, (d) => onEvent({ type: "thinking_delta", delta: d }));
+    }
+    const fullText = textBlocks.map((b) => b.text ?? "").join("");
+    if (fullText && fullText.trim() !== lastAggregate.trim()) {
+      seenText = emitSuffix(fullText, seenText, emitText);
+      lastAggregate = fullText;
+    }
+    for (const block of content) {
+      const b = block;
+      if (b?.type !== "tool_use" || typeof b.name !== "string")
+        continue;
+      toolActivity = true;
+      onEvent({
+        type: "tool_use",
+        id: typeof b.id === "string" ? b.id : crypto.randomUUID(),
+        name: claudeToolName(b.name),
+        input: b.input && typeof b.input === "object" ? b.input : {}
+      });
+      seenText = "";
+      lastAggregate = "";
+    }
+  };
+  const handleLine = (line) => {
+    let ev;
+    try {
+      ev = JSON.parse(line);
+    } catch {
+      return;
+    }
+    if (typeof ev.session_id === "string" && ev.session_id)
+      sessionId = ev.session_id;
+    if (ev.parent_tool_use_id)
+      return;
+    switch (ev.type) {
+      case "stream_event":
+        handleStreamEvent(ev.event ?? {});
+        break;
+      case "assistant":
+        handleAssistantMessage(ev.message ?? {});
+        break;
+      case "user": {
+        const message = ev.message ?? {};
+        const content = Array.isArray(message.content) ? message.content : [];
+        for (const block of content) {
+          const b = block;
+          if (b?.type !== "tool_result" || typeof b.tool_use_id !== "string")
+            continue;
+          onEvent({
+            type: "tool_result",
+            toolUseId: b.tool_use_id,
+            content: stringifyToolResult(b.content),
+            isError: b.is_error === true
+          });
+        }
+        break;
+      }
+      case "result": {
+        const usage = ev.usage ?? {};
+        const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
+        const outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
+        if (inputTokens || outputTokens) {
+          onEvent({ type: "usage", usage: { inputTokens, outputTokens } });
+        }
+        result = {
+          isError: ev.is_error === true,
+          text: typeof ev.result === "string" ? ev.result : "",
+          ...sessionId !== undefined ? { sessionId } : {}
+        };
+        break;
+      }
+    }
+  };
+  return {
+    handleLine,
+    emitText,
+    get allText() {
+      return allText;
+    },
+    get toolActivity() {
+      return toolActivity;
+    },
+    get sessionId() {
+      return sessionId;
+    },
+    get result() {
+      return result;
+    }
+  };
+}
+var AUTH_FAILURE_RE = /failed to authenticate|oauth session expired|invalid api key|not logged in|please run .*(login|auth)/i;
+function explainFailure(detail) {
+  const text = detail.trim();
+  if (!AUTH_FAILURE_RE.test(text))
+    return text;
+  return `Claude Code isn't signed in. Run \`claude\` in a terminal and sign in, then retry this message. (${text})`;
+}
+function isMissingSession(stderr) {
+  return /no conversation found/i.test(stderr);
+}
+function isRecord(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function safeStringify(value) {
+  try {
+    return JSON.stringify(value ?? {});
+  } catch {
+    return "[unserializable tool result]";
+  }
+}
+function mcpToolResultText(result) {
+  const blocks = result.content;
+  if (!Array.isArray(blocks))
+    return null;
+  const text = blocks.filter((b) => isRecord(b) && typeof b.text === "string").map((b) => b.text).join(`
+`).trim();
+  return text || null;
+}
+function cursorToolName(toolCall) {
+  const key = Object.keys(toolCall)[0];
+  if (!key)
+    return { name: "tool", body: {} };
+  const body = toolCall[key];
+  return {
+    name: key.replace(/ToolCall$/, ""),
+    body: body && typeof body === "object" ? body : {}
+  };
+}
+function createCursorStreamTranslator(onEvent) {
+  let allText = "";
+  let segmentText = "";
+  let lastAggregate = "";
+  let toolActivity = false;
+  let result = null;
+  const emitText = (delta) => {
+    if (!delta)
+      return;
+    allText += delta;
+    onEvent({ type: "text_delta", delta });
+  };
+  const handleLine = (line) => {
+    let ev;
+    try {
+      ev = JSON.parse(line);
+    } catch {
+      return;
+    }
+    switch (ev.type) {
+      case "assistant": {
+        const message = ev.message;
+        const text = (message?.content ?? []).filter((p) => p?.type === "text" && typeof p.text === "string").map((p) => p.text).join("");
+        if (!text)
+          break;
+        const isDelta = "timestamp_ms" in ev && !("model_call_id" in ev);
+        if (isDelta) {
+          segmentText += text;
+          emitText(text);
+        } else {
+          if (text.startsWith(segmentText)) {
+            const suffix = text.slice(segmentText.length);
+            if (suffix.trim())
+              emitText(suffix);
+            segmentText = text;
+          } else if (text.trim() !== lastAggregate.trim()) {
+            emitText(text);
+            segmentText += text;
+          }
+          lastAggregate = text;
+        }
+        break;
+      }
+      case "thinking": {
+        if (ev.subtype === "delta" && typeof ev.text === "string" && ev.text) {
+          onEvent({ type: "thinking_delta", delta: ev.text });
+        }
+        break;
+      }
+      case "tool_call": {
+        const callId = typeof ev.call_id === "string" ? ev.call_id : crypto.randomUUID();
+        let { name, body } = cursorToolName(ev.tool_call ?? {});
+        let args = body.args;
+        if (name === "mcp") {
+          const a = args ?? {};
+          if (typeof a.name === "string")
+            name = a.name.replace(/^unifiedapp-/, "");
+          args = a.args;
+        }
+        toolActivity = true;
+        segmentText = "";
+        lastAggregate = "";
+        if (ev.subtype === "started") {
+          onEvent({
+            type: "tool_use",
+            id: callId,
+            name,
+            input: args && typeof args === "object" ? args : {}
+          });
+        } else if (ev.subtype === "completed") {
+          const res = body.result;
+          let isError;
+          let content;
+          if (!res) {
+            isError = true;
+            content = "[no tool result]";
+          } else if ("success" in res) {
+            if (isRecord(res.success)) {
+              isError = res.success.isError === true;
+              content = mcpToolResultText(res.success) ?? safeStringify(res.success);
+            } else {
+              isError = false;
+              content = safeStringify(res.success);
+            }
+          } else {
+            isError = true;
+            content = safeStringify(res);
+          }
+          if (content.length > TOOL_RESULT_MAX_CHARS) {
+            content = `${content.slice(0, TOOL_RESULT_MAX_CHARS)}…`;
+          }
+          onEvent({ type: "tool_result", toolUseId: callId, content, isError });
+        }
+        break;
+      }
+      case "result": {
+        result = {
+          isError: ev.is_error === true,
+          text: typeof ev.result === "string" ? ev.result : "",
+          ...typeof ev.session_id === "string" ? { sessionId: ev.session_id } : {}
+        };
+        break;
+      }
+    }
+  };
+  return {
+    handleLine,
+    emitText,
+    get allText() {
+      return allText;
+    },
+    get toolActivity() {
+      return toolActivity;
+    },
+    get result() {
+      return result;
+    }
+  };
+}
+
+// src/localAgents/run.ts
+function latestUserText(messages) {
+  for (let i = (messages?.length ?? 0) - 1;i >= 0; i--) {
+    const m = messages?.[i];
+    if (!m || m.role !== "user")
+      continue;
+    if (typeof m.content === "string")
+      return m.content;
+    if (Array.isArray(m.content))
+      return flattenParts(m.content);
+  }
+  return "";
+}
+function flattenParts(parts) {
+  return parts.map((p) => p && typeof p === "object" && ("text" in p) ? String(p.text ?? "") : "").filter(Boolean).join(`
+`);
+}
+function runAttempt(lane, opts, messages, userText, system, signal, onEvent, resume, scope) {
+  const modelId = opts.model;
+  const runId = crypto.randomUUID();
+  const folded = foldHistoryPrompt(messages, userText, !!resume);
+  const prompt = lane === "claude-code" ? folded : withSystemPrompt(system, folded);
+  const tools = createToolServer(opts.tools, signal);
+  const mcp = !!opts.tools?.length;
+  const translator = lane === "claude-code" ? createClaudeCodeStreamTranslator(onEvent) : createCursorStreamTranslator(onEvent);
+  const sessionsKey = lane === "claude-code" ? CLAUDE_CODE_SESSIONS_KEY : CURSOR_SESSIONS_KEY;
+  return new Promise((resolve) => {
+    let settled = false;
+    let handle = null;
+    const finish = (result) => {
+      if (settled)
+        return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      resolve(result);
+    };
+    const onAbort = () => {
+      handle?.stop();
+    };
+    signal.addEventListener("abort", onAbort);
+    const produced = () => translator.allText.length > 0 || translator.toolActivity;
+    const fail = (error, sessionMissing = false) => finish({
+      ok: false,
+      error,
+      ...sessionMissing ? { sessionMissing: true } : {},
+      model: modelId,
+      producedOutput: produced(),
+      messages
+    });
+    (async () => {
+      try {
+        if (signal.aborted) {
+          finish({ ok: false, canceled: true, model: modelId, producedOutput: false, messages });
+          return;
+        }
+        handle = await startAgentRun(lane, {
+          runId,
+          prompt,
+          model: lane === "claude-code" ? claudeCodeCliModel(modelId) : cursorCliModel(modelId),
+          ...lane === "claude-code" ? { effort: opts.effort ?? null, systemPrompt: system || null } : {},
+          resume,
+          workspace: opts.workspace ?? null,
+          trustWorkspace: opts.trustWorkspace ?? false,
+          extraDirs: opts.extraDirs ?? [],
+          mcp
+        }, {
+          onLine: (line) => translator.handleLine(line),
+          onMcpList: () => tools.list(),
+          onMcpCall: (name, args) => tools.call(name, args),
+          onExit({ code, canceled, stderr }) {
+            if (canceled || signal.aborted) {
+              finish({
+                ok: false,
+                canceled: true,
+                model: modelId,
+                producedOutput: produced(),
+                messages
+              });
+              return;
+            }
+            const sessionId = translator.result?.sessionId ?? translator.sessionId;
+            if (sessionId)
+              rememberSession(sessionsKey, scope, sessionId);
+            const result = translator.result;
+            if (result && !result.isError) {
+              if (!translator.allText && result.text)
+                translator.emitText(result.text);
+              finish({
+                ok: true,
+                model: modelId,
+                producedOutput: produced(),
+                messages: [...messages, { role: "assistant", content: translator.allText }]
+              });
+              return;
+            }
+            const detail = result?.text.trim() || stderr.trim() || `${lane} exited with code ${code ?? "unknown"}`;
+            fail(lane === "claude-code" ? explainFailure(detail) : detail, lane === "claude-code" && isMissingSession(stderr));
+          }
+        }, opts.source);
+        if (signal.aborted)
+          handle.stop();
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err));
+      }
+    })();
+  });
+}
+async function runLocalAgent(opts) {
+  const lane = laneForModel(opts.model);
+  if (!lane)
+    throw new Error(`"${opts.model}" is not a local agent model.`);
+  const messages = opts.messages ?? [];
+  const promptText = typeof opts.prompt === "string" ? opts.prompt : Array.isArray(opts.prompt) ? flattenParts(opts.prompt) : latestUserText(messages);
+  const signal = opts.signal ?? new AbortController().signal;
+  const onEvent = opts.onEvent ?? (() => {});
+  const conversationId = opts.conversationId ?? `${EPHEMERAL_CONVERSATION_PREFIX}${crypto.randomUUID()}`;
+  const scope = sessionScope(conversationId, opts.workspace);
+  const sessionsKey = lane === "claude-code" ? CLAUDE_CODE_SESSIONS_KEY : CURSOR_SESSIONS_KEY;
+  const resume = sessionFor(sessionsKey, scope);
+  const system = opts.system ?? systemText(messages);
+  const attempt = await runAttempt(lane, opts, messages, promptText, system, signal, onEvent, resume, scope);
+  if (resume && attempt.sessionMissing && !attempt.producedOutput && !signal.aborted) {
+    forgetSession(sessionsKey, scope);
+    const retry = await runAttempt(lane, opts, messages, promptText, system, signal, onEvent, null, scope);
+    return published(retry);
+  }
+  return published(attempt);
+}
+function published(attempt) {
+  const { sessionMissing: _sessionMissing, ...result } = attempt;
+  return result;
+}
 // src/core/_internal/pkce.ts
 var ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
 function randomString(len) {
@@ -6591,7 +8725,7 @@ async function signInWithBrowser(args) {
         client_id: clientId,
         redirect_uri: handle.redirectUri
       },
-      makeError: (msg, status) => new UnifiedError("auth_token_exchange_failed", msg, status)
+      makeError: (msg, status2) => new UnifiedError("auth_token_exchange_failed", msg, status2)
     });
   } finally {
     await loopback.stop();
@@ -6655,7 +8789,7 @@ class LruCache {
     return this.store.size;
   }
 }
-function stableStringify(value) {
+function stableStringify2(value) {
   const seen = new WeakSet;
   const walk = (v) => {
     if (v === null || typeof v !== "object")
@@ -6687,7 +8821,7 @@ function fnv1a(input) {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 function cacheKey(method, path, body, query) {
-  const canonical = `${method.toUpperCase()}|${path}|${stableStringify(query ?? null)}|${stableStringify(body ?? null)}`;
+  const canonical = `${method.toUpperCase()}|${path}|${stableStringify2(query ?? null)}|${stableStringify2(body ?? null)}`;
   return `${fnv1a(canonical)}|${canonical.length}`;
 }
 
@@ -6881,13 +9015,16 @@ class UnifiedAI extends Core {
   identity() {
     throw new UnifiedError("not_bootstrapped", "identity() requires the node entry or a subclass that owns user-session state.");
   }
+  accessToken() {
+    return this.getInitialAccessToken();
+  }
   async signOut() {
     this.session.markSignedOut();
   }
   async throwHttpError(op, path, res) {
-    const status = res.status;
+    const status2 = res.status;
     const body = await readErrorBody(res);
-    throw buildHttpError(httpErrorMessage(op, path, status, body), status, body, headersToRecord(res.headers));
+    throw buildHttpError(httpErrorMessage(op, path, status2, body), status2, body, headersToRecord(res.headers));
   }
   async request(path, options = {}) {
     const method = options.method ?? "GET";
@@ -6903,7 +9040,7 @@ class UnifiedAI extends Core {
     const isBinaryBody = options.body instanceof ArrayBuffer || options.body instanceof Uint8Array || typeof Blob !== "undefined" && options.body instanceof Blob;
     const upload = isMultipart ? await prepareUploadProgress(options.body, options.onUploadProgress) : undefined;
     const bodyInit = isMultipart ? options.body : isBinaryBody ? options.body : options.body !== undefined ? JSON.stringify(options.body) : undefined;
-    const send = (accessToken) => {
+    const send2 = (accessToken) => {
       upload?.beginAttempt();
       const init = {
         method: options.method ?? "GET",
@@ -6924,7 +9061,7 @@ class UnifiedAI extends Core {
         init.signal = options.signal;
       return this.options.fetch(url, init);
     };
-    const res = await this.executeWithRetry(send, method, options);
+    const res = await this.executeWithRetry(send2, method, options);
     if (res.ok)
       upload?.finish();
     if (!res.ok) {
@@ -6942,7 +9079,7 @@ class UnifiedAI extends Core {
     const url = this.buildUrl(path, options.query);
     const isMultipart = typeof FormData !== "undefined" && options.body instanceof FormData;
     const bodyInit = isMultipart ? options.body : options.body !== undefined ? JSON.stringify(options.body) : undefined;
-    const send = (accessToken) => {
+    const send2 = (accessToken) => {
       const init = {
         method: options.method ?? "GET",
         headers: this.buildHeaders(accessToken, bodyInit !== undefined && !isMultipart)
@@ -6953,7 +9090,7 @@ class UnifiedAI extends Core {
         init.signal = options.signal;
       return this.options.fetch(url, init);
     };
-    const res = await this.executeWithRetry(send, options.method ?? "GET", options);
+    const res = await this.executeWithRetry(send2, options.method ?? "GET", options);
     if (!res.ok) {
       await this.throwHttpError("requestBinary", path, res);
     }
@@ -6980,7 +9117,7 @@ class UnifiedAI extends Core {
   async stream(path, options = {}) {
     const url = this.buildUrl(path, options.query);
     const bodyText = options.body !== undefined ? JSON.stringify(options.body) : undefined;
-    const send = (accessToken) => {
+    const send2 = (accessToken) => {
       const headers = this.buildHeaders(accessToken, bodyText !== undefined);
       headers.accept = "text/event-stream";
       const init = {
@@ -6993,7 +9130,7 @@ class UnifiedAI extends Core {
         init.signal = options.signal;
       return this.options.fetch(url, init);
     };
-    const res = await this.executeWithRetry(send, options.method ?? "GET", options);
+    const res = await this.executeWithRetry(send2, options.method ?? "GET", options);
     if (!res.ok) {
       await this.throwHttpError("stream", path, res);
     }
@@ -7007,7 +9144,7 @@ class UnifiedAI extends Core {
     }
     return res.body;
   }
-  async executeWithRetry(send, method, options) {
+  async executeWithRetry(send2, method, options) {
     const cfg = resolveRetryConfig(options.retry ?? this.options.retry);
     const idempotent = isIdempotent(method, options.idempotent);
     const listeners = [];
@@ -7019,7 +9156,7 @@ class UnifiedAI extends Core {
     let attempt = 0;
     let currentToken = await this.getInitialAccessToken();
     const runOnce = async () => {
-      let res = await send(currentToken);
+      let res = await send2(currentToken);
       if (res.status === 401) {
         try {
           await drainResponse(res);
@@ -7034,7 +9171,7 @@ class UnifiedAI extends Core {
           throw new UnifiedAIAuthError("auth_refresh_failed", err instanceof Error ? err.message : "refresh failed", undefined, undefined, undefined, err);
         }
         currentToken = freshToken;
-        res = await send(freshToken);
+        res = await send2(freshToken);
         if (res.status === 401) {
           const body = await readErrorBody(res);
           await this.onAuthFailure();
@@ -7281,7 +9418,7 @@ async function requestHandoff(args) {
 }
 
 // src/node/_internal/keychain.ts
-var SERVICE = "com.unifiedai.sdk";
+var SERVICE2 = "com.unifiedai.sdk";
 var loaded = null;
 async function loadKeyring() {
   if (loaded)
@@ -7297,7 +9434,7 @@ function createDefaultKeychain() {
   return {
     async get(clientId) {
       const { Entry } = await loadKeyring();
-      const entry = new Entry(SERVICE, clientId);
+      const entry = new Entry(SERVICE2, clientId);
       let raw;
       try {
         raw = entry.getPassword();
@@ -7315,15 +9452,28 @@ function createDefaultKeychain() {
     },
     async set(clientId, tokens2) {
       const { Entry } = await loadKeyring();
-      new Entry(SERVICE, clientId).setPassword(JSON.stringify(tokens2));
+      new Entry(SERVICE2, clientId).setPassword(JSON.stringify(tokens2));
     },
     async clear(clientId) {
       const { Entry } = await loadKeyring();
       try {
-        new Entry(SERVICE, clientId).deletePassword();
+        new Entry(SERVICE2, clientId).deletePassword();
       } catch {}
     }
   };
+}
+
+class InMemoryKeychain {
+  store = new Map;
+  async get(clientId) {
+    return this.store.get(clientId) ?? null;
+  }
+  async set(clientId, tokens2) {
+    this.store.set(clientId, tokens2);
+  }
+  async clear(clientId) {
+    this.store.delete(clientId);
+  }
 }
 
 // src/node/_internal/loopback.ts
@@ -7456,7 +9606,7 @@ function refreshTokens(args) {
       refresh_token: args.refreshToken,
       client_id: args.clientId
     },
-    makeError: (msg, status) => new UnifiedAIAuthError("auth_refresh_failed", msg, status)
+    makeError: (msg, status2) => new UnifiedAIAuthError("auth_refresh_failed", msg, status2)
   });
 }
 
@@ -7950,135 +10100,188 @@ async function discoverLocalEcosystem(opts = {}) {
   }
 }
 export {
-  Actions,
-  Agent,
-  Artifacts,
-  Audio,
-  AuthenticationError,
-  BadRequestError,
-  CALENDARS_COLLECTION,
-  CALENDAR_NS,
-  Calendar,
-  Chat,
-  ChatCompletions,
-  CloudFsBackend,
-  CloudStorageBackend,
-  Core,
-  DeprecatedModelError,
-  Embeddings,
-  Files,
-  ForbiddenError,
-  Fs,
-  Helpers,
-  ITEMS_COLLECTION,
-  Images,
-  Memory,
-  MemoryBackend,
-  MemoryGrantStore,
-  MessageStream,
-  Messages,
-  Models,
-  NamespaceSharing,
-  NotFoundError,
-  OPEN_ARTIFACT_ACTION,
-  OPEN_ARTIFACT_PARAMS_SCHEMA,
-  OPEN_ARTIFACT_SPEC,
-  PLAN_FREE_ID,
-  PlanRequiredError,
-  Projects,
-  RateLimitError,
-  References,
-  Responses,
-  ServerError,
-  Session,
-  Storage,
-  StreamInterruptedError,
-  Sync,
-  UnifiedAI2 as UnifiedAI,
-  UnifiedAIAuthError,
-  UnifiedAIError,
-  UnifiedError,
-  UnifiedStream,
-  Usage,
-  UsageLimitError,
-  Users,
-  Videos,
-  WorkspaceSync,
-  addDaysInZone,
-  addExdateOp,
-  addMonthsInZone,
-  artifactRefFromHit,
-  artifactRefFromLink,
-  buildHttpError,
-  calendarToMetadata,
-  createCalendarOp,
-  createItemOp,
-  dayRange,
-  decodeSnapshot,
-  defaultEcosystemDiscoveryPath,
-  defaultTiming,
-  deleteCalendarOp,
-  deleteItemOp,
-  discoverLocalEcosystem,
-  encodeSnapshot2 as encodeSnapshot,
-  expandOccurrences,
-  extractServerMessage,
-  formatBody,
-  formatTimeUntil,
-  formatTokenCount,
-  formatUsd,
-  fsError,
-  fsTools,
-  getTimeZoneOffsetMs,
-  httpErrorCodeFromStatus,
-  httpErrorMessage,
-  isCloudPlan,
-  isEpochMismatch,
-  isPlanRequiredBody,
-  isResolvableArtifactRef,
-  isSameDayInZone,
-  itemToMetadata,
-  monthGrid,
-  namespaceAccess,
-  newId,
-  normalizeNs,
-  normalizePrefix,
-  normalizeRelPath,
-  notGrantedError,
-  parseCalendar,
-  parseCalendarItem,
-  parseSSE,
-  planRequiredError,
-  runBrowserPkce,
-  setOverrideOp,
-  signInWithBrowser,
-  startOfDayInZone,
-  startOfMonthInZone,
-  startOfWeekInZone,
-  storageAbortError,
-  storageError,
-  storageTools,
-  summarizeUsage,
-  syncError,
-  syncTools,
-  toChatAudioPart,
-  toChatFilePart,
-  toChatImagePart,
-  toChatVideoPart,
-  toMessagesDocumentPart,
-  toMessagesImagePart,
-  toOpenArtifactParams,
-  toResponsesAudioPart,
-  toResponsesFilePart,
-  toResponsesImagePart,
-  toResponsesVideoPart,
-  updateCalendarOp,
-  updateItemOp,
-  utcToZonedFields,
-  webTools,
+  zonedFieldsToUtc,
   weekRange,
-  zonedFieldsToUtc
+  webTools,
+  utcToZonedFields,
+  updateItemOp,
+  updateCalendarOp,
+  toResponsesVideoPart,
+  toResponsesImagePart,
+  toResponsesFilePart,
+  toResponsesAudioPart,
+  toOpenArtifactParams,
+  toMessagesImagePart,
+  toMessagesDocumentPart,
+  toChatVideoPart,
+  toChatImagePart,
+  toChatFilePart,
+  toChatAudioPart,
+  syncTools,
+  syncError,
+  summarizeUsage,
+  storageTools,
+  storageError,
+  storageAbortError,
+  startOfWeekInZone,
+  startOfMonthInZone,
+  startOfDayInZone,
+  signInWithBrowser,
+  setOverrideOp,
+  setLocalAgentSource,
+  runLocalAgent,
+  runBrowserPkce,
+  resolveSourceFor,
+  resolveLocalAgentSource,
+  relayWsUrl,
+  refreshRelayHosts,
+  refreshLocalAgents,
+  refreshLocalAgentDevices,
+  planRequiredError,
+  placeholderLocalModel,
+  pickWorkspaceFolder,
+  parseSSE,
+  parseCalendarItem,
+  parseCalendar,
+  pairBridge,
+  openRunEvents,
+  onLocalAgentStatusChange,
+  notGrantedError,
+  normalizeRelPath,
+  normalizePrefix,
+  normalizeNs,
+  newId,
+  namespaceAccess,
+  monthGrid,
+  localAgentsConfig,
+  listRelayHosts,
+  listLocalModels,
+  listLocalAgentDevices,
+  laneForModel,
+  itemToMetadata,
+  isSameDayInZone,
+  isResolvableArtifactRef,
+  isPlanRequiredBody,
+  isLocalAgentModel,
+  isEpochMismatch,
+  isDesktopConnected,
+  isCloudPlan,
+  invalidateCursorModels,
+  invalidateBridgePort,
+  httpErrorMessage,
+  httpErrorCodeFromStatus,
+  hasBridgeToken,
+  getTimeZoneOffsetMs,
+  getLocalAgentStatus,
+  fsTools,
+  fsError,
+  formatUsd,
+  formatTokenCount,
+  formatTimeUntil,
+  formatBody,
+  extractServerMessage,
+  expandOccurrences,
+  encodeSnapshot2 as encodeSnapshot,
+  dispatchFrame,
+  discoverLocalEcosystem,
+  discoverBridge,
+  disconnectDesktop,
+  detectAgents,
+  deleteItemOp,
+  deleteCalendarOp,
+  defaultTiming,
+  defaultPairName,
+  defaultEcosystemDiscoveryPath,
+  decodeSnapshot,
+  dayRange,
+  createItemOp,
+  createCalendarOp,
+  connectRelayHost,
+  connectDesktop,
+  configureLocalAgents,
+  closeRelayHost,
+  closeAllRelayHosts,
+  clientDeviceName,
+  clientDeviceId,
+  clearBridgeToken,
+  claudeCodeModelName,
+  checkDesktopAvailable,
+  calendarToMetadata,
+  buildHttpError,
+  bridgeToken,
+  bridgeStopRun,
+  bridgeStartRun,
+  bridgePickFolder,
+  bridgeOrigin,
+  bridgeMcpResult,
+  bridgeHealth,
+  bridgeDetect,
+  bridgeCursorModels,
+  bearerSubprotocol,
+  artifactRefFromLink,
+  artifactRefFromHit,
+  addMonthsInZone,
+  addExdateOp,
+  addDaysInZone,
+  _resetLocalAgentState,
+  WorkspaceSync,
+  Videos,
+  Users,
+  UsageLimitError,
+  Usage,
+  UnifiedStream,
+  UnifiedError,
+  UnifiedAIError,
+  UnifiedAIAuthError,
+  UnifiedAI2 as UnifiedAI,
+  Sync,
+  StreamInterruptedError,
+  Storage,
+  Session,
+  ServerError,
+  Responses,
+  References,
+  RateLimitError,
+  Projects,
+  PlanRequiredError,
+  PLAN_FREE_ID,
+  OPEN_ARTIFACT_SPEC,
+  OPEN_ARTIFACT_PARAMS_SCHEMA,
+  OPEN_ARTIFACT_ACTION,
+  NotFoundError,
+  NamespaceSharing,
+  Models,
+  Messages,
+  MessageStream,
+  MemoryGrantStore,
+  MemoryBackend,
+  Memory,
+  Images,
+  ITEMS_COLLECTION,
+  Helpers,
+  Fs,
+  ForbiddenError,
+  Files,
+  Embeddings,
+  DeprecatedModelError,
+  Core,
+  CloudStorageBackend,
+  CloudFsBackend,
+  ChatCompletions,
+  Chat,
+  Calendar,
+  CURSOR_MODEL_PREFIX,
+  CLAUDE_CODE_MODEL_PREFIX,
+  CALENDAR_NS,
+  CALENDARS_COLLECTION,
+  BadRequestError,
+  BRIDGE_PORTS,
+  AuthenticationError,
+  Audio,
+  Artifacts,
+  Agent,
+  Actions
 };
 
-//# debugId=C62947E8E22E5DD964756E2164756E21
+//# debugId=C66FE53B0EEED6B064756E2164756E21
 //# sourceMappingURL=index.js.map
