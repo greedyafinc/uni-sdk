@@ -120,11 +120,12 @@ export async function bearerSubprotocol(): Promise<string | null> {
 }
 
 /**
- * This surface's own identity, for the host's approval card. Deliberately
+ * This surface's own identity, for the host's client list and block list.
+ * Deliberately
  * client-local and not an auth input: a browser tab has no registered device id,
  * and inventing one the server trusted would be a hole — the contract has the
  * server report `deviceVerified: false` for exactly this case. Stable across
- * reloads so re-attaching doesn't re-prompt.
+ * reloads so a block the user set stays set across them.
  */
 const CLIENT_ID_KEY = "unified.agentRelay.clientId";
 
