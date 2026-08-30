@@ -34,6 +34,19 @@ export interface ToolSpec {
   ) => Promise<ToolResult> | ToolResult;
 }
 
+/**
+ * Token usage counters for a turn/run. `inputTokens`/`outputTokens` are the
+ * base counts; `cachedInputTokens` (prompt tokens served from cache) and
+ * `cacheCreationInputTokens` (tokens written to cache on this turn) are
+ * present only when the gateway/provider reports them.
+ */
+export interface AgentUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  cacheCreationInputTokens?: number;
+}
+
 /** Streamed events the loop emits so the app can render progress as it happens. */
 export type AgentEvent =
   | { type: "text_delta"; delta: string }
@@ -52,7 +65,7 @@ export type AgentEvent =
   // turn, on the first chunk carrying a non-`auto` model. Lets the UI flip an
   // "Auto" badge to the router's actual pick while the turn is still streaming.
   | { type: "model"; model: string }
-  | { type: "usage"; usage: { inputTokens?: number; outputTokens?: number } };
+  | { type: "usage"; usage: AgentUsage };
 
 export interface RunAgentOptions {
   /**

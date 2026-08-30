@@ -20,6 +20,7 @@ export type {
 } from "./web-tools";
 export type {
   AgentEvent,
+  AgentUsage,
   RunAgentOptions,
   RunAgentResult,
   ToolResult,
