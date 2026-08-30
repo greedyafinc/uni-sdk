@@ -16,7 +16,7 @@ import {
   type ChatCompletionStream,
   ChatCompletions,
 } from "../chat";
-import type { AgentEvent, RunAgentOptions, RunAgentResult, ToolSpec } from "./types";
+import type { AgentEvent, AgentUsage, RunAgentOptions, RunAgentResult, ToolSpec } from "./types";
 
 /**
  * Lift the structured detail out of a thrown SDK error so a failed run can carry
@@ -383,7 +383,7 @@ export class Agent {
       if (turn.usage) {
         // Build conditionally — `exactOptionalPropertyTypes` forbids assigning
         // an explicit `undefined` to these optional fields.
-        const usage: { inputTokens?: number; outputTokens?: number } = {};
+        const usage: AgentUsage = {};
         if (turn.usage.prompt_tokens !== undefined) usage.inputTokens = turn.usage.prompt_tokens;
         if (turn.usage.completion_tokens !== undefined) {
           usage.outputTokens = turn.usage.completion_tokens;
