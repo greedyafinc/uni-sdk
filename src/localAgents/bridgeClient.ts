@@ -20,9 +20,10 @@
 //
 // Browser-safe: no `node:` builtins, no keychain, no framework.
 
-// Only for the DISPLAY name on the consent card — the bridge's own auth is its
-// pairing token, so nothing here reads a credential out of the config.
-import { localAgentsConfig } from "./config";
+// `localAgentsConfig` supplies the DISPLAY name; `unifiedToken` supplies the
+// caller's account credential, which is what lets pairing skip the consent
+// prompt entirely (see `pairBridge`).
+import { localAgentsConfig, unifiedToken } from "./config";
 
 /** Ports the desktop server tries, in order (agent-bridge.md § Discovery). */
 export const BRIDGE_PORTS = [47825, 47826, 47827, 47828, 47829] as const;
@@ -198,20 +199,32 @@ async function requirePort(): Promise<number> {
 // ── Pairing ─────────────────────────────────────────────────────────────────
 
 /**
- * Ask the desktop for a token for this origin.
+ * Ask the host for a token for this origin.
  *
- * First time for an origin this PARKS until the user answers a consent modal on
- * the desktop (120s, then 403) — so only call it from an explicit user action.
- * A previously approved origin re-mints immediately and silently, which is what
- * makes `ensureBridgeToken()` below safe to run inside a failed request.
+ * A caller SIGNED IN AS THE HOST'S OWN USER is let straight through: the
+ * account credential travels in `token`, the host resolves it against
+ * unified-api, and a match mints without a prompt — silent or not, first time
+ * or not. Being signed in as the user IS the permission; asking a second time
+ * in a modal only taught people to click Allow.
+ *
+ * Without a credential there is nothing to check, and the loopback bridge is
+ * reachable by any page on the machine — so that case still PARKS on the host's
+ * consent prompt (120s, then 403) and must only be reached from an explicit
+ * user action. `silent: true` skips the prompt and takes the 403 instead.
  */
 export async function pairBridge(name = defaultPairName(), silent = false): Promise<string> {
   const port = await discoverBridge(true);
   if (port === null) throw new Error("The desktop app isn't running on this machine.");
+  // Best effort: a signed-out surface simply pairs the old way.
+  const account = await unifiedToken();
   const res = await fetch(`${bridgeOrigin(port)}/pair`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(silent ? { name, silent: true } : { name }),
+    body: JSON.stringify({
+      name,
+      ...(silent ? { silent: true } : {}),
+      ...(account ? { token: account } : {}),
+    }),
   });
   if (res.status === 403) throw new Error("The desktop app declined this connection.");
   if (!res.ok) throw new Error(`Pairing failed (HTTP ${res.status}).`);
@@ -235,10 +248,12 @@ export function defaultPairName(): string {
 }
 
 /**
- * Silent re-pair after a 401. Only attempted when we HAD a token: that proves
- * the origin was approved once, so the desktop re-mints without prompting (and
- * if approval was revoked meanwhile, the 403 surfaces as a normal error rather
- * than a surprise modal).
+ * Silent (re-)pair — never prompts, so it is safe on a page-load path.
+ *
+ * It succeeds in two cases: the caller is signed in as the host's user, or the
+ * origin was approved by hand once before. Either way the host answers without
+ * bothering anybody, and a refusal surfaces as a normal error rather than a
+ * surprise modal.
  */
 let reauthorizing: Promise<string> | null = null;
 export function ensureBridgeToken(): Promise<string> {

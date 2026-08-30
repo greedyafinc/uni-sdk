@@ -26,6 +26,7 @@ const { BRIDGE_PORTS, bridgeToken, clearBridgeToken, hasBridgeToken, pairBridge 
 );
 const { dispatchFrame, discoverBridge, invalidateBridgePort, openRunEvents, bridgeDetect } =
   await import("../../src/localAgents/bridgeClient");
+const { configureLocalAgents } = await import("../../src/localAgents/config");
 
 interface Call {
   url: string;
@@ -78,10 +79,10 @@ function pairs(answer: { body?: unknown; status?: number }): Responder {
 }
 
 /** Every `/pair` body sent so far, parsed, in order. */
-function pairBodies(): Array<{ name?: string; silent?: boolean }> {
+function pairBodies(): Array<{ name?: string; silent?: boolean; token?: string }> {
   return calls
     .filter((c) => c.url.endsWith("/pair"))
-    .map((c) => JSON.parse(c.body ?? "{}") as { name?: string; silent?: boolean });
+    .map((c) => JSON.parse(c.body ?? "{}") as { name?: string; silent?: boolean; token?: string });
 }
 
 describe("bridge discovery", () => {
@@ -243,6 +244,73 @@ describe("pairing", () => {
     const pair = calls.find((c) => c.url.endsWith("/pair"));
     const body = JSON.parse(pair?.body ?? "{}") as { name: string; silent?: boolean };
     expect(body.silent).toBeUndefined();
+  });
+});
+
+/**
+ * The account grant (agent-bridge.md § The trust boundary). The client's whole
+ * part in it is sending its own credential; the host does the deciding.
+ */
+describe("pairing on an account credential", () => {
+  afterEach(() => {
+    configureLocalAgents({ client: undefined });
+  });
+
+  /** A client whose `accessToken()` is all `unifiedToken()` reads. */
+  function signedInAs(token: string): void {
+    configureLocalAgents({
+      client: { accessToken: async () => token } as unknown as Parameters<
+        typeof configureLocalAgents
+      >[0]["client"],
+    });
+  }
+
+  test("the caller's credential rides along on /pair", async () => {
+    signedInAs("account-token");
+    responder = pairs({ body: { token: "tok-1" } });
+    await pairBridge("Notes", true);
+    expect(pairBodies()[0]?.token).toBe("account-token");
+  });
+
+  test("a signed-out surface simply omits it, and pairs the old way", async () => {
+    responder = pairs({ body: { token: "tok-1" } });
+    await pairBridge("Notes", true);
+    expect(pairBodies()[0]).not.toHaveProperty("token");
+  });
+
+  /**
+   * The behavior change that matters: a signed-in surface connects on page load
+   * with no user action. Before, a silent pair could only RESTORE a connection
+   * an approved origin already had, so this resolved to null.
+   */
+  test("resolving connects a signed-in surface that has never paired", async () => {
+    signedInAs("account-token");
+    _resetLocalAgentState();
+    clearBridgeToken();
+    responder = pairs({ body: { token: "tok-1" } });
+
+    expect(await resolveLocalAgentSource()).toEqual({ kind: "bridge" });
+    expect(hasBridgeToken()).toBe(true);
+    // Never prompts: the resolve path is silent, whatever the host decides.
+    expect(pairBodies().every((b) => b.silent === true)).toBe(true);
+  });
+
+  /**
+   * The other half of the refusal cache: a page refused while signed OUT must be
+   * reconsidered once it signs in, or a surface that authenticates a moment
+   * after load would be stranded for the life of the page.
+   */
+  test("a refusal while signed out is reconsidered once a credential appears", async () => {
+    _resetLocalAgentState();
+    clearBridgeToken();
+    responder = pairs({ status: 403 });
+    expect(await resolveLocalAgentSource()).toBeNull();
+    const refused = pairBodies().length;
+
+    signedInAs("account-token");
+    responder = pairs({ body: { token: "tok-1" } });
+    expect(await resolveSourceFor({ kind: "bridge" })).toEqual({ kind: "bridge" });
+    expect(pairBodies().length).toBeGreaterThan(refused);
   });
 });
 
