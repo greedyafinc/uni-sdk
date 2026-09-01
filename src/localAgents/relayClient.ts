@@ -17,6 +17,7 @@
 // `connectRelayHost()` is only called once a source has actually been chosen.
 import { Observable } from "../core/_internal/observable";
 import { localAgentsConfig, relayWsBase, unifiedApiUrl, unifiedToken } from "./config";
+import { type LocalAgentDirListing, normalizeDirListing } from "./dirListing";
 
 export interface RelayCapabilities {
   claudeCode: { found: boolean };
@@ -167,6 +168,15 @@ export interface RelayConnection {
   detect(): Promise<RelayDetectResult>;
   cursorModels(json: boolean): Promise<string>;
   pickFolder(): Promise<string | null>;
+  listDir(path?: string): Promise<LocalAgentDirListing>;
+  /**
+   * The repository each path belongs to, index-for-index, `null` where there is
+   * none. Batched because a caller learns a run's paths together and the host
+   * answers with filesystem stats — one round trip rather than a walk over the
+   * wire. A host that restricts remote access answers `null` for anything
+   * outside the grant, indistinguishable from "not in a repo".
+   */
+  repoRoots(paths: string[]): Promise<Array<string | null>>;
   startRun(args: RelayStartArgs, handlers: RelayRunHandlers): Promise<void>;
   stopRun(runId: string): void;
   mcpResult(id: string, result: unknown): void;
@@ -297,9 +307,14 @@ function createConnection(deviceId: string): RelayConnection {
         lastError.set("That computer went offline.");
         endAllRuns("the host went offline");
         break;
+      // ALLOWLIST, not a formality: a reply whose type is missing here is
+      // silently dropped and its caller waits out the full timeout instead of
+      // failing. Adding a request verb means adding its result here too.
       case "detect-result":
       case "cursor-models-result":
       case "pick-folder-result":
+      case "list-dir-result":
+      case "repo-root-result":
         if (typeof frame.id === "string") resolvePending(frame.id, frame);
         break;
       case "line": {
@@ -489,6 +504,29 @@ function createConnection(deviceId: string): RelayConnection {
       // No timeout: this blocks on a native dialog on the other machine.
       const frame = await request({ type: "pick-folder" }, null);
       return typeof frame.path === "string" ? frame.path : null;
+    },
+
+    async listDir(path?: string) {
+      await conn.ready();
+      // Default timeout: unlike `pick-folder` this never waits on a human.
+      const frame = await request({
+        type: "list-dir",
+        ...(path !== undefined ? { path } : {}),
+      });
+      return normalizeDirListing(frame);
+    },
+
+    async repoRoots(paths: string[]) {
+      if (!paths.length) return [];
+      await conn.ready();
+      const frame = await request({ type: "repo-root", paths });
+      const roots = Array.isArray(frame.roots) ? frame.roots : [];
+      // Never trust the host to have kept the shape: callers index this against
+      // their own array, so pad/trim to the length they asked about.
+      return paths.map((_, i) => {
+        const r = roots[i];
+        return typeof r === "string" && r ? r : null;
+      });
     },
 
     async startRun(args, handlers) {

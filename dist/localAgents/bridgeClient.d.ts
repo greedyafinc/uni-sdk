@@ -1,3 +1,4 @@
+import { type LocalAgentDirListing } from "./dirListing.js";
 /** Ports the desktop server tries, in order (agent-bridge.md § Discovery). */
 export declare const BRIDGE_PORTS: readonly [47825, 47826, 47827, 47828, 47829];
 export interface BridgeDetectResult {
@@ -75,12 +76,18 @@ export declare function bridgeHealth(): Promise<{
     port: number | null;
 }>;
 /**
- * Ask the desktop for a token for this origin.
+ * Ask the host for a token for this origin.
  *
- * First time for an origin this PARKS until the user answers a consent modal on
- * the desktop (120s, then 403) — so only call it from an explicit user action.
- * A previously approved origin re-mints immediately and silently, which is what
- * makes `ensureBridgeToken()` below safe to run inside a failed request.
+ * A caller SIGNED IN AS THE HOST'S OWN USER is let straight through: the
+ * account credential travels in `token`, the host resolves it against
+ * unified-api, and a match mints without a prompt — silent or not, first time
+ * or not. Being signed in as the user IS the permission; asking a second time
+ * in a modal only taught people to click Allow.
+ *
+ * Without a credential there is nothing to check, and the loopback bridge is
+ * reachable by any page on the machine — so that case still PARKS on the host's
+ * consent prompt (120s, then 403) and must only be reached from an explicit
+ * user action. `silent: true` skips the prompt and takes the 403 instead.
  */
 export declare function pairBridge(name?: string, silent?: boolean): Promise<string>;
 /**
@@ -97,6 +104,8 @@ export declare function bridgeCursorModels(json: boolean): Promise<string>;
 export declare function bridgeStartRun(body: BridgeStartBody): Promise<void>;
 export declare function bridgeStopRun(runId: string): Promise<void>;
 export declare function bridgeMcpResult(id: string, result: unknown): Promise<void>;
+/** List a directory on the desktop's machine (omit `path` for the default root). */
+export declare function bridgeListDir(path?: string): Promise<LocalAgentDirListing>;
 /** Opens the desktop's native folder dialog. Long request; one at a time. */
 export declare function bridgePickFolder(): Promise<string | null>;
 /**

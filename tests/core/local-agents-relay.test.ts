@@ -170,6 +170,84 @@ describe("request/response frames", () => {
     expect(await promise).toBe("auto\n");
   });
 
+  test("list-dir round-trips by id and normalizes the listing", async () => {
+    const { conn, ws } = await attached();
+    const promise = conn.listDir("/repo");
+    await flush(1);
+
+    const sent = ws.ofType("list-dir")[0]!;
+    expect(typeof sent.id).toBe("string");
+    expect(sent.path).toBe("/repo");
+    ws.deliver({
+      type: "list-dir-result",
+      id: sent.id,
+      path: "/repo",
+      parent: "/",
+      home: "/Users/me",
+      sep: "/",
+      entries: [
+        { name: "app", path: "/repo/app", git: true },
+        { name: "junk" }, // no path — dropped by normalization
+      ],
+      restricted: true,
+      root: "/repo",
+    });
+
+    expect(await promise).toEqual({
+      path: "/repo",
+      parent: "/",
+      home: "/Users/me",
+      sep: "/",
+      entries: [{ name: "app", path: "/repo/app", git: true }],
+      restricted: true,
+      // The picker anchors its breadcrumb here and offers nothing above it.
+      // Normalization rebuilds the listing field by field, so a dropped `root`
+      // would quietly un-anchor the fence rather than fail.
+      root: "/repo",
+    });
+  });
+
+  test("repo-root round-trips by id and is padded to the caller's own array", async () => {
+    const { conn, ws } = await attached();
+    const promise = conn.repoRoots(["/repo/a.ts", "/repo/b.ts", "/loose.txt"]);
+    await flush(1);
+
+    const sent = ws.ofType("repo-root")[0]!;
+    expect(typeof sent.id).toBe("string");
+    expect(sent.paths).toEqual(["/repo/a.ts", "/repo/b.ts", "/loose.txt"]);
+    // Short reply on purpose: the caller indexes the result against the array it
+    // passed, so a host that answers with fewer entries must not shift them.
+    ws.deliver({ type: "repo-root-result", id: sent.id, roots: ["/repo", null] });
+
+    expect(await promise).toEqual(["/repo", null, null]);
+  });
+
+  test("an empty ask never reaches the wire", async () => {
+    const { conn, ws } = await attached();
+    expect(await conn.repoRoots([])).toEqual([]);
+    await flush(1);
+    expect(ws.ofType("repo-root")).toHaveLength(0);
+  });
+
+  test("list-dir omits the path field when listing the default root", async () => {
+    const { conn, ws } = await attached();
+    const promise = conn.listDir();
+    await flush(1);
+    const sent = ws.ofType("list-dir")[0]!;
+    expect(sent).not.toHaveProperty("path");
+    ws.deliver({ type: "list-dir-result", id: sent.id, home: "/Users/me", sep: "/", entries: [] });
+    expect((await promise).path).toBeNull();
+  });
+
+  test("an error frame rejects the matching list-dir", async () => {
+    const { conn, ws } = await attached();
+    const promise = conn.listDir("/forbidden");
+    await flush(1);
+    const sent = ws.ofType("list-dir")[0]!;
+    ws.deliver({ type: "error", id: sent.id, message: "path not allowed" });
+    await expect(promise).rejects.toThrow("path not allowed");
+  });
+
   test("an error frame rejects the matching request", async () => {
     const { conn, ws } = await attached();
     const promise = conn.pickFolder();

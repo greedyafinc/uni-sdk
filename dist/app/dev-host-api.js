@@ -6166,6 +6166,28 @@ function withApiPrefix(base) {
   return /\/v\d+$/.test(trimmed) ? trimmed : `${trimmed}/api/v1`;
 }
 
+// src/localAgents/dirListing.ts
+function normalizeDirListing(value) {
+  const v = value ?? {};
+  const entries = Array.isArray(v.entries) ? v.entries.filter((e) => !!e && typeof e.name === "string" && typeof e.path === "string").map((e) => ({
+    name: e.name,
+    path: e.path,
+    git: e.git === true
+  })) : [];
+  const suggested = Array.isArray(v.suggested) ? v.suggested.filter((s) => typeof s === "string") : null;
+  return {
+    path: typeof v.path === "string" ? v.path : null,
+    parent: typeof v.parent === "string" ? v.parent : null,
+    home: typeof v.home === "string" ? v.home : "",
+    sep: typeof v.sep === "string" ? v.sep : "/",
+    entries,
+    ...typeof v.root === "string" && v.root ? { root: v.root } : {},
+    ...suggested ? { suggested } : {},
+    ...v.truncated === true ? { truncated: true } : {},
+    ...v.restricted === true ? { restricted: true } : {}
+  };
+}
+
 // src/localAgents/bridgeClient.ts
 var BRIDGE_PORTS = [47825, 47826, 47827, 47828, 47829];
 var PORT_KEY = "unified.agentBridge.port";
@@ -6249,10 +6271,15 @@ async function pairBridge(name = defaultPairName(), silent = false) {
   const port = await discoverBridge(true);
   if (port === null)
     throw new Error("The desktop app isn't running on this machine.");
+  const account = await unifiedToken();
   const res = await fetch(`${bridgeOrigin(port)}/pair`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(silent ? { name, silent: true } : { name })
+    body: JSON.stringify({
+      name,
+      ...silent ? { silent: true } : {},
+      ...account ? { token: account } : {}
+    })
   });
   if (res.status === 403)
     throw new Error("The desktop app declined this connection.");
@@ -6620,6 +6647,8 @@ function createConnection(deviceId) {
       case "detect-result":
       case "cursor-models-result":
       case "pick-folder-result":
+      case "list-dir-result":
+      case "repo-root-result":
         if (typeof frame.id === "string")
           resolvePending(frame.id, frame);
         break;
@@ -6795,6 +6824,25 @@ function createConnection(deviceId) {
       const frame = await request({ type: "pick-folder" }, null);
       return typeof frame.path === "string" ? frame.path : null;
     },
+    async listDir(path) {
+      await conn.ready();
+      const frame = await request({
+        type: "list-dir",
+        ...path !== undefined ? { path } : {}
+      });
+      return normalizeDirListing(frame);
+    },
+    async repoRoots(paths) {
+      if (!paths.length)
+        return [];
+      await conn.ready();
+      const frame = await request({ type: "repo-root", paths });
+      const roots = Array.isArray(frame.roots) ? frame.roots : [];
+      return paths.map((_, i) => {
+        const r = roots[i];
+        return typeof r === "string" && r ? r : null;
+      });
+    },
     async startRun(args, handlers) {
       await conn.ready();
       runs.set(args.runId, handlers);
@@ -6916,7 +6964,7 @@ function setLocalAgentSource(pref) {
 function refreshLocalAgents() {
   resolvePromise = null;
   invalidateBridgePort();
-  adoptRefused = false;
+  adoptRefused = "no";
   return resolveLocalAgentSource();
 }
 async function resolveSourceFor(pref) {
@@ -6959,15 +7007,20 @@ async function bridgeUsable() {
   }
   return hasBridgeToken();
 }
-var adoptRefused = false;
+var adoptRefused = "no";
 async function adoptApprovedOrigin() {
-  if (hasBridgeToken() || adoptRefused)
+  if (hasBridgeToken())
+    return;
+  if (adoptRefused === "with-credential")
+    return;
+  if (adoptRefused === "without-credential" && await unifiedToken() === null)
     return;
   try {
     await ensureBridgeToken();
     patch({ bridgePaired: true, lastError: null });
+    adoptRefused = "no";
   } catch {
-    adoptRefused = true;
+    adoptRefused = await unifiedToken() === null ? "without-credential" : "with-credential";
   }
 }
 async function refreshBridgeIdentity() {
@@ -6999,13 +7052,13 @@ async function connectDesktop(name) {
     clearBridgeToken();
     await pairBridge(label);
   }
-  adoptRefused = false;
+  adoptRefused = "no";
   patch({ bridgePaired: true, bridgeAvailable: true, lastError: null });
   return await setLocalAgentSource({ kind: "bridge" });
 }
 async function disconnectDesktop() {
   clearBridgeToken();
-  adoptRefused = false;
+  adoptRefused = "no";
   patch({ bridgePaired: false });
   if (status.get().pref.kind === "bridge")
     await setLocalAgentSource({ kind: "auto" });
@@ -7070,7 +7123,7 @@ function mergeCaps(a, b) {
 }
 async function refreshLocalAgentDevices() {
   invalidateBridgePort();
-  adoptRefused = false;
+  adoptRefused = "no";
   patch({ bridgePaired: hasBridgeToken() });
   await Promise.all([bridgeUsable(), refreshRelayHosts()]);
   return listLocalAgentDevices();
@@ -8458,31 +8511,31 @@ function openArtifact() {
   return Promise.resolve(null);
 }
 export {
-  checkDesktopAvailable2 as checkDesktopAvailable,
-  connectDesktop2 as connectDesktop,
-  disconnectDesktop2 as disconnectDesktop,
-  fsTools,
-  getCurrentProject,
-  getDesktopStatus,
-  getProviderLogo,
-  getSdk,
-  getTheme,
-  getUsage,
-  hasRunAgent,
-  isDesktopPaired,
-  isLocalAgentModel2 as isLocalAgentModel,
-  listLocalDevices,
-  listModels,
-  onDesktopStatusChange,
-  onProjectChange,
-  onThemeChange,
-  openArtifact,
-  pickWorkspaceFolder2 as pickWorkspaceFolder,
-  refreshDesktop,
-  refreshLocalDevices,
+  runAgent,
   registerActions,
-  runAgent
+  refreshLocalDevices,
+  refreshDesktop,
+  pickWorkspaceFolder2 as pickWorkspaceFolder,
+  openArtifact,
+  onThemeChange,
+  onProjectChange,
+  onDesktopStatusChange,
+  listModels,
+  listLocalDevices,
+  isLocalAgentModel2 as isLocalAgentModel,
+  isDesktopPaired,
+  hasRunAgent,
+  getUsage,
+  getTheme,
+  getSdk,
+  getProviderLogo,
+  getDesktopStatus,
+  getCurrentProject,
+  fsTools,
+  disconnectDesktop2 as disconnectDesktop,
+  connectDesktop2 as connectDesktop,
+  checkDesktopAvailable2 as checkDesktopAvailable
 };
 
-//# debugId=87CE3AC0153C3FF964756E2164756E21
+//# debugId=BBDC4E5E3EA7F11464756E2164756E21
 //# sourceMappingURL=dev-host-api.js.map

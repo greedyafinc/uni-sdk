@@ -6411,9 +6411,9 @@ function createLocalSharingRuntime(opts = {}) {
   };
 }
 export {
-  FakeSyncServer,
-  createLocalSharingRuntime
+  createLocalSharingRuntime,
+  FakeSyncServer
 };
 
-//# debugId=1840FD4970BD699E64756E2164756E21
+//# debugId=E51D628D091044C364756E2164756E21
 //# sourceMappingURL=index.js.map

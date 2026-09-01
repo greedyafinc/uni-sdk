@@ -6547,6 +6547,28 @@ function withApiPrefix(base) {
   return /\/v\d+$/.test(trimmed) ? trimmed : `${trimmed}/api/v1`;
 }
 
+// src/localAgents/dirListing.ts
+function normalizeDirListing(value) {
+  const v = value ?? {};
+  const entries = Array.isArray(v.entries) ? v.entries.filter((e) => !!e && typeof e.name === "string" && typeof e.path === "string").map((e) => ({
+    name: e.name,
+    path: e.path,
+    git: e.git === true
+  })) : [];
+  const suggested = Array.isArray(v.suggested) ? v.suggested.filter((s) => typeof s === "string") : null;
+  return {
+    path: typeof v.path === "string" ? v.path : null,
+    parent: typeof v.parent === "string" ? v.parent : null,
+    home: typeof v.home === "string" ? v.home : "",
+    sep: typeof v.sep === "string" ? v.sep : "/",
+    entries,
+    ...typeof v.root === "string" && v.root ? { root: v.root } : {},
+    ...suggested ? { suggested } : {},
+    ...v.truncated === true ? { truncated: true } : {},
+    ...v.restricted === true ? { restricted: true } : {}
+  };
+}
+
 // src/localAgents/bridgeClient.ts
 var BRIDGE_PORTS = [47825, 47826, 47827, 47828, 47829];
 var PORT_KEY = "unified.agentBridge.port";
@@ -6634,10 +6656,15 @@ async function pairBridge(name = defaultPairName(), silent = false) {
   const port = await discoverBridge(true);
   if (port === null)
     throw new Error("The desktop app isn't running on this machine.");
+  const account = await unifiedToken();
   const res = await fetch(`${bridgeOrigin(port)}/pair`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(silent ? { name, silent: true } : { name })
+    body: JSON.stringify({
+      name,
+      ...silent ? { silent: true } : {},
+      ...account ? { token: account } : {}
+    })
   });
   if (res.status === 403)
     throw new Error("The desktop app declined this connection.");
@@ -6716,6 +6743,13 @@ async function bridgeStopRun(runId) {
 }
 async function bridgeMcpResult(id, result) {
   await authed("/mcp/result", { method: "POST", body: { id, result } });
+}
+async function bridgeListDir(path) {
+  const body = await authedJson("/list-dir", {
+    method: "POST",
+    body: path !== undefined ? { path } : {}
+  });
+  return normalizeDirListing(body);
 }
 async function bridgePickFolder() {
   const body = await authedJson("/pick-folder", {
@@ -7005,6 +7039,8 @@ function createConnection(deviceId) {
       case "detect-result":
       case "cursor-models-result":
       case "pick-folder-result":
+      case "list-dir-result":
+      case "repo-root-result":
         if (typeof frame.id === "string")
           resolvePending(frame.id, frame);
         break;
@@ -7180,6 +7216,25 @@ function createConnection(deviceId) {
       const frame = await request({ type: "pick-folder" }, null);
       return typeof frame.path === "string" ? frame.path : null;
     },
+    async listDir(path) {
+      await conn.ready();
+      const frame = await request({
+        type: "list-dir",
+        ...path !== undefined ? { path } : {}
+      });
+      return normalizeDirListing(frame);
+    },
+    async repoRoots(paths) {
+      if (!paths.length)
+        return [];
+      await conn.ready();
+      const frame = await request({ type: "repo-root", paths });
+      const roots = Array.isArray(frame.roots) ? frame.roots : [];
+      return paths.map((_, i) => {
+        const r = roots[i];
+        return typeof r === "string" && r ? r : null;
+      });
+    },
     async startRun(args, handlers) {
       await conn.ready();
       runs.set(args.runId, handlers);
@@ -7301,7 +7356,7 @@ function setLocalAgentSource(pref) {
 function refreshLocalAgents() {
   resolvePromise = null;
   invalidateBridgePort();
-  adoptRefused = false;
+  adoptRefused = "no";
   return resolveLocalAgentSource();
 }
 async function resolveSourceFor(pref) {
@@ -7344,15 +7399,20 @@ async function bridgeUsable() {
   }
   return hasBridgeToken();
 }
-var adoptRefused = false;
+var adoptRefused = "no";
 async function adoptApprovedOrigin() {
-  if (hasBridgeToken() || adoptRefused)
+  if (hasBridgeToken())
+    return;
+  if (adoptRefused === "with-credential")
+    return;
+  if (adoptRefused === "without-credential" && await unifiedToken() === null)
     return;
   try {
     await ensureBridgeToken();
     patch({ bridgePaired: true, lastError: null });
+    adoptRefused = "no";
   } catch {
-    adoptRefused = true;
+    adoptRefused = await unifiedToken() === null ? "without-credential" : "with-credential";
   }
 }
 async function refreshBridgeIdentity() {
@@ -7384,13 +7444,13 @@ async function connectDesktop(name) {
     clearBridgeToken();
     await pairBridge(label);
   }
-  adoptRefused = false;
+  adoptRefused = "no";
   patch({ bridgePaired: true, bridgeAvailable: true, lastError: null });
   return await setLocalAgentSource({ kind: "bridge" });
 }
 async function disconnectDesktop() {
   clearBridgeToken();
-  adoptRefused = false;
+  adoptRefused = "no";
   patch({ bridgePaired: false });
   if (status.get().pref.kind === "bridge")
     await setLocalAgentSource({ kind: "auto" });
@@ -7455,7 +7515,7 @@ function mergeCaps(a, b) {
 }
 async function refreshLocalAgentDevices() {
   invalidateBridgePort();
-  adoptRefused = false;
+  adoptRefused = "no";
   patch({ bridgePaired: hasBridgeToken() });
   await Promise.all([bridgeUsable(), refreshRelayHosts()]);
   return listLocalAgentDevices();
@@ -7509,6 +7569,14 @@ async function pickWorkspaceFolder(pref) {
   if (source.kind === "bridge")
     return await bridgePickFolder();
   return await connectRelayHost(source.deviceId).pickFolder();
+}
+async function listLocalAgentDir(path, pref) {
+  const source = await sourceFor(pref);
+  if (!source)
+    return null;
+  if (source.kind === "bridge")
+    return await bridgeListDir(path);
+  return await connectRelayHost(source.deviceId).listDir(path);
 }
 async function startAgentRun(lane, args, handlers, pref) {
   const source = await sourceFor(pref);
@@ -7591,7 +7659,7 @@ async function startRelayRun(deviceId, lane, args, handlers) {
 }
 function _resetLocalAgentState() {
   resolvePromise = null;
-  adoptRefused = false;
+  adoptRefused = "no";
   invalidateBridgePort();
   closeAllRelayHosts();
   status.set(initialStatus());
@@ -9463,6 +9531,19 @@ function createDefaultKeychain() {
   };
 }
 
+class InMemoryKeychain {
+  store = new Map;
+  async get(clientId) {
+    return this.store.get(clientId) ?? null;
+  }
+  async set(clientId, tokens2) {
+    this.store.set(clientId, tokens2);
+  }
+  async clear(clientId) {
+    this.store.delete(clientId);
+  }
+}
+
 // src/node/_internal/loopback.ts
 import { createServer } from "node:http";
 var DEFAULT_SIGN_IN_TIMEOUT_MS = 5 * 60 * 1000;
@@ -10087,188 +10168,191 @@ async function discoverLocalEcosystem(opts = {}) {
   }
 }
 export {
-  Actions,
-  Agent,
-  Artifacts,
-  Audio,
-  AuthenticationError,
-  BRIDGE_PORTS,
-  BadRequestError,
-  CALENDARS_COLLECTION,
-  CALENDAR_NS,
-  CLAUDE_CODE_MODEL_PREFIX,
-  CURSOR_MODEL_PREFIX,
-  Calendar,
-  Chat,
-  ChatCompletions,
-  CloudFsBackend,
-  CloudStorageBackend,
-  Core,
-  DeprecatedModelError,
-  Embeddings,
-  Files,
-  ForbiddenError,
-  Fs,
-  Helpers,
-  ITEMS_COLLECTION,
-  Images,
-  Memory,
-  MemoryBackend,
-  MemoryGrantStore,
-  MessageStream,
-  Messages,
-  Models,
-  NamespaceSharing,
-  NotFoundError,
-  OPEN_ARTIFACT_ACTION,
-  OPEN_ARTIFACT_PARAMS_SCHEMA,
-  OPEN_ARTIFACT_SPEC,
-  PLAN_FREE_ID,
-  PlanRequiredError,
-  Projects,
-  RateLimitError,
-  References,
-  Responses,
-  ServerError,
-  Session,
-  Storage,
-  StreamInterruptedError,
-  Sync,
-  UnifiedAI2 as UnifiedAI,
-  UnifiedAIAuthError,
-  UnifiedAIError,
-  UnifiedError,
-  UnifiedStream,
-  Usage,
-  UsageLimitError,
-  Users,
-  Videos,
-  WorkspaceSync,
-  _resetLocalAgentState,
-  addDaysInZone,
-  addExdateOp,
-  addMonthsInZone,
-  artifactRefFromHit,
-  artifactRefFromLink,
-  bearerSubprotocol,
-  bridgeCursorModels,
-  bridgeDetect,
-  bridgeHealth,
-  bridgeMcpResult,
-  bridgeOrigin,
-  bridgePickFolder,
-  bridgeStartRun,
-  bridgeStopRun,
-  bridgeToken,
-  buildHttpError,
-  calendarToMetadata,
-  checkDesktopAvailable,
-  claudeCodeModelName,
-  clearBridgeToken,
-  clientDeviceId,
-  clientDeviceName,
-  closeAllRelayHosts,
-  closeRelayHost,
-  configureLocalAgents,
-  connectDesktop,
-  connectRelayHost,
-  createCalendarOp,
-  createItemOp,
-  dayRange,
-  decodeSnapshot,
-  defaultEcosystemDiscoveryPath,
-  defaultPairName,
-  defaultTiming,
-  deleteCalendarOp,
-  deleteItemOp,
-  detectAgents,
-  disconnectDesktop,
-  discoverBridge,
-  discoverLocalEcosystem,
-  dispatchFrame,
-  encodeSnapshot2 as encodeSnapshot,
-  expandOccurrences,
-  extractServerMessage,
-  formatBody,
-  formatTimeUntil,
-  formatTokenCount,
-  formatUsd,
-  fsError,
-  fsTools,
-  getLocalAgentStatus,
-  getTimeZoneOffsetMs,
-  hasBridgeToken,
-  httpErrorCodeFromStatus,
-  httpErrorMessage,
-  invalidateBridgePort,
-  invalidateCursorModels,
-  isCloudPlan,
-  isDesktopConnected,
-  isEpochMismatch,
-  isLocalAgentModel,
-  isPlanRequiredBody,
-  isResolvableArtifactRef,
-  isSameDayInZone,
-  itemToMetadata,
-  laneForModel,
-  listLocalAgentDevices,
-  listLocalModels,
-  listRelayHosts,
-  localAgentsConfig,
-  monthGrid,
-  namespaceAccess,
-  newId,
-  normalizeNs,
-  normalizePrefix,
-  normalizeRelPath,
-  notGrantedError,
-  onLocalAgentStatusChange,
-  openRunEvents,
-  pairBridge,
-  parseCalendar,
-  parseCalendarItem,
-  parseSSE,
-  pickWorkspaceFolder,
-  placeholderLocalModel,
-  planRequiredError,
-  refreshLocalAgentDevices,
-  refreshLocalAgents,
-  refreshRelayHosts,
-  relayWsUrl,
-  resolveLocalAgentSource,
-  resolveSourceFor,
-  runBrowserPkce,
-  runLocalAgent,
-  setLocalAgentSource,
-  setOverrideOp,
-  signInWithBrowser,
-  startOfDayInZone,
-  startOfMonthInZone,
-  startOfWeekInZone,
-  storageAbortError,
-  storageError,
-  storageTools,
-  summarizeUsage,
-  syncError,
-  syncTools,
-  toChatAudioPart,
-  toChatFilePart,
-  toChatImagePart,
-  toChatVideoPart,
-  toMessagesDocumentPart,
-  toMessagesImagePart,
-  toOpenArtifactParams,
-  toResponsesAudioPart,
-  toResponsesFilePart,
-  toResponsesImagePart,
-  toResponsesVideoPart,
-  updateCalendarOp,
-  updateItemOp,
-  utcToZonedFields,
-  webTools,
+  zonedFieldsToUtc,
   weekRange,
-  zonedFieldsToUtc
+  webTools,
+  utcToZonedFields,
+  updateItemOp,
+  updateCalendarOp,
+  toResponsesVideoPart,
+  toResponsesImagePart,
+  toResponsesFilePart,
+  toResponsesAudioPart,
+  toOpenArtifactParams,
+  toMessagesImagePart,
+  toMessagesDocumentPart,
+  toChatVideoPart,
+  toChatImagePart,
+  toChatFilePart,
+  toChatAudioPart,
+  syncTools,
+  syncError,
+  summarizeUsage,
+  storageTools,
+  storageError,
+  storageAbortError,
+  startOfWeekInZone,
+  startOfMonthInZone,
+  startOfDayInZone,
+  signInWithBrowser,
+  setOverrideOp,
+  setLocalAgentSource,
+  runLocalAgent,
+  runBrowserPkce,
+  resolveSourceFor,
+  resolveLocalAgentSource,
+  relayWsUrl,
+  refreshRelayHosts,
+  refreshLocalAgents,
+  refreshLocalAgentDevices,
+  planRequiredError,
+  placeholderLocalModel,
+  pickWorkspaceFolder,
+  parseSSE,
+  parseCalendarItem,
+  parseCalendar,
+  pairBridge,
+  openRunEvents,
+  onLocalAgentStatusChange,
+  notGrantedError,
+  normalizeRelPath,
+  normalizePrefix,
+  normalizeNs,
+  normalizeDirListing,
+  newId,
+  namespaceAccess,
+  monthGrid,
+  localAgentsConfig,
+  listRelayHosts,
+  listLocalModels,
+  listLocalAgentDir,
+  listLocalAgentDevices,
+  laneForModel,
+  itemToMetadata,
+  isSameDayInZone,
+  isResolvableArtifactRef,
+  isPlanRequiredBody,
+  isLocalAgentModel,
+  isEpochMismatch,
+  isDesktopConnected,
+  isCloudPlan,
+  invalidateCursorModels,
+  invalidateBridgePort,
+  httpErrorMessage,
+  httpErrorCodeFromStatus,
+  hasBridgeToken,
+  getTimeZoneOffsetMs,
+  getLocalAgentStatus,
+  fsTools,
+  fsError,
+  formatUsd,
+  formatTokenCount,
+  formatTimeUntil,
+  formatBody,
+  extractServerMessage,
+  expandOccurrences,
+  encodeSnapshot2 as encodeSnapshot,
+  dispatchFrame,
+  discoverLocalEcosystem,
+  discoverBridge,
+  disconnectDesktop,
+  detectAgents,
+  deleteItemOp,
+  deleteCalendarOp,
+  defaultTiming,
+  defaultPairName,
+  defaultEcosystemDiscoveryPath,
+  decodeSnapshot,
+  dayRange,
+  createItemOp,
+  createCalendarOp,
+  connectRelayHost,
+  connectDesktop,
+  configureLocalAgents,
+  closeRelayHost,
+  closeAllRelayHosts,
+  clientDeviceName,
+  clientDeviceId,
+  clearBridgeToken,
+  claudeCodeModelName,
+  checkDesktopAvailable,
+  calendarToMetadata,
+  buildHttpError,
+  bridgeToken,
+  bridgeStopRun,
+  bridgeStartRun,
+  bridgePickFolder,
+  bridgeOrigin,
+  bridgeMcpResult,
+  bridgeListDir,
+  bridgeHealth,
+  bridgeDetect,
+  bridgeCursorModels,
+  bearerSubprotocol,
+  artifactRefFromLink,
+  artifactRefFromHit,
+  addMonthsInZone,
+  addExdateOp,
+  addDaysInZone,
+  _resetLocalAgentState,
+  WorkspaceSync,
+  Videos,
+  Users,
+  UsageLimitError,
+  Usage,
+  UnifiedStream,
+  UnifiedError,
+  UnifiedAIError,
+  UnifiedAIAuthError,
+  UnifiedAI2 as UnifiedAI,
+  Sync,
+  StreamInterruptedError,
+  Storage,
+  Session,
+  ServerError,
+  Responses,
+  References,
+  RateLimitError,
+  Projects,
+  PlanRequiredError,
+  PLAN_FREE_ID,
+  OPEN_ARTIFACT_SPEC,
+  OPEN_ARTIFACT_PARAMS_SCHEMA,
+  OPEN_ARTIFACT_ACTION,
+  NotFoundError,
+  NamespaceSharing,
+  Models,
+  Messages,
+  MessageStream,
+  MemoryGrantStore,
+  MemoryBackend,
+  Memory,
+  Images,
+  ITEMS_COLLECTION,
+  Helpers,
+  Fs,
+  ForbiddenError,
+  Files,
+  Embeddings,
+  DeprecatedModelError,
+  Core,
+  CloudStorageBackend,
+  CloudFsBackend,
+  ChatCompletions,
+  Chat,
+  Calendar,
+  CURSOR_MODEL_PREFIX,
+  CLAUDE_CODE_MODEL_PREFIX,
+  CALENDAR_NS,
+  CALENDARS_COLLECTION,
+  BadRequestError,
+  BRIDGE_PORTS,
+  AuthenticationError,
+  Audio,
+  Artifacts,
+  Agent,
+  Actions
 };
 
-//# debugId=E381B415369E0D0164756E2164756E21
+//# debugId=04409139483B0B6964756E2164756E21
 //# sourceMappingURL=index.js.map

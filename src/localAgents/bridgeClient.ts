@@ -24,6 +24,7 @@
 // caller's account credential, which is what lets pairing skip the consent
 // prompt entirely (see `pairBridge`).
 import { localAgentsConfig, unifiedToken } from "./config";
+import { type LocalAgentDirListing, normalizeDirListing } from "./dirListing";
 
 /** Ports the desktop server tries, in order (agent-bridge.md § Discovery). */
 export const BRIDGE_PORTS = [47825, 47826, 47827, 47828, 47829] as const;
@@ -343,6 +344,15 @@ export async function bridgeStopRun(runId: string): Promise<void> {
 
 export async function bridgeMcpResult(id: string, result: unknown): Promise<void> {
   await authed("/mcp/result", { method: "POST", body: { id, result } });
+}
+
+/** List a directory on the desktop's machine (omit `path` for the default root). */
+export async function bridgeListDir(path?: string): Promise<LocalAgentDirListing> {
+  const body = await authedJson<unknown>("/list-dir", {
+    method: "POST",
+    body: path !== undefined ? { path } : {},
+  });
+  return normalizeDirListing(body);
 }
 
 /** Opens the desktop's native folder dialog. Long request; one at a time. */

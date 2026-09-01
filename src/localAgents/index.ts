@@ -39,6 +39,7 @@ export {
   // the wire contract single-sourced instead of hand-copied per surface.
   bridgeCursorModels,
   bridgeDetect,
+  bridgeListDir,
   bridgeMcpResult,
   bridgeOrigin,
   bridgePickFolder,
@@ -59,6 +60,12 @@ export {
   localAgentsConfig,
   type LocalAgentsConfig,
 } from "./config";
+
+export {
+  normalizeDirListing,
+  type LocalAgentDirEntry,
+  type LocalAgentDirListing,
+} from "./dirListing";
 
 export {
   listRelayHosts,
@@ -92,6 +99,7 @@ export {
   getLocalAgentStatus,
   isDesktopConnected,
   listLocalAgentDevices,
+  listLocalAgentDir,
   onLocalAgentStatusChange,
   pickWorkspaceFolder,
   refreshLocalAgentDevices,

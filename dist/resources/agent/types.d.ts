@@ -16,6 +16,18 @@ export interface ToolSpec {
     /** Run the tool. `input` is the parsed JSON arguments; honor `signal` for cancellation. */
     execute: (input: Record<string, unknown>, signal: AbortSignal) => Promise<ToolResult> | ToolResult;
 }
+/**
+ * Token usage counters for a turn/run. `inputTokens`/`outputTokens` are the
+ * base counts; `cachedInputTokens` (prompt tokens served from cache) and
+ * `cacheCreationInputTokens` (tokens written to cache on this turn) are
+ * present only when the gateway/provider reports them.
+ */
+export interface AgentUsage {
+    inputTokens?: number;
+    outputTokens?: number;
+    cachedInputTokens?: number;
+    cacheCreationInputTokens?: number;
+}
 /** Streamed events the loop emits so the app can render progress as it happens. */
 export type AgentEvent = {
     type: "text_delta";
@@ -44,10 +56,7 @@ export type AgentEvent = {
     model: string;
 } | {
     type: "usage";
-    usage: {
-        inputTokens?: number;
-        outputTokens?: number;
-    };
+    usage: AgentUsage;
 };
 export interface RunAgentOptions {
     /**

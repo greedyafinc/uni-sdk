@@ -32,6 +32,7 @@ import {
   type BridgeEventStream,
   bridgeCursorModels,
   bridgeDetect,
+  bridgeListDir,
   bridgeMcpResult,
   bridgePickFolder,
   bridgeStartRun,
@@ -46,6 +47,7 @@ import {
   pairBridge,
 } from "./bridgeClient";
 import { unifiedToken } from "./config";
+import type { LocalAgentDirListing } from "./dirListing";
 import {
   type RelayHost,
   closeAllRelayHosts,
@@ -615,6 +617,23 @@ export async function pickWorkspaceFolder(pref?: LocalAgentSourcePref): Promise<
   if (!source) return null;
   if (source.kind === "bridge") return await bridgePickFolder();
   return await connectRelayHost(source.deviceId as string).pickFolder();
+}
+
+/**
+ * List a directory on the machine the source runs on (the active one, or
+ * `pref`'s device — like `pickWorkspaceFolder`, the paths belong to whichever
+ * machine will run the work). Omit `path` for the host's default root.
+ *
+ * Returns null when no source is connected.
+ */
+export async function listLocalAgentDir(
+  path?: string,
+  pref?: LocalAgentSourcePref,
+): Promise<LocalAgentDirListing | null> {
+  const source = await sourceFor(pref);
+  if (!source) return null;
+  if (source.kind === "bridge") return await bridgeListDir(path);
+  return await connectRelayHost(source.deviceId as string).listDir(path);
 }
 
 // ── Runs ────────────────────────────────────────────────────────────────────

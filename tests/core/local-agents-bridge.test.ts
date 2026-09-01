@@ -24,8 +24,14 @@ const { connectDesktop, resolveLocalAgentSource, resolveSourceFor, _resetLocalAg
 const { BRIDGE_PORTS, bridgeToken, clearBridgeToken, hasBridgeToken, pairBridge } = await import(
   "../../src/localAgents/bridgeClient"
 );
-const { dispatchFrame, discoverBridge, invalidateBridgePort, openRunEvents, bridgeDetect } =
-  await import("../../src/localAgents/bridgeClient");
+const {
+  dispatchFrame,
+  discoverBridge,
+  invalidateBridgePort,
+  openRunEvents,
+  bridgeDetect,
+  bridgeListDir,
+} = await import("../../src/localAgents/bridgeClient");
 const { configureLocalAgents } = await import("../../src/localAgents/config");
 
 interface Call {
@@ -392,6 +398,77 @@ describe("no token means no pairing prompt", () => {
     expect(JSON.parse(pair?.body ?? "{}").silent).toBe(true);
     expect(bridgeToken()).toBe("fresh");
     expect(detectHits).toBe(2);
+  });
+});
+
+describe("list-dir", () => {
+  /** A live bridge answering only `/health` plus whatever `extra` adds. */
+  function bridgeWith(extra: Responder): void {
+    responder = (c) => (c.url === healthy(47825) ? { body: SERVICE_BODY } : extra(c));
+  }
+
+  test("POSTs the path and returns the normalized listing", async () => {
+    localStorage.setItem("unified.agentBridge.token", "tok");
+    bridgeWith((c) =>
+      c.url.endsWith("/list-dir")
+        ? {
+            body: {
+              path: "/Users/me/Code",
+              parent: "/Users/me",
+              home: "/Users/me",
+              sep: "/",
+              entries: [
+                { name: "app", path: "/Users/me/Code/app", git: true },
+                { name: "notes", path: "/Users/me/Code/notes" }, // no `git` flag
+                { name: "junk" }, // no path — dropped
+              ],
+              suggested: ["/Users/me/Code"],
+              truncated: true,
+            },
+          }
+        : undefined,
+    );
+
+    const listing = await bridgeListDir("/Users/me/Code");
+    expect(listing).toEqual({
+      path: "/Users/me/Code",
+      parent: "/Users/me",
+      home: "/Users/me",
+      sep: "/",
+      entries: [
+        { name: "app", path: "/Users/me/Code/app", git: true },
+        { name: "notes", path: "/Users/me/Code/notes", git: false },
+      ],
+      suggested: ["/Users/me/Code"],
+      truncated: true,
+    });
+
+    const call = calls.find((c) => c.url.endsWith("/list-dir"));
+    expect(call?.method).toBe("POST");
+    expect(call?.headers.Authorization).toBe("Bearer tok");
+    expect(JSON.parse(call?.body ?? "{}")).toEqual({ path: "/Users/me/Code" });
+  });
+
+  test("omitting the path asks for the host's default root", async () => {
+    localStorage.setItem("unified.agentBridge.token", "tok");
+    bridgeWith((c) =>
+      c.url.endsWith("/list-dir")
+        ? { body: { path: null, parent: null, home: "/Users/me", sep: "/", entries: [] } }
+        : undefined,
+    );
+
+    const listing = await bridgeListDir();
+    expect(listing.path).toBeNull();
+    const call = calls.find((c) => c.url.endsWith("/list-dir"));
+    expect(JSON.parse(call?.body ?? "{}")).toEqual({});
+  });
+
+  test("a 400 surfaces as an error, not a mangled listing", async () => {
+    localStorage.setItem("unified.agentBridge.token", "tok");
+    bridgeWith((c) =>
+      c.url.endsWith("/list-dir") ? { status: 400, body: { error: "bad path" } } : undefined,
+    );
+    await expect(bridgeListDir("../..")).rejects.toThrow(/HTTP 400/);
   });
 });
 

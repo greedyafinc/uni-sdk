@@ -1,4 +1,5 @@
 import type { McpCallResult, McpToolDef } from "./_internal/toolServer.js";
+import type { LocalAgentDirListing } from "./dirListing.js";
 import { type RelayHost } from "./relayClient.js";
 export type Lane = "claude-code" | "cursor";
 export type LocalAgentSourceKind = "bridge" | "relay";
@@ -121,16 +122,20 @@ export declare function resolveSourceFor(pref: LocalAgentSourcePref): Promise<Lo
  */
 export declare function checkDesktopAvailable(): Promise<boolean>;
 /**
- * User-initiated pairing. For a NEW origin this PARKS on a consent modal on the
- * desktop (120s, then 403), so it must never be reached from a page-load code
- * path — call it only from an explicit user action.
+ * User-initiated pairing — the fallback path for a SIGNED-OUT surface.
  *
- * When this origin already holds a token it re-mints SILENTLY instead. The token
- * lives in localStorage and the desktop's approval is on disk, so pairing
- * survives a page refresh; asking the user to approve the same origin again on
- * every reload is a prompt for a decision they already made. If the desktop
- * revoked us meanwhile the silent attempt 403s — that is the one case where a
- * fresh modal is the right answer, so we drop the dead token and ask properly.
+ * A signed-in one never needs this: `resolveLocalAgentSource()` already minted
+ * for it on the strength of its account credential. What is left here is the
+ * page with nothing to present, and for a NEW origin that PARKS on a consent
+ * prompt on the host (120s, then 403) — so this must never be reached from a
+ * page-load code path, only from an explicit user action.
+ *
+ * When this origin already holds a token it re-mints SILENTLY instead: the
+ * token lives in localStorage and the host's approval is on disk, so pairing
+ * survives a refresh, and asking again on every reload is a prompt for a
+ * decision already made. If the host revoked us meanwhile the silent attempt
+ * 403s — the one case where a fresh prompt is the right answer, so we drop the
+ * dead token and ask properly.
  */
 export declare function connectDesktop(name?: string): Promise<LocalAgentSource | null>;
 /** Forget the pairing token. The desktop keeps its origin approval. */
@@ -188,6 +193,14 @@ export declare function cursorModelsOutput(json: boolean, pref?: LocalAgentSourc
  * Returns null when the user cancelled or no source is connected.
  */
 export declare function pickWorkspaceFolder(pref?: LocalAgentSourcePref): Promise<string | null>;
+/**
+ * List a directory on the machine the source runs on (the active one, or
+ * `pref`'s device — like `pickWorkspaceFolder`, the paths belong to whichever
+ * machine will run the work). Omit `path` for the host's default root.
+ *
+ * Returns null when no source is connected.
+ */
+export declare function listLocalAgentDir(path?: string, pref?: LocalAgentSourcePref): Promise<LocalAgentDirListing | null>;
 export interface StartArgs {
     runId: string;
     prompt: string;

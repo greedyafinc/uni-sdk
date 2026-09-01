@@ -1,4 +1,5 @@
 import { Observable } from "../core/_internal/observable.js";
+import { type LocalAgentDirListing } from "./dirListing.js";
 export interface RelayCapabilities {
     claudeCode: {
         found: boolean;
@@ -85,6 +86,15 @@ export interface RelayConnection {
     detect(): Promise<RelayDetectResult>;
     cursorModels(json: boolean): Promise<string>;
     pickFolder(): Promise<string | null>;
+    listDir(path?: string): Promise<LocalAgentDirListing>;
+    /**
+     * The repository each path belongs to, index-for-index, `null` where there is
+     * none. Batched because a caller learns a run's paths together and the host
+     * answers with filesystem stats — one round trip rather than a walk over the
+     * wire. A host that restricts remote access answers `null` for anything
+     * outside the grant, indistinguishable from "not in a repo".
+     */
+    repoRoots(paths: string[]): Promise<Array<string | null>>;
     startRun(args: RelayStartArgs, handlers: RelayRunHandlers): Promise<void>;
     stopRun(runId: string): void;
     mcpResult(id: string, result: unknown): void;
