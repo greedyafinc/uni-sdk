@@ -39,6 +39,12 @@ export declare function listModels(options?: {
 export declare function runAgent(options: RunAgentOptions & {
     sessionKey?: string;
     device?: LocalAgentSourcePref;
+    /**
+     * Run the local CLI FROM this host folder instead of the app's scratch
+     * workspace. Meaningless to the gateway lane below (it has no filesystem),
+     * so it is dropped there — see `workspace` on `runLocalAgent`.
+     */
+    workspace?: string;
 }): Promise<RunAgentResult>;
 /**
  * Pair this origin with a running desktop app. PARKS on a consent modal on the

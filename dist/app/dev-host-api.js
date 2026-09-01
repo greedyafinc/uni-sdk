@@ -8420,7 +8420,7 @@ async function listModels(options) {
   return [...rows, ...local];
 }
 async function runAgent(options) {
-  const { sessionKey, device, ...runOpts } = options;
+  const { sessionKey, device, workspace, ...runOpts } = options;
   const model = runOpts.model;
   if (!model || !isLocalAgentModel(model)) {
     return await getSdk().agent.run(runOpts);
@@ -8444,7 +8444,8 @@ async function runAgent(options) {
     ...runOpts.signal ? { signal: runOpts.signal } : {},
     ...runOpts.onEvent ? { onEvent: runOpts.onEvent } : {},
     ...sessionKey ? { conversationId: sessionKey } : {},
-    ...device ? { source: device } : {}
+    ...device ? { source: device } : {},
+    ...workspace ? { workspace } : {}
   });
 }
 async function connectDesktop2() {
@@ -8537,5 +8538,5 @@ export {
   checkDesktopAvailable2 as checkDesktopAvailable
 };
 
-//# debugId=BBDC4E5E3EA7F11464756E2164756E21
+//# debugId=787DF95D89A9DCD564756E2164756E21
 //# sourceMappingURL=dev-host-api.js.map

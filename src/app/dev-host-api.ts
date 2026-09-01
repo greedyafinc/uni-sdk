@@ -228,9 +228,18 @@ export async function listModels(options?: {
  * the SDK's in-process agent loop exactly as before.
  */
 export async function runAgent(
-  options: RunAgentOptions & { sessionKey?: string; device?: LocalAgentSourcePref },
+  options: RunAgentOptions & {
+    sessionKey?: string;
+    device?: LocalAgentSourcePref;
+    /**
+     * Run the local CLI FROM this host folder instead of the app's scratch
+     * workspace. Meaningless to the gateway lane below (it has no filesystem),
+     * so it is dropped there — see `workspace` on `runLocalAgent`.
+     */
+    workspace?: string;
+  },
 ): Promise<RunAgentResult> {
-  const { sessionKey, device, ...runOpts } = options;
+  const { sessionKey, device, workspace, ...runOpts } = options;
   const model = runOpts.model;
   if (!model || !isLocalAgentModelId(model)) {
     return await getSdk().agent.run(runOpts);
@@ -258,6 +267,9 @@ export async function runAgent(
     ...(runOpts.onEvent ? { onEvent: runOpts.onEvent } : {}),
     ...(sessionKey ? { conversationId: sessionKey } : {}),
     ...(device ? { source: device } : {}),
+    // Read-only: write access is `trustWorkspace`, which only the HOST may set
+    // (it grants it for folders its own user picked), never a browsing client.
+    ...(workspace ? { workspace } : {}),
   });
 }
 
