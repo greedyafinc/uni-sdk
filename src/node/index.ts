@@ -87,6 +87,8 @@ export * from "../resources/helpers";
 export * from "../resources/images";
 export * from "../resources/messages";
 export * from "../resources/models";
+export * from "../resources/autoModel";
+export * from "../resources/autoRouter";
 export * from "../resources/projects";
 export * from "../resources/references";
 export * from "../resources/responses";

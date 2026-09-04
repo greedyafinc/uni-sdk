@@ -23,6 +23,8 @@ export * from "../resources/helpers.js";
 export * from "../resources/images.js";
 export * from "../resources/messages.js";
 export * from "../resources/models.js";
+export * from "../resources/autoModel.js";
+export * from "../resources/autoRouter.js";
 export * from "../resources/projects.js";
 export * from "../resources/references.js";
 export * from "../resources/responses.js";

@@ -4380,6 +4380,315 @@ class Models {
     return this.client.request(path, req);
   }
 }
+// src/resources/autoModel.ts
+var LONG_TEXT = 1200;
+var DEEP_WORDS = /\b(plan|architect|architecture|design the|refactor|debug|diagnose|root cause|trade[- ]?offs?|why does|why is|prove|derive|migrate|strategy)\b/i;
+var DESIGN_WORDS = /\b(design|mockup|wireframe|ui|ux|layout|typography|palette|brand|logo|poster|landing page)\b/i;
+function firstByHint(models, hints) {
+  for (const hint of hints) {
+    const match = models.find((m) => `${m.id} ${m.name}`.toLowerCase().includes(hint));
+    if (match)
+      return match;
+  }
+  return;
+}
+function roleFor(req) {
+  if (req.needsVision)
+    return "vision";
+  if (DESIGN_WORDS.test(req.text) && !req.codeWork)
+    return "design";
+  if (req.effort === "high")
+    return "deep";
+  if (req.effort === "low")
+    return "fast";
+  if (req.codeWork)
+    return "deep";
+  if (DEEP_WORDS.test(req.text))
+    return "deep";
+  if (req.text.length >= LONG_TEXT)
+    return "deep";
+  return "fast";
+}
+// src/resources/autoRouter.ts
+function firstJsonObject(raw) {
+  const start = raw.indexOf("{");
+  if (start < 0)
+    return null;
+  let depth = 0;
+  for (let i = start;i < raw.length; i++) {
+    if (raw[i] === "{")
+      depth++;
+    else if (raw[i] === "}") {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(raw.slice(start, i + 1));
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+function usableText(models) {
+  return models.filter((m) => m.type === "text");
+}
+function defaultConfig(models) {
+  const text = usableText(models);
+  const everyday = firstByHint(text, [
+    "haiku",
+    "flash",
+    "mini",
+    "composer",
+    "lite",
+    "small",
+    "fast",
+    "turbo"
+  ]) ?? text[0];
+  const everydayId = everyday?.id ?? null;
+  const pick = (hints) => firstByHint(text, hints)?.id ?? everydayId;
+  const vision = models.find((m) => m.type === "text" && m.image_inp);
+  const profiles = [
+    {
+      id: "everyday",
+      name: "Everyday",
+      modelId: everydayId,
+      useWhen: "Short questions, low effort, and anything nothing else claims."
+    },
+    {
+      id: "planner",
+      name: "Planner",
+      modelId: pick(["fable", "opus", "ultra", "pro", "thinking", "reasoner", "sonnet"]),
+      useWhen: "Hard changes that need a plan first: the steps, and an acceptance criterion for each, before anyone touches a file.",
+      costsMore: true
+    },
+    {
+      id: "executor",
+      name: "Executor",
+      modelId: pick(["grok", "sonnet", "cursor-agent", "agent", "pro"]),
+      useWhen: "Carries out a step of a plan against real files, then reports what changed."
+    },
+    {
+      id: "fast-worker",
+      name: "Fast worker",
+      modelId: pick(["composer", "haiku", "flash", "mini"]),
+      useWhen: "Mechanical steps with a precise spec — renames, boilerplate, formatting, a test that mirrors an existing one."
+    },
+    {
+      id: "tester",
+      name: "Tester",
+      modelId: pick(["opus", "fable", "sonnet", "pro"]),
+      useWhen: "Checks a change against its acceptance criteria — runs what matters, returns pass or fail with the evidence.",
+      costsMore: true
+    },
+    {
+      id: "design",
+      name: "Design",
+      modelId: pick(["kimi", "gemini", "gpt", "sonnet"]),
+      useWhen: "Layout, type, palette, brand — when no workspace is attached."
+    },
+    {
+      id: "vision",
+      name: "Reading an image",
+      modelId: vision?.id ?? null,
+      useWhen: "A picture or a PDF on the turn. A requirement, not a tier — never held back."
+    }
+  ];
+  const sequences = [
+    {
+      id: "build",
+      name: "Build",
+      useWhen: "Changes across several files, or anything that says implement, migrate or refactor.",
+      stages: [
+        { kind: "plan", profileIds: ["planner"] },
+        { kind: "work", profileIds: ["executor", "fast-worker"] },
+        { kind: "test", profileIds: ["tester"] }
+      ],
+      retries: 2
+    },
+    {
+      id: "small-change",
+      name: "Small change",
+      useWhen: "A fix you can describe in one sentence.",
+      stages: [
+        { kind: "work", profileIds: ["fast-worker"] },
+        { kind: "test", profileIds: ["tester"] }
+      ],
+      retries: 1
+    }
+  ];
+  return {
+    dispatcherModelId: everydayId,
+    everydayId: "everyday",
+    profiles,
+    sequences,
+    stepUp: "stay",
+    hintsFallback: true
+  };
+}
+function profileById(config, id) {
+  return config.profiles.find((p) => p.id === id);
+}
+function sequenceById(config, id) {
+  return config.sequences.find((s) => s.id === id);
+}
+function stageLabel(config, stage) {
+  const names = stage.profileIds.map((id) => profileById(config, id)?.name ?? id);
+  return names[0] ?? stage.kind;
+}
+function dispatchPrompt(config, text, ctx) {
+  const lines = [];
+  for (const profile of config.profiles) {
+    if (profile.modelId === null)
+      continue;
+    lines.push(`- ${profile.id} — ${profile.name}: ${profile.useWhen}`);
+  }
+  for (const seq of config.sequences) {
+    const stageNames = seq.stages.map((s) => stageLabel(config, s)).join(" → ");
+    lines.push(`- ${seq.id} — ${seq.name} (${stageNames}): ${seq.useWhen}`);
+  }
+  const notes = [
+    "Pick exactly one id.",
+    "Prefer a single profile unless the request needs a plan across several steps."
+  ];
+  if (ctx?.codeWork)
+    notes.push("A code workspace is attached.");
+  else if (ctx?.codeWork === false)
+    notes.push("No workspace is attached: nothing can be written to disk or run, so prefer a single profile unless the request only needs a plan.");
+  if (ctx?.needsVision)
+    notes.push("The turn carries an image; pick a profile that can read one.");
+  return [
+    "Choose which of these should handle this request:",
+    ...lines,
+    ...notes,
+    "",
+    "Request:",
+    "```",
+    text,
+    "```",
+    `Reply with JSON only: {"pick":"<id>","why":"<one short line>"}`
+  ].join(`
+`);
+}
+function parseDispatch(raw, config) {
+  const parsed = firstJsonObject(raw);
+  if (!parsed || typeof parsed.pick !== "string")
+    return null;
+  const pick = parsed.pick;
+  const why = typeof parsed.why === "string" ? parsed.why : "";
+  if (profileById(config, pick))
+    return { kind: "profile", id: pick, why };
+  if (sequenceById(config, pick))
+    return { kind: "sequence", id: pick, why };
+  return null;
+}
+function fallbackDispatch(config, req) {
+  const role = roleFor(req);
+  const everyday = { kind: "profile", id: config.everydayId, why: "built-in hint" };
+  if (role === "vision") {
+    const vision = profileById(config, "vision");
+    return vision?.modelId ? { kind: "profile", id: "vision", why: "built-in hint" } : everyday;
+  }
+  if (role === "design") {
+    const design = profileById(config, "design");
+    return design?.modelId ? { kind: "profile", id: "design", why: "built-in hint" } : everyday;
+  }
+  if (role === "deep") {
+    const seq = config.sequences.find((s) => s.stages.some((st) => st.kind === "plan"));
+    return seq ? { kind: "sequence", id: seq.id, why: "built-in hint" } : everyday;
+  }
+  return everyday;
+}
+function costsMore(pick, config) {
+  if (pick.kind === "profile")
+    return profileById(config, pick.id)?.costsMore ?? false;
+  const seq = sequenceById(config, pick.id);
+  if (!seq)
+    return false;
+  return seq.stages.some((stage) => stage.profileIds.some((id) => profileById(config, id)?.costsMore));
+}
+function gate(pick, config, opts) {
+  if (!costsMore(pick, config))
+    return { action: "run" };
+  if (config.stepUp === "auto" || opts?.sessionAllowed)
+    return { action: "run" };
+  if (config.stepUp === "ask")
+    return { action: "ask" };
+  return { action: "hold", declined: pick };
+}
+function pickWorker(step, stage) {
+  return step.mechanical && stage.profileIds[1] ? stage.profileIds[1] : stage.profileIds[0];
+}
+function planPrompt(request) {
+  return [
+    `Plan how to do this: ${request}`,
+    "Do not edit any file. Produce 2–7 steps in order.",
+    "Each step has a short title, one acceptance criterion the tester can check, and mechanical=true when the step is a precise spec a cheaper model can carry out (renames, boilerplate, formatting).",
+    `Reply with JSON only: {"steps":[{"title":"…","criterion":"…","mechanical":false}]}`
+  ].join(`
+`);
+}
+function parsePlan(raw) {
+  const parsed = firstJsonObject(raw);
+  if (!parsed || !Array.isArray(parsed.steps))
+    return null;
+  if (parsed.steps.length < 1 || parsed.steps.length > 12)
+    return null;
+  const steps = [];
+  for (const raw2 of parsed.steps) {
+    const s = raw2;
+    if (typeof s.title !== "string" || !s.title || typeof s.criterion !== "string" || !s.criterion) {
+      return null;
+    }
+    steps.push({ title: s.title, criterion: s.criterion, mechanical: Boolean(s.mechanical) });
+  }
+  return steps;
+}
+function stepPrompt(request, step, ctx) {
+  const lines = [
+    `Step ${ctx.index + 1} of ${ctx.total} of a plan for: ${request}.`,
+    `Do this step: ${step.title}.`,
+    `It is done when: ${step.criterion}.`
+  ];
+  if (ctx.priorNotes.length) {
+    lines.push("Notes from earlier steps:");
+    for (const note of ctx.priorNotes)
+      lines.push(`- ${note}`);
+  }
+  if (ctx.failure)
+    lines.push(`The tester failed this step: ${ctx.failure}. Fix that.`);
+  lines.push("End with one short paragraph of what changed.");
+  return lines.join(`
+`);
+}
+function testPrompt(request, steps, workNotes) {
+  const lines = [`Check this work against its plan for: ${request}.`, "Criteria:"];
+  steps.forEach((step, i) => lines.push(`${i + 1}. ${step.criterion}`));
+  if (workNotes.length) {
+    lines.push("What was done:");
+    for (const note of workNotes)
+      lines.push(`- ${note}`);
+  }
+  lines.push("Check every criterion. Run what you need to. Do not fix anything.");
+  lines.push(`Reply with JSON only: {"results":[{"criterion":"…","pass":true,"evidence":"…"}]}`);
+  return lines.join(`
+`);
+}
+function parseTestReport(raw, steps) {
+  const parsed = firstJsonObject(raw);
+  if (!parsed || !Array.isArray(parsed.results))
+    return null;
+  const results = parsed.results;
+  return steps.map((step, i) => {
+    const r = results[i];
+    return {
+      criterion: step.criterion,
+      pass: r ? Boolean(r.pass) : false,
+      evidence: r && typeof r.evidence === "string" ? r.evidence : r ? "" : "not reported"
+    };
+  });
+}
 // src/resources/projects.ts
 var utf8Encoder2 = new TextEncoder;
 function encodeSnapshot(s) {
@@ -10192,30 +10501,40 @@ export {
   toChatImagePart,
   toChatFilePart,
   toChatAudioPart,
+  testPrompt,
   syncTools,
   syncError,
   summarizeUsage,
   storageTools,
   storageError,
   storageAbortError,
+  stepPrompt,
   startOfWeekInZone,
   startOfMonthInZone,
   startOfDayInZone,
   signInWithBrowser,
   setOverrideOp,
   setLocalAgentSource,
+  sequenceById,
   runLocalAgent,
   runBrowserPkce,
+  roleFor,
   resolveSourceFor,
   resolveLocalAgentSource,
   relayWsUrl,
   refreshRelayHosts,
   refreshLocalAgents,
   refreshLocalAgentDevices,
+  profileById,
   planRequiredError,
+  planPrompt,
   placeholderLocalModel,
   pickWorkspaceFolder,
+  pickWorker,
+  parseTestReport,
   parseSSE,
+  parsePlan,
+  parseDispatch,
   parseCalendarItem,
   parseCalendar,
   pairBridge,
@@ -10250,15 +10569,19 @@ export {
   hasBridgeToken,
   getTimeZoneOffsetMs,
   getLocalAgentStatus,
+  gate,
   fsTools,
   fsError,
   formatUsd,
   formatTokenCount,
   formatTimeUntil,
   formatBody,
+  firstByHint,
+  fallbackDispatch,
   extractServerMessage,
   expandOccurrences,
   encodeSnapshot2 as encodeSnapshot,
+  dispatchPrompt,
   dispatchFrame,
   discoverLocalEcosystem,
   discoverBridge,
@@ -10269,10 +10592,12 @@ export {
   defaultTiming,
   defaultPairName,
   defaultEcosystemDiscoveryPath,
+  defaultConfig,
   decodeSnapshot,
   dayRange,
   createItemOp,
   createCalendarOp,
+  costsMore,
   connectRelayHost,
   connectDesktop,
   configureLocalAgents,
@@ -10361,5 +10686,5 @@ export {
   Actions
 };
 
-//# debugId=04409139483B0B6964756E2164756E21
+//# debugId=268B3A81A0A1D31A64756E2164756E21
 //# sourceMappingURL=index.js.map
