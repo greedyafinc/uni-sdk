@@ -13,7 +13,8 @@ export type ProviderLogoInput = string | {
     owned_by?: string | null;
 } | null | undefined;
 /**
- * Returns a data-URI for the given provider/author's logo.
+ * Returns a data-URI for the given provider/author's logo, or an empty string
+ * when there is no brand mark (unknown / missing author).
  * Works in any environment (Node, browser, Electron, Tauri) with no bundler config.
  */
 export declare function getProviderLogo(input: ProviderLogoInput, theme?: LogoTheme): string;

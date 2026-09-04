@@ -1,3 +1,3 @@
-export type LogoSlug = "amazon" | "anthropic" | "anthropic-dark" | "anything-llm-light" | "claude" | "cursor" | "deepseekai" | "gemini" | "google" | "meta" | "minimaxai" | "mistral" | "moonshotai" | "moonshotai-dark" | "nvidia" | "openai" | "openai-dark" | "qwen" | "xai" | "xai-dark" | "zai" | "zai-dark";
+export type LogoSlug = "amazon" | "anthropic" | "anthropic-dark" | "claude" | "cursor" | "deepseekai" | "gemini" | "google" | "meta" | "minimaxai" | "mistral" | "moonshotai" | "moonshotai-dark" | "nvidia" | "openai" | "openai-dark" | "qwen" | "xai" | "xai-dark" | "zai" | "zai-dark";
 export declare const LOGO_DATA_URIS: Record<LogoSlug, string>;
 //# sourceMappingURL=logos.generated.d.ts.map

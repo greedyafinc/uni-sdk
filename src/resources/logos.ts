@@ -18,8 +18,6 @@ export type ProviderLogoInput =
   | null
   | undefined;
 
-const FALLBACK_SLUG: LogoSlug = "anything-llm-light";
-
 const NORMALIZE_RE = /[\s.]+/g;
 
 function normalizeKey(input: ProviderLogoInput): string | null {
@@ -51,30 +49,30 @@ const SLUG_ALIASES: Record<string, string> = {
   "claude-code": "claude",
 };
 
-function resolveSlug(input: ProviderLogoInput, theme: LogoTheme): LogoSlug {
+function resolveSlug(input: ProviderLogoInput, theme: LogoTheme): LogoSlug | null {
   const normalized = normalizeKey(input);
-  if (!normalized) return FALLBACK_SLUG;
+  if (!normalized) return null;
   const key = SLUG_ALIASES[normalized] ?? normalized;
   if (theme === "dark") {
     const dark = `${key}-dark`;
     if (hasSlug(dark)) return dark;
   }
-  return hasSlug(key) ? key : FALLBACK_SLUG;
+  return hasSlug(key) ? key : null;
 }
 
 /**
- * Returns a data-URI for the given provider/author's logo.
+ * Returns a data-URI for the given provider/author's logo, or an empty string
+ * when there is no brand mark (unknown / missing author).
  * Works in any environment (Node, browser, Electron, Tauri) with no bundler config.
  */
 export function getProviderLogo(input: ProviderLogoInput, theme: LogoTheme = "light"): string {
-  return LOGO_DATA_URIS[resolveSlug(input, theme)];
+  const slug = resolveSlug(input, theme);
+  return slug ? LOGO_DATA_URIS[slug] : "";
 }
 
 /** Author keys with a logo available (e.g. "anthropic", "openai"). */
 export function listProviderLogos(): string[] {
-  return Object.keys(LOGO_DATA_URIS).filter(
-    (slug) => !slug.endsWith("-dark") && slug !== FALLBACK_SLUG,
-  );
+  return Object.keys(LOGO_DATA_URIS).filter((slug) => !slug.endsWith("-dark"));
 }
 
 /** Minimal shape needed to resolve a catalog model's brand logo. */

@@ -32,8 +32,8 @@ declare module "@unified/host-api" {
    * A self-contained data-URI for a provider/author's brand logo. `input` is the
    * author/provider name (or a `{ author }` object); `theme` is POSITIONAL (not
    * an options object) — the host forwards it straight to the SDK, whose dark
-   * variants need `"dark"` as the 2nd arg. Unknown names resolve to a generic
-   * fallback logo (compare against `getProviderLogo("")` to detect it).
+   * variants need `"dark"` as the 2nd arg. Unknown names resolve to an empty
+   * string (compare against `getProviderLogo("")` to detect it).
    */
   export function getProviderLogo(
     input: string | { author?: string | null } | null | undefined,

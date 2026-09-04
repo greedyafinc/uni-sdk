@@ -24,9 +24,9 @@ describe("getProviderLogo", () => {
     // No -dark variant exists, so dark resolves to the same (visible) mark.
     expect(getProviderLogo("Claude Code", "dark")).toBe(claude);
   });
-  test("falls back to a data-URI for unknown / null input", () => {
-    expect(getProviderLogo(null).startsWith("data:")).toBe(true);
-    expect(getProviderLogo("totally-unknown-provider").startsWith("data:")).toBe(true);
+  test("returns empty for unknown / null input", () => {
+    expect(getProviderLogo(null)).toBe("");
+    expect(getProviderLogo("totally-unknown-provider")).toBe("");
   });
 });
 
@@ -47,8 +47,8 @@ describe("getModelLogo", () => {
       getProviderLogo("Meta"),
     );
   });
-  test("falls back to the neutral mark for an empty model", () => {
-    expect(getModelLogo({}).startsWith("data:")).toBe(true);
+  test("returns empty for an empty model", () => {
+    expect(getModelLogo({})).toBe("");
   });
   test("respects the dark theme argument", () => {
     // Whatever the light value is, the call must still return a data-URI; dark
@@ -60,7 +60,7 @@ describe("getModelLogo", () => {
 });
 
 describe("listProviderLogos", () => {
-  test("excludes the fallback and -dark variants", () => {
+  test("excludes -dark variants", () => {
     const slugs = listProviderLogos();
     expect(Array.isArray(slugs)).toBe(true);
     expect(slugs.some((s) => s.endsWith("-dark"))).toBe(false);

@@ -182,7 +182,8 @@ export interface HostApi {
    * the author/provider name (or a `{ author }` object); `theme` is POSITIONAL
    * (not an options object) — the host forwards it straight to the SDK, whose
    * dark variants need `"dark"` as the 2nd arg. Unknown names resolve to a
-   * generic fallback logo (compare against `getProviderLogo("")` to detect it).
+   * brand logo, or an empty string when there is no mark (compare against
+   * `getProviderLogo("")` to detect it).
    */
   getProviderLogo(
     input: string | { author?: string | null } | null | undefined,
