@@ -6965,6 +6965,13 @@ function createConnection(deviceId) {
     while (readyWaiters.length)
       readyWaiters.shift()?.reject(new Error(message));
   }
+  function notReadyReason() {
+    if (!connected.get())
+      return lastError.get() ?? "Couldn't reach that computer.";
+    if (approval.get() === "denied")
+      return "That computer declined this device.";
+    return "That computer didn't answer in time.";
+  }
   function send2(frame) {
     if (socket?.readyState !== 1) {
       throw new Error("Not connected to that computer.");
@@ -7184,7 +7191,7 @@ function createConnection(deviceId) {
         return Promise.reject(new Error("That computer declined this device."));
       }
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("That computer hasn't approved this device yet.")), timeoutMs);
+        const timer = setTimeout(() => reject(new Error(notReadyReason())), timeoutMs);
         readyWaiters.push({
           resolve: () => {
             clearTimeout(timer);

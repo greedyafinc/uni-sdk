@@ -232,6 +232,17 @@ function createConnection(deviceId: string): RelayConnection {
     while (readyWaiters.length) readyWaiters.shift()?.reject(new Error(message));
   }
 
+  /**
+   * Why a `ready()` wait ran out. A socket that never opened is a CONNECTION
+   * failure — reporting it as "not approved" invents a refusal the host never
+   * made and sends the user hunting for an approval prompt that isn't there.
+   */
+  function notReadyReason(): string {
+    if (!connected.get()) return lastError.get() ?? "Couldn't reach that computer.";
+    if (approval.get() === "denied") return "That computer declined this device.";
+    return "That computer didn't answer in time.";
+  }
+
   function send(frame: Record<string, unknown>): void {
     if (socket?.readyState !== 1 /* OPEN */) {
       throw new Error("Not connected to that computer.");
@@ -466,10 +477,7 @@ function createConnection(deviceId: string): RelayConnection {
         return Promise.reject(new Error("That computer declined this device."));
       }
       return new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(
-          () => reject(new Error("That computer hasn't approved this device yet.")),
-          timeoutMs,
-        );
+        const timer = setTimeout(() => reject(new Error(notReadyReason())), timeoutMs);
         readyWaiters.push({
           resolve: () => {
             clearTimeout(timer);

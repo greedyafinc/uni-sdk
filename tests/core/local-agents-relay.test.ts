@@ -374,4 +374,13 @@ describe("run streaming", () => {
     expect(conn.approval.get()).toBe("denied");
     expect(conn.lastError.get()).toMatch(/isn't yours/i);
   });
+
+  test("a ready() wait on a socket that never opened blames the connection, not approval", async () => {
+    const conn = connectRelayHost("dev-11");
+    await flush();
+    // The socket was constructed but never opened: the host never saw this
+    // client, so the failure must not be reported as a refusal.
+    await expect(conn.ready(5)).rejects.toThrow(/reach that computer/i);
+    expect(conn.approval.get()).not.toBe("denied");
+  });
 });
