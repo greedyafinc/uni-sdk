@@ -59,8 +59,17 @@ export type AgentEvent =
   // (a partial object, possibly truncated mid-value) so a host can render a live
   // preview of the in-flight tool input — e.g. the file a write_file is emitting.
   | { type: "tool_partial"; name: string; chars: number; args: string }
-  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown>; raw?: string }
-  | { type: "tool_result"; toolUseId: string; content: string; isError: boolean }
+  // `parentId` is set when the call was made by a subagent: the tool-use id of the
+  // spawning Agent/Task call, so hosts nest these under that row.
+  | {
+      type: "tool_use";
+      id: string;
+      name: string;
+      input: Record<string, unknown>;
+      raw?: string;
+      parentId?: string;
+    }
+  | { type: "tool_result"; toolUseId: string; content: string; isError: boolean; parentId?: string }
   // The concrete model the gateway served for the current turn — fires once per
   // turn, on the first chunk carrying a non-`auto` model. Lets the UI flip an
   // "Auto" badge to the router's actual pick while the turn is still streaming.

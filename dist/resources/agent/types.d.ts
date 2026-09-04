@@ -46,11 +46,13 @@ export type AgentEvent = {
     name: string;
     input: Record<string, unknown>;
     raw?: string;
+    parentId?: string;
 } | {
     type: "tool_result";
     toolUseId: string;
     content: string;
     isError: boolean;
+    parentId?: string;
 } | {
     type: "model";
     model: string;
